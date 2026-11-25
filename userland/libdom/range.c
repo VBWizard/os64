@@ -49,6 +49,11 @@ typedef struct DRange {
     os64_html_range_t *live;            /* R_LIVE */
     const os64_html_node_t *node[2];    /* R_STATIC: start, end; held */
     uint32_t offset[2];
+    /* The boundary nodes' wrappers (HOLDERS), the object's counts, which
+     * its class's mark reports; `wrapped`, the nodes they are of. A live
+     * range's are re-taken when its points move (follow). */
+    JSValue wrapper[2];
+    const os64_html_node_t *wrapped[2];
 } DRange;
 
 struct DRanges {
@@ -112,10 +117,74 @@ static void point(const DRange *r, int which, const os64_html_node_t **node, uin
     }
 }
 
+/* The wrappers of the record's boundary nodes, re-taken where a point has
+ * moved to another node. */
+static void follow(DRange *r)
+{
+    for (int i = 0; i < 2; i++) {
+        const os64_html_node_t *node;
+        uint32_t offset;
+        point(r, i, &node, &offset);
+        if (node == r->wrapped[i]) continue;
+        /* Taken before the record is read again: making a wrapper can run
+         * a collection, whose finalizers may let this range die and free
+         * what it held. */
+        JSValue wrapper = d_holder_take(r->dom, node);
+        if (r->dead) {
+            JS_FreeValueRT(r->dom->engine, wrapper);
+            return;
+        }
+        JSValue old = r->wrapper[i];
+        r->wrapper[i] = wrapper;
+        r->wrapped[i] = node;
+        JS_FreeValueRT(r->dom->engine, old);
+    }
+}
+
+/* After a tree change: libhtml has moved the live ranges' points (its
+ * removing steps run before the change is told). */
+void d_ranges_follow(os64_dom_t *dom)
+{
+    struct DRanges *s = dom->ranges;
+    if (s == NULL) return;
+    for (DRange *r = s->list; r != NULL; r = r->next)
+        if (!r->dead && r->kind == R_LIVE) follow(r);
+}
+
+/* Each value is taken off the record before it is let go of: freeing a
+ * wrapper can free what held this range's own object, whose finalizer
+ * then comes here. */
+static void wrappers_free(JSRuntime *rt, DRange *r)
+{
+    for (int i = 0; i < 2; i++) {
+        JSValue wrapper = r->wrapper[i];
+        r->wrapper[i] = JS_UNDEFINED;
+        r->wrapped[i] = NULL;
+        JS_FreeValueRT(rt, wrapper);
+    }
+}
+
+/* Drain: the records outlive the engine. */
+void d_ranges_drain(os64_dom_t *dom)
+{
+    struct DRanges *s = dom->ranges;
+    if (s == NULL) return;
+    for (DRange *r = s->list; r != NULL; r = r->next) wrappers_free(dom->engine, r);
+}
+
+/* os64_html_range_set, and the record's wrappers follow. */
+static int64_t range_set(DRange *r, int which, const os64_html_node_t *node, uint32_t offset)
+{
+    int64_t status = os64_html_range_set(r->live, which, (os64_html_node_t *)node, offset);
+    follow(r);
+    return status;
+}
+
 static void record_unlink_free(os64_dom_t *dom, DRange **link)
 {
     DRange *r = *link;
     *link = r->next;
+    wrappers_free(dom->engine, r);
     if (r->kind == R_LIVE) {
         os64_html_range_free(r->live);
     } else {
@@ -170,8 +239,8 @@ static JSValue range_new(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype
         JS_FreeValue(ctx, object);
         return JS_EXCEPTION;
     }
-    (void)os64_html_range_set(r->live, 0, (os64_html_node_t *)document, 0);
-    (void)os64_html_range_set(r->live, 1, (os64_html_node_t *)document, 0);
+    (void)range_set(r, 0, document, 0);
+    (void)range_set(r, 1, document, 0);
     JS_SetOpaque(object, r);
     return object;
 }
@@ -204,17 +273,17 @@ static int set_point(JSContext *ctx, DRange *r, int which, const os64_html_node_
     bool both = d_tree_root(start) != d_tree_root(node) ||
                 (which == 0 ? position(node, offset, end, end_offset) > 0
                             : position(node, offset, start, start_offset) < 0);
-    int64_t status = os64_html_range_set(r->live, which, (os64_html_node_t *)node, offset);
+    int64_t status = range_set(r, which, node, offset);
     if (status == OS64_HTML_OK && both)
-        status = os64_html_range_set(r->live, 1 - which, (os64_html_node_t *)node, offset);
+        status = range_set(r, 1 - which, node, offset);
     return status < 0 ? throw_status(ctx, status) : 0;
 }
 
 /* Both points to (node, offset): a node already checked. */
 static int set_both(JSContext *ctx, DRange *r, const os64_html_node_t *node, uint32_t offset)
 {
-    int64_t status = os64_html_range_set(r->live, 0, (os64_html_node_t *)node, offset);
-    if (status == OS64_HTML_OK) status = os64_html_range_set(r->live, 1, (os64_html_node_t *)node, offset);
+    int64_t status = range_set(r, 0, node, offset);
+    if (status == OS64_HTML_OK) status = range_set(r, 1, node, offset);
     return status < 0 ? throw_status(ctx, status) : 0;
 }
 
@@ -603,7 +672,7 @@ static int surround(os64_dom_t *dom, JSContext *ctx, DRange *r, const os64_html_
         } else {
             uint32_t i = index_of(parent);
             failed = set_both(ctx, r, parent->parent, i) < 0 ||
-                     os64_html_range_set(r->live, 1, (os64_html_node_t *)parent->parent, i + 1) < 0;
+                     range_set(r, 1, parent->parent, i + 1) < 0;
         }
     }
     JS_FreeValue(ctx, fragment);
@@ -965,8 +1034,8 @@ static JSValue range_member(JSContext *ctx, JSValueConst self, int argc, JSValue
         JSValue copy = range_new(dom, ctx, JS_UNDEFINED, dom->document->document);
         DRange *c = JS_IsException(copy) ? NULL : JS_GetOpaque(copy, dom->ranges->range_class);
         if (c != NULL) {
-            (void)os64_html_range_set(c->live, 0, (os64_html_node_t *)b.start, b.start_offset);
-            (void)os64_html_range_set(c->live, 1, (os64_html_node_t *)b.end, b.end_offset);
+            (void)range_set(c, 0, b.start, b.start_offset);
+            (void)range_set(c, 1, b.end, b.end_offset);
         }
         return copy;
     }
@@ -1023,16 +1092,16 @@ static JSValue range_member(JSContext *ctx, JSValueConst self, int argc, JSValue
     case M_SELECT: {
         if (node->parent == NULL) return throw_status(ctx, OS64_HTML_INVALID_NODE_TYPE), JS_EXCEPTION;
         uint32_t i = index_of(node);
-        int64_t status = os64_html_range_set(r->live, 0, (os64_html_node_t *)node->parent, i);
+        int64_t status = range_set(r, 0, node->parent, i);
         if (status == OS64_HTML_OK)
-            status = os64_html_range_set(r->live, 1, (os64_html_node_t *)node->parent, i + 1);
+            status = range_set(r, 1, node->parent, i + 1);
         return status < 0 ? (throw_status(ctx, status), JS_EXCEPTION) : JS_UNDEFINED;
     }
     case M_SELECT_CONTENTS: {
         if (node->kind == OS64_HTML_DOCTYPE) return throw_status(ctx, OS64_HTML_INVALID_NODE_TYPE), JS_EXCEPTION;
-        int64_t status = os64_html_range_set(r->live, 0, (os64_html_node_t *)node, 0);
+        int64_t status = range_set(r, 0, node, 0);
         if (status == OS64_HTML_OK)
-            status = os64_html_range_set(r->live, 1, (os64_html_node_t *)node, os64_html_node_length(node));
+            status = range_set(r, 1, node, os64_html_node_length(node));
         return status < 0 ? (throw_status(ctx, status), JS_EXCEPTION) : JS_UNDEFINED;
     }
     case M_INSERT: return insert_node(dom, ctx, r, node) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
@@ -1149,27 +1218,43 @@ static JSValue static_constructor(JSContext *ctx, JSValueConst new_target, int a
     r->node[1] = end;
     r->offset[0] = start_offset;
     r->offset[1] = end_offset;
+    follow(r);
     JS_SetOpaque(object, r);
     return object;
 }
 
-static void record_dies(DRange *r)
+static void record_dies(JSRuntime *rt, DRange *r)
 {
     if (r == NULL) return;
+    wrappers_free(rt, r);
     r->dead = true;
     if (r->dom->ranges != NULL) r->dom->ranges->has_dead = true;
 }
 
 static void range_finalizer(JSRuntime *rt, JSValue value)
 {
-    (void)rt;
-    record_dies(JS_GetOpaque(value, os64_js_class_id(&range_slot)));
+    record_dies(rt, JS_GetOpaque(value, os64_js_class_id(&range_slot)));
 }
 
 static void static_finalizer(JSRuntime *rt, JSValue value)
 {
-    (void)rt;
-    record_dies(JS_GetOpaque(value, os64_js_class_id(&static_slot)));
+    record_dies(rt, JS_GetOpaque(value, os64_js_class_id(&static_slot)));
+}
+
+static void record_mark(JSRuntime *rt, const DRange *r, JS_MarkFunc *mark)
+{
+    if (r == NULL) return;
+    for (int i = 0; i < 2; i++) JS_MarkValue(rt, r->wrapper[i], mark);
+}
+
+static void range_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark)
+{
+    record_mark(rt, JS_GetOpaque(value, os64_js_class_id(&range_slot)), mark);
+}
+
+static void static_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark)
+{
+    record_mark(rt, JS_GetOpaque(value, os64_js_class_id(&static_slot)), mark);
 }
 
 /* ── The page Selection, a model (RANGE.md § 9; the Selection API) ───── */
@@ -1522,8 +1607,10 @@ static int define_interface(JSContext *ctx, JSValueConst global, const char *nam
 int d_ranges_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     if (!dom->options.ranges || !dom->options.modern) return 0;
-    static const JSClassDef range_def = {.class_name = "Range", .finalizer = range_finalizer};
-    static const JSClassDef static_def = {.class_name = "StaticRange", .finalizer = static_finalizer};
+    static const JSClassDef range_def = {.class_name = "Range", .finalizer = range_finalizer,
+                                               .gc_mark = range_mark};
+    static const JSClassDef static_def = {.class_name = "StaticRange", .finalizer = static_finalizer,
+                                                .gc_mark = static_mark};
     struct DRanges *s = d_alloc_kind(dom, sizeof(*s), OS64_DOM_MEM_RANGE);
     if (s == NULL) {
         d_error(ctx, "QuotaExceededError", "DOM range quota exceeded");

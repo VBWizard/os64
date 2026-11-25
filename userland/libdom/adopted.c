@@ -42,6 +42,16 @@ bool d_sheet_constructed(const DValue *entry)
     return entry != NULL && d_more_peek(entry)->constructed != NULL;
 }
 
+/* The root's record owns its array and assigner (their registry values);
+ * their closures hold the root's wrapper, which the engine traces. */
+void d_adopted_mark(JSRuntime *rt, const DValueMore *more, JS_MarkFunc *mark)
+{
+    const struct DAdopted *list = more->adopted;
+    if (list == NULL) return;
+    if (list->array != NULL) JS_MarkValue(rt, list->array->value, mark);
+    if (list->assign != NULL) JS_MarkValue(rt, list->assign->value, mark);
+}
+
 void d_adopted_free(os64_dom_t *dom, DValue *entry)
 {
     DValueMore *more = entry->more;
@@ -296,14 +306,9 @@ static const char kFactory[] =
 /* The root's record, made when first asked for. */
 static struct DAdopted *adopted_of(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *root)
 {
-    JSValue wrapper = d_wrap(dom, ctx, root);
-    if (JS_IsException(wrapper)) return NULL;
-    DValue *owner = d_find(dom, root);
-    if (owner == NULL) {
-        JS_FreeValue(ctx, wrapper);
-        JS_ThrowTypeError(ctx, "Missing node wrapper");
-        return NULL;
-    }
+    JSValue wrapper;
+    DValue *owner = d_wrap_record(dom, ctx, root, &wrapper);
+    if (owner == NULL) return NULL;
     dom = owner->dom;
     os64_js_outcome_t access;
     ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &access);

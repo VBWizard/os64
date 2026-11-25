@@ -23,7 +23,8 @@
 #define OS64_WALK_PATH_MAX 256u
 
 // A walk holds one directory handle open per level, so its depth is the
-// task's handle table less sixteen slots that stay the program's: its three
+// handles every task has without its table growing (OS64_TASK_HANDLES)
+// less sixteen that stay the program's: its three
 // standard handles and room for what a visit opens (grep's file, cp's source
 // and destination). Stopping there gives an honest depth error instead of a
 // misleading one from an exhausted table.

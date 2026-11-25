@@ -752,6 +752,15 @@ static void proc_add_handle_path(synth_text_t *t, int handle, const char *type,
 
 static void proc_gen_handles(synth_text_t *t, task_t *task)
 {
+	// THE FIRST LINE IS THE TABLE ITSELF (handle_blocks.h): "table", then
+	// the entries held, the room the table has now, the ceiling it may
+	// grow to, the most ever held at once, and the opens refused for want of
+	// room. Its first field is not a number, so a reader tells it from the
+	// rows.
+	synth_text_addf(t, "table\theld %u\troom %u\tceiling %u\tmost %u\tfailed %lu\n",
+	                __atomic_load_n(&task->handleCounts.held, __ATOMIC_RELAXED), handle_table_room(task),
+	                TASK_HANDLES_CEILING, __atomic_load_n(&task->handleCounts.most, __ATOMIC_RELAXED),
+	                (unsigned long)__atomic_load_n(&task->handleCounts.failed, __ATOMIC_RELAXED));
 	// "handle<TAB>type[<TAB>detail]" — files and directories expose their
 	// full path, and FILE rows append the fs-local identity (vfs.h f_ident:
 	// ext2 inode, FAT start cluster) so lsof can join a task's handle to a
@@ -766,9 +775,10 @@ static void proc_gen_handles(synth_text_t *t, task_t *task)
 	// both: one such name turns a row into two, and lsof — which rejects a
 	// malformed row rather than guess — loses the whole task's handles.
 	// The reader reverses it with os64_unescape_field after splitting.
-	for (int i = 0; i < TASK_MAX_HANDLES; i++)
+	uint32_t room = handle_table_room(task);
+	for (int i = 0; i < (int)room; i++)
 	{
-		handle_t *h = &task->handles[i];
+		handle_t *h = handle_entry(task, i);
 		if (h->type == HANDLE_NONE)
 			continue;
 

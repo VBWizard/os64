@@ -13377,6 +13377,17 @@ static void holders_page(const char *script, os64_html_holders_t *h, os64_dom_wr
     os64_html_census(g.page.way.doc, c);
 }
 
+/* A whole engine collection on the page's runtime, as the engine would run
+ * one when its heap grows. */
+static void holders_collect(void)
+{
+    os64_js_outcome_t out;
+    JSContext *ctx = os64_js_context(teardown_fixture_runtime, OS64_JS_ABI_ID, &out);
+    check(ctx != NULL, "holders: the page's runtime is at hand for a collection");
+    if (ctx != NULL)
+        JS_RunGC(JS_GetRuntime(ctx));
+}
+
 static void node_holders_cases(void)
 {
     os64_html_holders_t h;
@@ -13411,6 +13422,39 @@ static void node_holders_cases(void)
     check(h.marked.units == 10 && w.elsewhere == 10 && w.elsewhere_only_ours == 9,
           "holders: a wrapper the script still reaches is not one only the registry holds");
     probe_drop();
+    holders_page("box.innerHTML='<script>1<\\/script>'.repeat(50);box.innerHTML='';", &h, &w, &c);
+    check(c.nodes.held == 0 && h.other.units == 0,
+          "holders: scripts parsed started and removed are not held by their mark");
+    probe_drop();
+    /* A collection made for one call is the script's: once dropped and
+     * collected it waits, and the next one made frees it. One the script
+     * keeps stays live and follows the tree. */
+    holders_page("for(let i=0;i<200;i++)document.getElementsByTagName('p');"
+                 "window.list=box.getElementsByTagName('i');"
+                 "setTimeout(()=>{box.appendChild(document.createElement('i'));"
+                 "box.dataset.r=String(list.length)+' '+String(document.getElementsByTagName('b').length);},100);",
+                 &h, &w, &c);
+    holders_collect();
+    yonder_scripts_wrappers(g.page.scripts, NULL, 0, &w);
+    /* The engine may have collected, and a later call or safe point swept,
+     * some or all of the 200 already: what is left is dead, and the kept one
+     * is not. */
+    check(w.collections_script == 1 && w.collections_dead <= 200,
+          "holders: the dropped collections die with their objects, the one kept does not");
+    now_ms += 200;
+    script_turn();
+    yonder_scripts_wrappers(g.page.scripts, NULL, 0, &w);
+    const os64_html_attr_t *r = os64_html_attr(probe_id("box"), "data-r");
+    /* The timer's own collection was dropped as it returned: at most it is
+     * dead now. */
+    check(r != NULL && r->value != NULL && strcmp(r->value, "1 0") == 0 && w.collections_dead <= 1 &&
+              w.collections_script == 1,
+          "holders: the next collection made frees the dead, and the kept one is live");
+    if (r == NULL || r->value == NULL || strcmp(r->value, "1 0") != 0 || w.collections_dead > 1)
+        printf("  data-r %s, collections %lu, the script's %lu, dead %lu\n",
+               r != NULL && r->value != NULL ? r->value : "(none)", (unsigned long)w.collections,
+               (unsigned long)w.collections_script, (unsigned long)w.collections_dead);
+    probe_drop();
 }
 
 /* WHAT A WRAPPER'S LIFETIME MUST KEEP: identity and what the page hung on
@@ -13434,6 +13478,10 @@ static const char *wrapper_case(const char *script)
 
 static void wrapper_lifetime_cases(void)
 {
+    /* Ranges and shadow trees are each a switch of the host's; these cases
+     * want both. */
+    bool had_ranges = s_ranges, had_shadow = s_shadow_dom;
+    s_ranges = s_shadow_dom = true;
     static const struct { const char *what, *script, *expect; } kCases[] = {
         {"wrapper: an expando on a child of a removed subtree is read after the subtree is put back",
          "{const t=document.createElement('div');t.innerHTML='<span></span>';box.appendChild(t);"
@@ -13461,6 +13509,68 @@ static void wrapper_lifetime_cases(void)
          "setTimeout(()=>{box.appendChild(a);const b=box.children[0];"
          "box.dataset.r=String(a===b&&b.mark===1);},0);",
          "true"},
+        /* A view only its element's record holds at a safe point: an
+         * expando keeps nothing alive, so what the record reports for it
+         * is its whole count. */
+        {"wrapper: a kept collection only its element holds keeps what was hung on it",
+         "{box.childNodes.tag='c';box.children.tag='e';}"
+         "setTimeout(()=>{box.dataset.r=box.childNodes.tag+box.children.tag;},0);",
+         "ce"},
+        /* The brief's further cases (BRIEF_WRAPPER_LIFETIME § 8). */
+        {"wrapper: a listener whose closure holds a node of its own tree fires once the tree is put back",
+         "{const t=document.createElement('div');t.innerHTML='<span></span>';const s=t.firstChild;"
+         "t.addEventListener('x',()=>{box.dataset.r=String(s.parentNode===t);});box.appendChild(t);"
+         "window.keep=t;box.removeChild(t);}"
+         "setTimeout(()=>{box.appendChild(keep);keep.dispatchEvent(new Event('x'));},0);",
+         "true"},
+        {"wrapper: an expando pointing at another node of the same tree",
+         "{const t=document.createElement('div');t.innerHTML='<a></a><b></b>';t.firstChild.peer=t.lastChild;"
+         "t.lastChild.v=7;window.keep=t.firstChild;}"
+         "setTimeout(()=>{box.dataset.r=String(keep.peer.v)+' '+String(keep.peer===keep.parentNode.lastChild);},0);",
+         "7 true"},
+        {"wrapper: a view held alone keeps its element and the element's tree",
+         "{const w=document.createElement('div');w.innerHTML='<p></p>';window.s=w.firstChild.style;window.w=w;}"
+         "setTimeout(()=>{s.color='red';box.dataset.r=String(w.firstChild.style===s&&"
+         "/red/.test(w.firstChild.getAttribute('style')));},0);",
+         "true"},
+        {"wrapper: a canvas removed and held by its context alone keeps its pixels when put back",
+         "{const c=document.createElement('canvas');c.width=2;c.height=2;box.appendChild(c);"
+         "window.ctx=c.getContext('2d');ctx.fillStyle='#ff0000';ctx.fillRect(0,0,2,2);box.removeChild(c);}"
+         "setTimeout(()=>{box.appendChild(ctx.canvas);const d=ctx.getImageData(0,0,1,1).data;"
+         "box.dataset.r=String(ctx.canvas.getContext('2d')===ctx)+' '+d[0];},0);",
+         "true 255"},
+        {"wrapper: a custom element removed before its reactions finish keeps its state",
+         "class X extends HTMLElement{connectedCallback(){this.seen=(this.seen||0)+1;}"
+         "disconnectedCallback(){box.dataset.r='d'+String(this.seen);}}customElements.define('x-y',X);"
+         "{const e=document.createElement('x-y');box.appendChild(e);box.removeChild(e);}",
+         "d1"},
+        {"wrapper: a Range into a removed tree keeps its boundary's identity",
+         "{const t=document.createElement('div');t.innerHTML='<i>ab</i>';box.appendChild(t);box.removeChild(t);"
+         "window.r=document.createRange();r.selectNodeContents(t.firstChild);t.firstChild.tag='k';}"
+         "setTimeout(()=>{try{box.dataset.r=r.startContainer.tag+' '+r.toString();}catch(x){box.dataset.r='E:'+x.message;}},0);",
+         "k ab"},
+        {"wrapper: an observer's record for a tree removed and dropped keeps what was hung on its nodes",
+         "{const t=document.createElement('div');t.innerHTML='<u></u>';box.appendChild(t);"
+         "new MutationObserver(rs=>{window.rec=rs[0];}).observe(t,{childList:true,subtree:true});"
+         "t.firstChild.tag='q';t.removeChild(t.firstChild);box.removeChild(t);}"
+         "setTimeout(()=>{box.dataset.r=rec.removedNodes[0].tag+' '+String(rec.target.parentNode);},0);",
+         "q null"},
+        {"wrapper: a template's contents keep what was hung on them",
+         "{const t=document.createElement('template');t.innerHTML='<b></b>';t.content.firstChild.m=3;"
+         "window.c=t.content.firstChild;}"
+         "setTimeout(()=>{box.dataset.r=String(c.m)+' '+String(c.parentNode.firstChild===c);},0);",
+         "3 true"},
+        {"wrapper: a shadow root reached from its node and back through its host",
+         "try{const h=document.createElement('div');const sr=h.attachShadow({mode:'open'});sr.innerHTML='<i></i>';"
+         "sr.firstChild.n=4;window.si=sr.firstChild;}catch(x){box.dataset.r='E0:'+x.message;}"
+         "setTimeout(()=>{if(!box.dataset.r)try{box.dataset.r=String(si.getRootNode().host.shadowRoot.firstChild.n);}"
+         "catch(x){box.dataset.r='E1:'+x.message;}},0);",
+         "4"},
+        {"wrapper: a detached node of a created document reaches its document",
+         "{const d=document.implementation.createDocument(null,'r');window.e=d.createElement('q');}"
+         "setTimeout(()=>{box.dataset.r=e.ownerDocument.documentElement.nodeName+' '+"
+         "e.ownerDocument.contentType;},0);",
+         "r application/xml"},
     };
     for (size_t i = 0; i < sizeof(kCases) / sizeof(kCases[0]); i++) {
         const char *r = wrapper_case(kCases[i].script);
@@ -13470,6 +13580,8 @@ static void wrapper_lifetime_cases(void)
             printf("  got %s\n", r);
         probe_drop();
     }
+    s_ranges = had_ranges;
+    s_shadow_dom = had_shadow;
 }
 
 /* WHERE EVERY NODE IS (os64_html_census, flow_census; yonder's `nodes`

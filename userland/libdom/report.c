@@ -123,6 +123,26 @@ void d_task_close(os64_dom_t *dom, const char *task, os64_js_outcome_t *outcome)
         for (size_t i = 0; i < dom->cluster->count; ++i)
             task_close_one(dom->cluster->members[i], task, outcome);
     } else task_close_one(dom, task, outcome);
+    d_safe_point(dom);
+}
+
+/* A SAFE POINT: a task and its microtasks are over. Outside any dispatch,
+ * this binding's dead collections and dead KeyframeEffects are freed (their
+ * releases may free nodes).
+ * With OS64_DOM_GC_STRESS (host test builds) a whole engine collection
+ * runs here every time: a mark that reports a count its object does not
+ * own trips the engine's assertion, and one that misses a count leaks,
+ * which the suites' leak checks see. */
+void d_safe_point(os64_dom_t *dom)
+{
+    size_t dispatching = dom->cluster ? dom->cluster->dispatching : dom->dispatching;
+    if (dispatching == 0) {
+        d_queries_sweep(dom);
+        d_web_animations_sweep(dom);
+    }
+#ifdef OS64_DOM_GC_STRESS
+    JS_RunGC(dom->engine);
+#endif
 }
 
 static bool sticky(os64_js_status_t status)

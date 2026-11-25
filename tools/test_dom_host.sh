@@ -34,6 +34,10 @@ flags=(-O2 -g -std=gnu11 -Wall -Wextra -Werror -ffreestanding -fno-builtin
     -Iuserland/libgarb/include -Iuserland/libway/include -Iuserland/libpage/upstream/ryu -Iuserland/libos64/include -Iabi/include
     -Iuserland/libtls/upstream/inc -isystem userland/obj/js/upstream -fsanitize=address,undefined -fno-sanitize-recover=all
     '-DGARB_MODERN_PROBE="animation-name"')
+# DOM_GC_STRESS=1: a whole engine collection at each of libdom's safe points
+# (report.c d_safe_point), so every mark is checked by the engine's
+# assertions many times over.
+if [ "${DOM_GC_STRESS:-0}" = 1 ]; then flags+=(-DOS64_DOM_GC_STRESS); fi
 # The probe marks a property the Modern Web arc did not add, so the binding's
 # side of the mark (a style member that goes with the switch) has one to
 # hold to (tools/test_dom_modern.inc); libgarb's own suite proves the rest.

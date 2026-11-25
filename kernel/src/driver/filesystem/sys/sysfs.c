@@ -29,6 +29,7 @@
 //                                "acpi", "block", "cache", "conf", "gui", "log", "mounts",
 //                                "openfiles", "random", "shlib", "clipboard", "appearance", "decorations", "mouse", "usb", "audio",
 //                                "mediakeys"
+//   /sys/boot-kernel             the exact ELF handed to this boot by Limine
 //   /sys/acpi                    everything the firmware's ACPI tables
 //                                said, used or not: every table, the
 //                                FADT's power-management facts, the MADT's
@@ -246,6 +247,9 @@ typedef struct
 	uint8_t  bars;                             // six for a device, two for a bridge
 } sys_pci_view_t;
 
+extern uint64_t kKernelFileAddress;
+extern uint64_t kKernelFileSize;
+
 static int sys_pci_total(void)
 {
 	return (int)kPCIDeviceCount + (int)kPCIFunctionCount + (int)kPCIBridgeCount;
@@ -400,6 +404,7 @@ typedef enum
 	SYS_NODE_BTSCAN,     // /bluetooth/scan — status, write "scan" to request
 	SYS_NODE_BTCONNECTION, // /bluetooth/connection — LE HID peer sessions
 	SYS_NODE_BTDEVICES,  // /bluetooth/devices — most recent scan results
+	SYS_NODE_BOOTKERNEL, // /boot-kernel — retained ELF of the running kernel
 	SYS_NODE_MOUNTSFILE, // /mounts — the mount table, one line per live mount (df's data)
 	SYS_NODE_BLOCKFILE,  // /block — devices and partitions, named and located (lsblk's data)
 	SYS_NODE_OPENFILESFILE, // /openfiles — the open-file registry (lsof's deep half)
@@ -582,6 +587,14 @@ static void sys_parse_path(const char *path, sys_path_t *out)
 		if (synth_next_component(path, &pos, comp, sizeof(comp)))
 			return;
 		out->type = SYS_NODE_RANDOMFILE;
+		return;
+	}
+
+	if (strcmp(comp, "boot-kernel") == 0)
+	{
+		if (synth_next_component(path, &pos, comp, sizeof(comp)))
+			return;
+		out->type = SYS_NODE_BOOTKERNEL;
 		return;
 	}
 
@@ -2480,6 +2493,7 @@ typedef enum
 	SYS_HANDLE_GUI_WRITE,         // /sys/gui opened "w" — each line sets the frame clock's dial
 	SYS_HANDLE_APPEARANCE_WRITE,
 	SYS_HANDLE_DECORATIONS_WRITE,
+	SYS_HANDLE_BOOTKERNEL,     // immutable ELF kept alive by the boot mapping
 	SYS_HANDLE_CLIPREAD,       // /sys/clipboard opened "r" — holds a ref
 	SYS_HANDLE_CLIPWRITE,      // /sys/clipboard opened "w" — holds a pending
 	SYS_HANDLE_FONTWRITE,      // /sys/console/font opened "w" — holds an image
@@ -2540,6 +2554,21 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	if (mode[0] == 'w' && !is_probe && !is_clip && !is_appearance && !is_font && !is_decoration && !is_bt && !is_mouse
 	    && !is_mediakeys && !is_gui)
 		return -1;
+
+	if (sp.type == SYS_NODE_BOOTKERNEL)
+	{
+		if (!kKernelFileAddress || !kKernelFileSize)
+			return -1;
+		synth_text_t empty = {0};
+		sys_file_handle_t *h = synth_snapshot_publish(vfs_file, &empty, path, vfs_fs,
+		                                               sizeof(*h), FILETYPE_SYSFILE);
+		if (!h)
+			return -1;
+		h->kind = SYS_HANDLE_BOOTKERNEL;
+		h->snap.data = (char *)kKernelFileAddress;
+		h->snap.size = kKernelFileSize;
+		return 0;
+	}
 
 	// /sys/gui written: the frame clock's lines (gui_frame_clock_command:
 	// the reservation's dial, and the stall tripwire's proof). Read, it is
@@ -2999,6 +3028,8 @@ static int sys_close(vfs_file_t *vfs_file)
 			clipboard_seal(h->pending);
 			h->pending = NULL;
 		}
+		else if (h->kind == SYS_HANDLE_BOOTKERNEL)
+			h->snap.data = NULL; // the boot mapping owns these bytes
 		else if (h->kind == SYS_HANDLE_CLIPREAD)
 		{
 			// Disown the borrowed bytes BEFORE the generic close sees them,
@@ -3077,7 +3108,7 @@ static int sys_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 			// a listing that drops a name reads exactly like a name that
 			// does not exist.)
 			static const char *kSysRootDirs[] = { "bluetooth", "bus", "console", "cpu", "memory", "net" };
-			static const char *kSysRootFiles[] = { "acpi", "block", "cache", "conf", "gui", "log", "mounts", "openfiles", "random", "shlib", "clipboard", "appearance", "decorations", "mouse", "usb", "audio", "mediakeys" };
+			static const char *kSysRootFiles[] = { "acpi", "block", "boot-kernel", "cache", "conf", "gui", "log", "mounts", "openfiles", "random", "shlib", "clipboard", "appearance", "decorations", "mouse", "usb", "audio", "mediakeys" };
 			const int kDirCount  = (int)(sizeof(kSysRootDirs) / sizeof(kSysRootDirs[0]));
 			const int kFileCount = (int)(sizeof(kSysRootFiles) / sizeof(kSysRootFiles[0]));
 			if (h->index < kDirCount)
@@ -3327,6 +3358,11 @@ static int sys_stat(const char *path, os64_dirent_t *entry, vfs_filesystem_t *vf
 
 		case SYS_NODE_ACPIFILE:
 			strncpy(entry->name, "acpi", OS64_DIRENT_NAME_MAX);
+			return 0;
+
+		case SYS_NODE_BOOTKERNEL:
+			strncpy(entry->name, "boot-kernel", OS64_DIRENT_NAME_MAX);
+			entry->size = kKernelFileSize;
 			return 0;
 
 		case SYS_NODE_MOUNTSFILE:

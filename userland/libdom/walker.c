@@ -49,6 +49,10 @@ typedef struct DWalk {
     const os64_html_node_t *flight; /* held; NULL between traversals */
     bool flight_before;
     DSynchronousCallback callback; /* captured.value is JS_NULL or the traced NodeFilter */
+    /* The wrappers of `root` and `at` (HOLDERS), the object's counts, which
+     * its class's mark reports; `wrapped`, the nodes they are of. */
+    JSValue wrapper[2];
+    const os64_html_node_t *wrapped[2];
 } DWalk;
 
 struct DWalks {
@@ -70,15 +74,51 @@ static void step_to(os64_dom_t *dom, const os64_html_node_t **held, const os64_h
     *held = next;
 }
 
+/* The wrappers of the root and the current node, re-taken where either
+ * has moved to another node. */
+static void walk_follow(DWalk *w)
+{
+    const os64_html_node_t *nodes[2] = {w->root, w->at};
+    for (int i = 0; i < 2; i++) {
+        if (nodes[i] == w->wrapped[i]) continue;
+        /* Taken before the record is read again: making a wrapper can run
+         * a collection, whose finalizers may let this walker die and free
+         * what it held. */
+        JSValue wrapper = d_holder_take(w->dom, nodes[i]);
+        if (w->dead) {
+            JS_FreeValueRT(w->dom->engine, wrapper);
+            return;
+        }
+        JSValue old = w->wrapper[i];
+        w->wrapper[i] = wrapper;
+        w->wrapped[i] = nodes[i];
+        JS_FreeValueRT(w->dom->engine, old);
+    }
+}
+
+/* Each value is taken off the record before it is let go of, as
+ * filter_free does. */
+static void walk_wrappers_free(JSRuntime *rt, DWalk *w)
+{
+    for (int i = 0; i < 2; i++) {
+        JSValue wrapper = w->wrapper[i];
+        w->wrapper[i] = JS_UNDEFINED;
+        w->wrapped[i] = NULL;
+        JS_FreeValueRT(rt, wrapper);
+    }
+}
+
 static void set_at(os64_dom_t *dom, DWalk *w, const os64_html_node_t *node)
 {
     step_to(dom, &w->at, node);
+    walk_follow(w);
 }
 
 static void walk_unlink_free(os64_dom_t *dom, DWalk **link)
 {
     DWalk *w = *link;
     *link = w->next;
+    walk_wrappers_free(dom->engine, w);
     if (w->root != NULL) os64_html_release(dom->document, w->root);
     if (w->at != NULL) os64_html_release(dom->document, w->at);
     if (w->flight != NULL) os64_html_release(dom->document, w->flight);
@@ -498,6 +538,7 @@ static void iterators_changed(os64_dom_t *dom, const os64_html_change_t *c)
         if (w->dead || w->kind != W_ITERATOR) continue;
         retarget(dom, w, c, &w->at, &w->before);
         if (w->flight != NULL) retarget(dom, w, c, &w->flight, &w->flight_before);
+        walk_follow(w);
     }
 }
 
@@ -613,6 +654,7 @@ static JSValue create_walk(JSContext *ctx, JSValueConst self, int argc, JSValueC
     w->callback = callback;
     step_to(dom, &w->root, root);
     step_to(dom, &w->at, root);
+    walk_follow(w);
     w->next = s->list;
     s->list = w;
     JS_SetOpaque(object, w);
@@ -634,6 +676,7 @@ static void walk_dies(JSRuntime *rt, DWalk *w)
 {
     if (w == NULL) return;
     filter_free(rt, w);
+    walk_wrappers_free(rt, w);
     w->dead = true;
     if (w->dom->walks != NULL) w->dom->walks->has_dead = true;
 }
@@ -651,13 +694,17 @@ static void iterator_finalizer(JSRuntime *rt, JSValue value)
 static void walker_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark)
 {
     DWalk *w = JS_GetOpaque(value, os64_js_class_id(&walker_slot));
-    if (w != NULL) JS_MarkValue(rt, w->callback.captured.value, mark);
+    if (w == NULL) return;
+    JS_MarkValue(rt, w->callback.captured.value, mark);
+    for (int i = 0; i < 2; i++) JS_MarkValue(rt, w->wrapper[i], mark);
 }
 
 static void iterator_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark)
 {
     DWalk *w = JS_GetOpaque(value, os64_js_class_id(&iterator_slot));
-    if (w != NULL) JS_MarkValue(rt, w->callback.captured.value, mark);
+    if (w == NULL) return;
+    JS_MarkValue(rt, w->callback.captured.value, mark);
+    for (int i = 0; i < 2; i++) JS_MarkValue(rt, w->wrapper[i], mark);
 }
 
 /* NodeFilter is a legacy callback interface (WebIDL § 3.7.7): a function
@@ -769,7 +816,10 @@ void d_walkers_drain(os64_dom_t *dom)
 {
     struct DWalks *s = dom->walks;
     if (s == NULL) return;
-    for (DWalk *w = s->list; w != NULL; w = w->next) filter_free(dom->engine, w);
+    for (DWalk *w = s->list; w != NULL; w = w->next) {
+        filter_free(dom->engine, w);
+        walk_wrappers_free(dom->engine, w);
+    }
 }
 
 /* After it: every record and its holds. */

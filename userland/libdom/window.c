@@ -1797,33 +1797,18 @@ bool os64_dom_javascript_mime(const char *value, size_t length)
     return javascript_type(value + start, essence - start, false);
 }
 
-static size_t script_bucket(const os64_html_node_t *node)
+static bool script_marked(const os64_html_node_t *node)
 {
-    uintptr_t key = (uintptr_t)node;
-    return ((key >> 4) ^ (key >> 12)) % (sizeof(((os64_dom_t *)0)->scripts) / sizeof(DScript *));
+    return (node->binding & D_BINDING_STARTED) != 0;
 }
 
-static bool script_marked(os64_dom_t *dom, const os64_html_node_t *node)
-{
-    dom = d_creation_owner(dom, node);
-    for (const DScript *mark = dom->scripts[script_bucket(node)]; mark != NULL; mark = mark->next)
-        if (mark->node == node) return true;
-    return false;
-}
-
-/* ALREADY STARTED belongs to node identity. Its immutable creation binding
- * keeps the mark and native hold across adoption, including clone lookups. */
+/* ALREADY STARTED belongs to node identity: a bit on the node
+ * (D_BINDING_STARTED), so it survives adoption and goes with the node. */
 int d_script_mark(os64_dom_t *dom, const os64_html_node_t *node)
 {
-    dom = d_creation_owner(dom, node);
-    if (script_marked(dom, node)) return 0;
-    DScript *mark = d_alloc(dom, sizeof(*mark));
-    if (mark == NULL) return -1;
-    size_t slot = script_bucket(node);
-    mark->node = node;
-    mark->next = dom->scripts[slot];
-    dom->scripts[slot] = mark;
-    os64_html_hold(dom->document, node);
+    (void)dom;
+    if (script_marked(node)) return 0;
+    os64_html_set_binding(node, (uint8_t)(node->binding | D_BINDING_STARTED));
     return 1;
 }
 
@@ -1866,7 +1851,7 @@ int d_script_copy_marks(os64_dom_t *dom, const os64_html_node_t *from, const os6
 {
     const os64_html_node_t *a = from, *b = to;
     while (a != NULL && b != NULL) {
-        if (html_element(a, OS64_HTML_TAG_SCRIPT) && script_marked(dom, a) && d_script_mark(dom, b) < 0)
+        if (html_element(a, OS64_HTML_TAG_SCRIPT) && script_marked(a) && d_script_mark(dom, b) < 0)
             return -1;
         const os64_html_node_t *next_a = subtree_next(from, a, true);
         const os64_html_node_t *next_b = subtree_next(to, b, true);
@@ -1901,8 +1886,7 @@ size_t d_script_collect(const os64_html_node_t *node,
  * marks it started and notifies the host, which runs or registers it.
  * Connected to a document with no window, it is marked started and runs
  * nowhere, then or after it is moved into the page (HTML's
- * "prepare the script element": scripting is disabled for it), unless the
- * binding has no memory left to mark it with. */
+ * "prepare the script element": scripting is disabled for it). */
 void d_script_connected(os64_dom_t *dom, const os64_html_node_t *const *scripts, size_t count)
 {
     for (size_t i = 0; i < count; i++) {
@@ -1948,13 +1932,6 @@ void d_window_free(os64_dom_t *dom)
     location_exotic_free(dom);
     window_proxy_free(dom);
     d_navigate(dom, OS64_DOM_NAVIGATE_NONE, NULL, NULL, NULL, 0);
-    for (size_t i = 0; i < sizeof(dom->scripts) / sizeof(dom->scripts[0]); i++)
-        while (dom->scripts[i] != NULL) {
-            DScript *mark = dom->scripts[i];
-            dom->scripts[i] = mark->next;
-            os64_html_release(dom->document, mark->node);
-            d_free(dom, mark);
-        }
     d_free(dom, dom->url);
     dom->url = NULL;
     d_free(dom, dom->entry_state);
