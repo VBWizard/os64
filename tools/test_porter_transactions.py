@@ -10,6 +10,7 @@ import argparse
 from contextlib import contextmanager
 from pathlib import Path
 import re
+import shutil
 import socket
 import subprocess as sp
 import sys
@@ -166,14 +167,26 @@ class Fixture:
                 server.wait(timeout=15)
 
     @contextmanager
-    def boot(self, *, online=True, fault=None):
+    def boot(self, *, online=True, fault=None, lifeboat=False):
         self.boots += 1
         sock = self.root / f"qmp{self.boots}"
         self.serial = self.root / f"serial-{self.boots}.txt"
         command = ["qemu-system-x86_64", "-machine", "q35", "-cpu", CPU, "-m", "8g", "-smp", "4",
-                   "-cdrom", str(self.tree / "os64_kernel.iso"), "-boot", "d", "-no-reboot",
-                   "-display", "none", "-monitor", "none", "-qmp", f"unix:{sock},server=on,wait=off",
+                   "-no-reboot", "-display", "none", "-monitor", "none", "-qmp", f"unix:{sock},server=on,wait=off",
                    "-serial", f"file:{self.serial}"]
+        if lifeboat:
+            menu = (self.tree / "limine-hd.conf").read_text()
+            start = menu.index("/os64 (FAT")
+            end = menu.find("\n/", start + 1)
+            path = self.root / "lifeboat.conf"
+            path.write_text("timeout: 0\n" + (menu[start:] if end < 0 else menu[start:end]) + "\n")
+            run("mcopy", "-o", "-i", f"{self.system}@@1048576", path, "::/boot/limine/limine.conf")
+            nvram = self.root / "ovmf-vars.fd"
+            shutil.copyfile("/usr/share/OVMF/OVMF_VARS_4M.fd", nvram)
+            command += ["-drive", "if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd",
+                        "-drive", f"if=pflash,format=raw,file={nvram}"]
+        else:
+            command += ["-cdrom", str(self.tree / "os64_kernel.iso"), "-boot", "d"]
         for label, path in (("os64", self.system), ("home", self.home)):
             source = f"blkdebug:{fault[1]}:{path}" if fault and label == fault[0] else str(path)
             command += ["-drive", f"file={source},format=raw,cache=writeback,werror=report,if=none,id={label}",
@@ -184,7 +197,7 @@ class Fixture:
             process = sp.Popen(command, stdout=qlog, stderr=qlog)
             try:
                 wait_for(process, lambda: self.serial.exists() and re.search(
-                    r"\d+/\d+ paging pages used", self.serial.read_text(errors="replace")))
+                    r"boot complete:|\d+/\d+ paging pages used", self.serial.read_text(errors="replace")))
                 time.sleep(2)
                 qmp = QMP(sock)
                 try:
@@ -199,8 +212,8 @@ class Fixture:
                     process.terminate()
                     process.wait(timeout=10)
 
-    def execute(self, qmp, machine, script, filename, text):
-        qmp.type("husk /fat/" + script + ".sh")
+    def execute(self, qmp, machine, script, filename, text, *, lifeboat=False):
+        qmp.type("husk " + ("/" if lifeboat else "/fat/") + script + ".sh")
         wait_for(machine, lambda: text in self.read(filename), timeout=180)
 
 
@@ -259,7 +272,7 @@ def switches(f):
     print("Direct baseline/audio/yonder switches and single undos passed, including disowned chains and a foreign directory")
 
 
-def interrupt(f, phase, undo=False, torn=False):
+def interrupt(f, phase, undo=False, torn=False, lifeboat=False):
     with f.serve():
         first = f.log("initial", f.install("base")) if undo else []
         action = "porter undo --yes" if undo else f.install("base")
@@ -280,8 +293,8 @@ def interrupt(f, phase, undo=False, torn=False):
         f.script("recover", [f"echo incomplete > /home/.porter/operations/{operation}/complete",
                              *f.log("recover", "porter recover"), *f.log("again", "porter recover"),
                              "echo complete > /home/done", "sync"])
-    with f.boot(online=False) as (q, machine):
-        f.execute(q, machine, "recover", "/done", "complete")
+    with f.boot(online=False, lifeboat=lifeboat) as (q, machine):
+        f.execute(q, machine, "recover", "/done", "complete", lifeboat=lifeboat)
     completed = not torn and phase in ("complete", "head", "before-pointer-unlink", "after-pointer-unlink", "retired")
     expected = OLD_SOUND if undo or not completed else BASE_SOUND
     assert f.read_lib("libsound.so") == expected
@@ -294,7 +307,8 @@ def interrupt(f, phase, undo=False, torn=False):
         assert "Type: directory" in f.read(f"/.porter/stage/{operation}/b0", raw=True, root=True)
     assert "Inode:" not in f.read("/.porter/operation", raw=True)
     print(f"Offline recovery passed after {'undo' if undo else 'install'} cut at {phase}" +
-          (" with a torn completion record" if torn else ""))
+          (" with a torn completion record" if torn else "") +
+          (" from the FAT lifeboat with ext2 mounted at /ext2" if lifeboat else ""))
 
 
 def drift(f):
@@ -451,7 +465,7 @@ def main():
                         choices=("switch", "drift", "before-pointer", "prepared", "armed", "destinations",
                                  "complete", "before-pointer-unlink", "after-pointer-unlink", "undo",
                                  "write", "flush", "concurrent", "corrupt", "mixed-install", "mixed-undo",
-                                 "torn", "legacy", "pipe"))
+                                 "torn", "legacy", "pipe", "lifeboat"))
     args = parser.parse_args()
     if args.scenario not in ("switch", "write", "flush", "corrupt", "pipe") and not args.instrumented:
         parser.error("this scenario needs --instrumented built with -DPORTER_TEST_INTERRUPTS")
@@ -468,6 +482,8 @@ def main():
                 closed_pipe(f)
             elif args.scenario == "torn":
                 interrupt(f, "complete", torn=True)
+            elif args.scenario == "lifeboat":
+                interrupt(f, "destinations", lifeboat=True)
             elif args.scenario == "drift":
                 drift(f)
             elif args.scenario == "concurrent":

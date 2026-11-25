@@ -56,7 +56,8 @@ metadata. As long as the pointer can survive, keep the intent, armed and
 completion records, backup and receipt data needed to replay it. Remove the
 resolved operation pointer and check its barrier before reclaiming
 temporary files. A cut across that unlink leaves either replayable evidence
-or a durable resolved state with no operation to run.
+or a durable resolved state with no operation to run. Private stage files
+may survive a cut after pointer retirement and can be left for inspection.
 
 Keep the P.3 active inventory receipt and separate undo description keyed
 by its receipt ID. Explicit adoption starts an active chain with no previous
@@ -89,9 +90,30 @@ can verify ordering and restart behavior. Device-cache durability requires
 accurate flush failure propagation and cannot be inferred from an emulator
 process stop alone.
 
-
 The checked NVMe path consumes completed commands even when the controller
 reports failure. Block-cache and ext2 errors from the failed write stop
 Porter before the next barrier. A timed-out Flush keeps its completion slot
 until drained. A timed-out ordinary DMA I/O command retains the driver's
 fatal timeout policy.
+
+## Running the disposable proof
+
+Build the stock ISO and data disk, then run
+`python3 tools/test_porter_transactions.py` for the direct-switch rehearsal.
+The `write` and `flush` scenarios use [QEMU blkdebug](https://www.qemu.org/docs/master/devel/testing/blkdebug.html)
+with the production binary. Cuts use a guest-only test binary. Build it separately
+from the stock ISO used to boot.
+
+```sh
+make -C userland \
+    PORTER_CFLAGS="-I$PWD/userland/libtls/port/include -I$PWD/userland/libtls/upstream/inc -DPORTER_TEST_INTERRUPTS" \
+    "$PWD/userland/bin/porter"
+cp userland/bin/porter /tmp/porter-instrumented
+python3 tools/test_porter_transactions.py --scenario mixed-install --instrumented /tmp/porter-instrumented
+python3 tools/test_porter_transactions.py --scenario mixed-undo --instrumented /tmp/porter-instrumented
+```
+
+The `lifeboat` case starts the stock UEFI FAT entry after the cut. It
+resolves the persisted ext2 partition GUID at its different mount point and
+replays with networking disabled. Keep the default build free of the test
+flag when staging Porter for normal use.
