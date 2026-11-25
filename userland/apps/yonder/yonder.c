@@ -10475,8 +10475,14 @@ static void diag_profile_reading(Page *p, uint32_t n)
         dt_put(&u, "since the page's script began: ");
     char key[40];
     os64_snprintf(key, sizeof(key), "script profile reading %u", (unsigned)n);
-    if (profile_text(rt, ledger_sample_ticks(), &u))
+    if (profile_text(rt, ledger_sample_ticks(), &u)) {
         yonder_diag_reading_fact(p->diag, key, dt_text(&u));
+    } else {
+        // The reading resets the ledger after this, so its samples are gone
+        // either way: the record says so rather than looking whole.
+        yonder_diag_reading_fact(p->diag, key, "not written: no memory to sort its samples");
+        yonder_diag_short(p->diag);
+    }
     os64_free(u.s);
 }
 

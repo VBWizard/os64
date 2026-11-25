@@ -443,7 +443,9 @@ was shown, or since its record was last written on asking:
   defined and what called it, its milliseconds and samples), so a quiet
   minute is read apart from the load before it. The first reading's span
   begins with the page's script and says `since the page's script began`;
-  `script profile` itself is the span since the last reading.
+  `script profile` itself is the span since the last reading. A reading
+  with no memory to sort its samples says `not written` and marks the
+  record short of memory, since its samples go with the reset.
 
 ### The load's timeline (load_timeline.h)
 
