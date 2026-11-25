@@ -17,20 +17,50 @@ static int32_t max32(int32_t a, int32_t b) { return a > b ? a : b; }
 static int64_t min64(int64_t a, int64_t b) { return a < b ? a : b; }
 static int64_t max64(int64_t a, int64_t b) { return a > b ? a : b; }
 
-uint32_t plane_blend(uint32_t content, uint32_t picture)
+// All four channels at once, each in a 16-bit lane of one 64-bit word
+// (`spread`, and `gather` back). `keep` is 1 to 254 here, so a lane's
+// `t = p * keep + 128` is at most 64,898 and `t + (t >> 8)` at most 65,151:
+// lanes never carry into each other, and `(t + (t >> 8)) >> 8` is
+// `(p * keep + 127) / 255` exactly (every p and keep checked once by brute
+// force; tools/test_plane_compose_host.sh checks every content and picture
+// byte against the formula). A lane that passes 255 when the
+// content is added (content that is not premultiplied) is held at 255.
+#define LANES_LOW 0x00FF00FF00FF00FFull
+
+static inline uint64_t spread(uint32_t x)
+{
+	return (uint64_t)(x & 0x00FF00FFu) | ((uint64_t)(x & 0xFF00FF00u) << 24);
+}
+
+static inline uint32_t gather(uint64_t v)
+{
+	return (uint32_t)(v & 0x00FF00FFu) | (uint32_t)((v >> 24) & 0xFF00FF00u);
+}
+
+// A content pixel whose top byte `a` is neither 0 nor 255, over the picture.
+static inline uint32_t blend_between(uint32_t content, uint32_t picture, uint32_t a)
+{
+	uint64_t t = spread(picture) * (255 - a) + 0x0080008000800080ull;
+	uint64_t v = (((t + ((t >> 8) & LANES_LOW)) >> 8) & LANES_LOW) + spread(content);
+	uint64_t over = v & 0x0100010001000100ull;
+	return gather((v | (over - (over >> 8))) & LANES_LOW);
+}
+
+// The whole rule for one pixel, inlined into overlay_run's loop, where the
+// two cases that need no arithmetic cost a test each.
+static inline uint32_t blend_one(uint32_t content, uint32_t picture)
 {
 	uint32_t a = content >> 24;
 	if (a == 255)
 		return content;
 	if (a == 0)
 		return picture;
-	uint32_t keep = 255 - a, out = 0;
-	for (int shift = 0; shift < 32; shift += 8) {
-		uint32_t c = (content >> shift) & 0xFF, p = (picture >> shift) & 0xFF;
-		uint32_t v = c + (p * keep + 127) / 255;
-		out |= (v > 255 ? 255 : v) << shift;
-	}
-	return out;
+	return blend_between(content, picture, a);
+}
+
+uint32_t plane_blend(uint32_t content, uint32_t picture)
+{
+	return blend_one(content, picture);
 }
 
 // One row's overlay intervals: each overlay covering row `y`, as [x0, x1),
@@ -121,60 +151,77 @@ bool plane_place_valid(const pc_place_t *place, uint32_t content_w, uint32_t con
 	return plane_overlay_area(place) <= overlay_budget;
 }
 
+// The part [*px0, *px1) of the run [x0, x1) of content row y that the
+// picture reaches, and the picture's pixel for column *px0; NULL, with both
+// ends at x1, when it reaches none of it. A run is then three parts in
+// order, any of them empty: before the picture, the picture, after it. A
+// position relative to the origin is worked out in 64 bits: a valid origin
+// may lie anywhere, INT32_MIN included, and the distance from it to a
+// content pixel need not fit in 32.
+static const uint32_t *picture_span(const pc_image_t *picture, const pc_place_t *place, int32_t y, int32_t x0,
+                                    int32_t x1, int32_t *px0, int32_t *px1)
+{
+	int64_t py = (int64_t)y - place->origin.y;
+	*px0 = *px1 = x1;
+	if (py < 0 || py >= (int64_t)picture->h)
+		return NULL;
+	int64_t ox = place->origin.x;
+	*px0 = (int32_t)min64(max64(x0, ox), x1);
+	*px1 = (int32_t)max64(min64(x1, ox + picture->w), *px0);
+	if (*px1 == *px0) {
+		*px0 = *px1 = x1;
+		return NULL;
+	}
+	return picture->pixels + (size_t)py * picture->pitch_px + ((int64_t)*px0 - ox);
+}
+
+// The content of row y from x0 to x1, as opaque.
+static void opaque_part(uint32_t *dst, const uint32_t *crow, int32_t x0, int32_t x1, int32_t ax, pc_counts_t *counts)
+{
+	if (x1 > x0) {
+		copy_px(dst + (x0 - ax), crow + x0, x1 - x0);
+		counts->opaque += (uint64_t)(x1 - x0);
+	}
+}
+
 // The run [x0, x1) of content row y inside the clip and outside every
 // overlay: the picture's pixels where it reaches, the content as opaque
-// where it does not. A position relative to the origin is worked out in 64
-// bits: a valid origin may lie anywhere, INT32_MIN included, and the
-// distance from it to a content pixel need not fit in 32.
+// where it does not.
 static void picture_run(uint32_t *dst, const pc_image_t *content, const pc_image_t *picture,
                         const pc_place_t *place, int32_t y, int32_t x0, int32_t x1, int32_t ax,
                         pc_counts_t *counts)
 {
-	// The run is three parts in order, any of them empty: before the
-	// picture, the picture, after it ([x0, px0), [px0, px1), [px1, x1)).
-	int64_t py = (int64_t)y - place->origin.y;
-	int32_t px0 = x1, px1 = x1;
-	if (py >= 0 && py < (int64_t)picture->h) {
-		int64_t ox = place->origin.x;
-		px0 = (int32_t)min64(max64(x0, ox), x1);
-		px1 = (int32_t)max64(min64(x1, ox + picture->w), px0);
-	}
+	int32_t px0, px1;
+	const uint32_t *prow = picture_span(picture, place, y, x0, x1, &px0, &px1);
 	const uint32_t *crow = content->pixels + (size_t)y * content->pitch_px;
-	if (px0 > x0) {
-		copy_px(dst + (x0 - ax), crow + x0, px0 - x0);
-		counts->opaque += (uint64_t)(px0 - x0);
-	}
-	if (px1 > px0) {
-		const uint32_t *prow = picture->pixels + (size_t)py * picture->pitch_px;
-		copy_px(dst + (px0 - ax), prow + ((int64_t)px0 - place->origin.x), px1 - px0);
+	opaque_part(dst, crow, x0, px0, ax, counts);
+	if (prow != NULL) {
+		copy_px(dst + (px0 - ax), prow, px1 - px0);
 		counts->copied += (uint64_t)(px1 - px0);
 	}
-	if (x1 > px1) {
-		copy_px(dst + (px1 - ax), crow + px1, x1 - px1);
-		counts->opaque += (uint64_t)(x1 - px1);
-	}
+	opaque_part(dst, crow, px1, x1, ax, counts);
 }
 
 // The run [x0, x1) of content row y inside an overlay: each content pixel
-// over the picture's, or the content alone where the picture does not reach.
+// over the picture's where it reaches, the content as opaque where it does
+// not.
 static void overlay_run(uint32_t *dst, const pc_image_t *content, const pc_image_t *picture,
                         const pc_place_t *place, int32_t y, int32_t x0, int32_t x1, int32_t ax,
                         pc_counts_t *counts)
 {
+	int32_t px0, px1;
+	const uint32_t *prow = picture_span(picture, place, y, x0, x1, &px0, &px1);
 	const uint32_t *crow = content->pixels + (size_t)y * content->pitch_px;
-	int64_t py = (int64_t)y - place->origin.y;
-	bool row_in = py >= 0 && py < (int64_t)picture->h;
-	const uint32_t *prow = row_in ? picture->pixels + (size_t)py * picture->pitch_px : 0;
-	for (int32_t x = x0; x < x1; x++) {
-		int64_t px = (int64_t)x - place->origin.x;
-		if (row_in && px >= 0 && px < (int64_t)picture->w) {
-			dst[x - ax] = plane_blend(crow[x], prow[px]);
-			counts->blended++;
-		} else {
-			dst[x - ax] = crow[x];
-			counts->opaque++;
-		}
+	opaque_part(dst, crow, x0, px0, ax, counts);
+	if (prow != NULL) {
+		uint32_t *d = dst + (px0 - ax);
+		const uint32_t *c = crow + px0;
+		int32_t n = px1 - px0;
+		for (int32_t i = 0; i < n; i++)
+			d[i] = blend_one(c[i], prow[i]);
+		counts->blended += (uint64_t)n;
 	}
+	opaque_part(dst, crow, px1, x1, ax, counts);
 }
 
 void plane_compose(const pc_image_t *dst, const pc_image_t *content, const pc_image_t *picture,

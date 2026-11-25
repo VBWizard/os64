@@ -8,6 +8,7 @@
 #include "gui/gui_types.h"
 #include "gui/input.h"
 #include "gui/event_queue.h"
+#include "gui/plane.h"
 
 // The window system (GUI layer 3): window objects, z-order, decorations,
 // hit-testing, event routing.
@@ -286,6 +287,10 @@ typedef struct window
     // (struct s_thread is thread_t's tag — forward-declared so this header
     // stays free of kernel includes, same bargain compositor.h struck.)
     struct s_thread *waiter;
+
+    // The window's planes (plane.h), each slot under kGuiLock. A window
+    // with any slot in use cannot be destroyed.
+    gui_plane_t planes[GUI_WINDOW_PLANES];
 } window_t;
 
 // Create a window whose FRAME is `frame` (content is automatically inset by

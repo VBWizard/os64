@@ -664,6 +664,106 @@ static inline int64_t os64_gui_popup_create(const char *title, int64_t owner,
                                   (uint64_t)x, (uint64_t)y, width, height, flags);
 }
 
+// ── Planes (docs/design/pending/VIDEO_PLANE.md § 3) ───────────────────────────
+// A PLANE is a second pair of pixel stores a window owns: a canvas the
+// creating thread draws in and a front copy the compositor reads. It shows
+// where the window's content lets it through: inside the plane's clip the
+// content is see-through, except inside its overlay rectangles, where each
+// content pixel's top byte says how much of the content covers the picture
+// (255 all content, 0 all picture, premultiplied between). A plane has no
+// frame, no z-order and no events; it is named by its window and its NAME.
+//
+//   - plane_create gives the plane stores of the smallest capacity class
+//     holding w x h (640x360, 1280x720, 1920x1080, 2560x1440, 3840x2160);
+//     it has no place yet, so nothing shows. The calling thread is its
+//     CREATOR: only it may ask for the surface, publish or destroy. Refused:
+//     a zero size (BAD_ARGS), past the largest class (ABOVE_CAPACITY), over
+//     the task's budget (OVER_BUDGET), no free slot or no memory
+//     (NO_RESOURCES).
+//   - plane_publish copies w x h of the canvas to the front: the plane's
+//     picture. While the plane has a place the picture cannot change size
+//     (PLANE_PICTURE); a zero size or one past the capacity is BAD_ARGS.
+//   - A place is given, moved or taken away (hide) only by a window publish
+//     carrying edits, so a hole in the content and the plane behind it
+//     reach the glass together. The publish's damage must cover what an
+//     edit changes the reading of: a place shown, hidden or moved, its old
+//     clip and its new; a change to the overlays alone, the new overlays.
+//     After the edits no two of the window's clips may meet, each clip lies
+//     inside the content, each overlay inside its clip, and the overlays'
+//     union stays within the budget. A place that is not empty needs a
+//     picture whose size is its origin's. An edit with an empty clip is a
+//     hide; a list naming one plane twice, or with `_reserved` not zero, is
+//     BAD_ARGS. A publish with no edits is the window's plain publish.
+//   - plane_destroy is refused while the plane has a place. A window with
+//     planes cannot be destroyed. A creating thread that ends takes its
+//     planes out with it (hidden, then destroyed); the task's death takes
+//     every plane.
+#define OS64_GUI_PLANES 4
+#define OS64_GUI_PLANE_OVERLAYS 8
+#define OS64_GUI_PLANE_EDITS_MAX 4
+
+#define OS64_GUI_ERR_NOT_CREATOR    (-12) // a plane call from a thread that did not create it
+#define OS64_GUI_ERR_NO_PLANE       (-13) // no such plane, or a name from before it was destroyed
+#define OS64_GUI_ERR_OVER_BUDGET    (-14) // the task's planes would hold more than the kernel allows
+#define OS64_GUI_ERR_PLANE_DAMAGE   (-15) // a publish's damage does not cover what its edits change
+#define OS64_GUI_ERR_PLANE_OVERLAP  (-16) // clips meet, a clip leaves the content, an overlay its clip, the overlays are over budget, or a rectangle has a negative size or a far edge past INT32_MAX
+#define OS64_GUI_ERR_PLANE_PICTURE  (-17) // a place with no picture of its origin's size, or a resize while placed
+
+typedef struct os64_gui_plane_surface
+{
+    uint32_t *pixels;      // the canvas, one pointer for the plane's life
+    uint32_t pitch_px;     // pixels between the starts of two rows
+    uint32_t cap_w, cap_h; // the most a picture may be
+    uint32_t _reserved;
+} os64_gui_plane_surface_t;
+
+// One edit: a plane's new place, or `hide`. All rectangles are the
+// window's content's: `origin` is where the picture's first pixel lands and
+// its size, `clip` the part of the content the plane shows through, and the
+// overlays (`noverlays` of them) lie inside the clip.
+typedef struct os64_gui_plane_edit
+{
+    uint32_t plane;        // the plane's name
+    uint32_t hide;         // nonzero: the place becomes empty (the rest is ignored)
+    os64_gui_rect_t origin;
+    os64_gui_rect_t clip;
+    uint32_t noverlays;
+    uint32_t _reserved;    // zero
+    os64_gui_rect_t overlay[OS64_GUI_PLANE_OVERLAYS];
+} os64_gui_plane_edit_t;
+
+// The kernel reads these two structs as they are, so their layout is pinned
+// here alone.
+_Static_assert(sizeof(os64_gui_plane_surface_t) == 24, "gui plane surface ABI: 24 bytes");
+_Static_assert(sizeof(os64_gui_plane_edit_t) == 176, "gui plane edit ABI: 176 bytes");
+_Static_assert(__builtin_offsetof(os64_gui_plane_edit_t, overlay) == 48, "gui plane edit ABI: overlays at 48");
+
+// Answers the plane's name (> 0), or a negative OS64_GUI_ERR_*.
+static inline int64_t os64_gui_plane_create(int64_t handle, uint32_t width, uint32_t height)
+{
+    return (int64_t)os64_syscall3(SYSCALL_GUI_PLANE_CREATE, (uint64_t)handle, width, height);
+}
+static inline int64_t os64_gui_plane_surface(int64_t handle, uint32_t plane, os64_gui_plane_surface_t *out)
+{
+    return (int64_t)os64_syscall3(SYSCALL_GUI_PLANE_SURFACE, (uint64_t)handle, plane, (uint64_t)out);
+}
+static inline int64_t os64_gui_plane_publish(int64_t handle, uint32_t plane, uint32_t width, uint32_t height)
+{
+    return (int64_t)os64_syscall4(SYSCALL_GUI_PLANE_PUBLISH, (uint64_t)handle, plane, width, height);
+}
+static inline int64_t os64_gui_plane_destroy(int64_t handle, uint32_t plane)
+{
+    return (int64_t)os64_syscall2(SYSCALL_GUI_PLANE_DESTROY, (uint64_t)handle, plane);
+}
+// The window's publish with up to OS64_GUI_PLANE_EDITS_MAX edits, accepted
+// whole or refused whole (nothing changes when refused).
+static inline int64_t os64_gui_window_publish_edits(int64_t handle, const os64_gui_rect_t *damage,
+                                                    const os64_gui_plane_edit_t *edits, uint32_t count)
+{
+    return (int64_t)os64_syscall4(SYSCALL_GUI_WINDOW_PUBLISH_EDITS, (uint64_t)handle, (uint64_t)damage,
+                                  (uint64_t)edits, count);
+}
+
 // ── The layout lock, this side ──────────────────────────────────────────────
 // The same numbers are asserted against the KERNEL structs in gui_client.c;
 // a divergence on either side refuses to build.

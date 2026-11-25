@@ -1059,11 +1059,16 @@ static void composite_one(surface_t *backbuffer, const window_t *w, rect_t damag
 
 	}
 
-	// Client content. Blit the WHOLE content rect at its view-space position
+	// Client content. Where it meets a placed plane, plane.c draws the two
+	// together (VIDEO_PLANE.md § 3.4); the counts it adds to are the
+	// compositor's, which is why the window is not const there. Elsewhere,
+	// blit the WHOLE content rect at its view-space position
 	// and let surface_blit clip both ends: it already mirrors destination
 	// clipping back into the source origin, so the visible sliver comes from
 	// the right pixels without any arithmetic here.
 	rect_t content_screen = wm_content_rect_on_screen(w);
+	if (gui_planes_compose((window_t *)w, &view, damage, content_screen))
+		return;
 	surface_blit(&view, content_screen.x - damage.x, content_screen.y - damage.y,
 	             &w->content,
 	             (rect_t){0, 0, (int32_t)w->content.width, (int32_t)w->content.height});

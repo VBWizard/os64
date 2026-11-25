@@ -240,6 +240,11 @@ static uint64_t syscall_gui_event_ring(uint64_t arg0, uint64_t arg1, uint64_t ar
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_gui_frame_request(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 static uint64_t syscall_gui_frame_take(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+static uint64_t syscall_gui_plane_create(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+static uint64_t syscall_gui_plane_surface(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+static uint64_t syscall_gui_plane_publish(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+static uint64_t syscall_gui_plane_destroy(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+static uint64_t syscall_gui_window_publish_edits(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 
 // NOTE: syscall.S marshals the syscall registers straight into
 // _syscall_dispatch()'s C arguments — there is deliberately no C-level entry
@@ -341,6 +346,11 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_GUI_EVENT_RING,         "gui_event_ring",         syscall_gui_event_ring,         false, 0x00),  // scalar window handle and mask
 	SYSCALL_DEFINE(SYSCALL_GUI_FRAME_REQUEST,      "gui_frame_request",      syscall_gui_frame_request,      false, 0x00),  // scalar handle and flags; never blocks (the answer is an event), resolves no path
 	SYSCALL_DEFINE(SYSCALL_GUI_FRAME_TAKE,         "gui_frame_take",         syscall_gui_frame_take,         false, 0x02),  // arg1 = input_event_t out; never blocks, resolves no path
+	SYSCALL_DEFINE(SYSCALL_GUI_PLANE_CREATE,       "gui_plane_create",       syscall_gui_plane_create,       false, 0x00),  // scalars: handle, width, height
+	SYSCALL_DEFINE(SYSCALL_GUI_PLANE_SURFACE,      "gui_plane_surface",      syscall_gui_plane_surface,      false, 0x04),  // arg2 = os64_gui_plane_surface_t out
+	SYSCALL_DEFINE(SYSCALL_GUI_PLANE_PUBLISH,      "gui_plane_publish",      syscall_gui_plane_publish,      false, 0x00),  // scalars: handle, plane, width, height
+	SYSCALL_DEFINE(SYSCALL_GUI_PLANE_DESTROY,      "gui_plane_destroy",      syscall_gui_plane_destroy,      false, 0x00),  // scalars: handle, plane
+	SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_PUBLISH_EDITS, "gui_window_publish_edits", syscall_gui_window_publish_edits, false, 0x00),  // arg1 damage OR NULL, arg2 edits (NULL when none): both copied by the handler
 	// arg1 is a CODE address the kernel will one day jump to, not a buffer it
 	// reads — so it stays OUT of the pointer mask (which validates readable
 	// user memory) and the handler range-checks it itself.
@@ -5318,6 +5328,14 @@ static uint64_t syscall_thread_exit(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	printd(DEBUG_THREAD, "syscall_thread_exit: thread 0x%08lx of %s exiting with %ld\n",
 	       self->threadID, task->exename, (int64_t)arg0);
 
+	// The planes this thread created leave with it (os64/gui.h § Planes).
+	// Here, first: syscall context, no spinlock held, the thread still
+	// RUNNING and wakeable, so kGuiLock is taken as any GUI call takes it.
+	// A thread's entry returning reaches this call through libos64's exit
+	// stub; a thread ending any other way ends its task, whose death takes
+	// every plane (gui_task_destroy_windows).
+	gui_thread_planes_exit(self);
+
 	// Publish the answer and drop the thread's reference BEFORE leaving the
 	// run queue: after the state change below this thread never executes
 	// another instruction, so anything left undone stays undone forever.
@@ -6067,6 +6085,76 @@ static uint64_t syscall_gui_frame_take(uint64_t arg0, uint64_t arg1, uint64_t ar
 	if (rc == 1 && !copy_to_user_buffer((void *)arg1, &ev, sizeof(ev)))
 		return (uint64_t)GUI_ERR_BAD_ARGS;
 	return (uint64_t)rc;
+}
+
+// A window's planes (gui/plane.h, os64/gui.h § Planes). Every size is
+// checked against 32 bits here, so a high word of garbage is refused rather
+// than narrowed into a size nobody asked for.
+static uint64_t syscall_gui_plane_create(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg3; (void)arg4; (void)arg5;
+	if (arg1 > UINT32_MAX || arg2 > UINT32_MAX)
+		return (uint64_t)GUI_ERR_BAD_ARGS;
+	return (uint64_t)gui_plane_create((int64_t)arg0, (uint32_t)arg1, (uint32_t)arg2);
+}
+
+static uint64_t syscall_gui_plane_surface(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg3; (void)arg4; (void)arg5;
+	if (arg1 > UINT32_MAX)
+		return (uint64_t)OS64_GUI_ERR_NO_PLANE;
+	os64_gui_plane_surface_t out;
+	int64_t rc = gui_plane_surface((int64_t)arg0, (uint32_t)arg1, &out);
+	if (rc != 0)
+		return (uint64_t)rc;
+	if (!copy_to_user_buffer((void *)arg2, &out, sizeof(out)))
+		return (uint64_t)GUI_ERR_BAD_ARGS;
+	return 0;
+}
+
+static uint64_t syscall_gui_plane_publish(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg4; (void)arg5;
+	if (arg1 > UINT32_MAX)
+		return (uint64_t)OS64_GUI_ERR_NO_PLANE;
+	if (arg2 > UINT32_MAX || arg3 > UINT32_MAX)
+		return (uint64_t)GUI_ERR_BAD_ARGS;
+	return (uint64_t)gui_plane_publish((int64_t)arg0, (uint32_t)arg1, (uint32_t)arg2, (uint32_t)arg3);
+}
+
+static uint64_t syscall_gui_plane_destroy(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg2; (void)arg3; (void)arg4; (void)arg5;
+	if (arg1 > UINT32_MAX)
+		return (uint64_t)OS64_GUI_ERR_NO_PLANE;
+	return (uint64_t)gui_plane_destroy((int64_t)arg0, (uint32_t)arg1);
+}
+
+// The damage is nullable (the publish precedent) and the edits are absent
+// when there are none, so neither is in the dispatcher's pointer mask: both
+// are copied into kernel memory here, BEFORE any lock, and the copies are
+// all the GUI ever reads.
+static uint64_t syscall_gui_window_publish_edits(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg4; (void)arg5;
+	if (arg3 > OS64_GUI_PLANE_EDITS_MAX)
+		return (uint64_t)GUI_ERR_BAD_ARGS;
+	rect_t local;
+	const rect_t *damage = NULL;
+	if (arg1 != 0) {
+		if (!copy_user_buffer((const void *)arg1, &local, sizeof(local)))
+			return (uint64_t)GUI_ERR_BAD_ARGS;
+		damage = &local;
+	}
+	os64_gui_plane_edit_t edits[OS64_GUI_PLANE_EDITS_MAX];
+	if (arg3 > 0 && !copy_user_buffer((const void *)arg2, edits, (size_t)arg3 * sizeof(edits[0])))
+		return (uint64_t)GUI_ERR_BAD_ARGS;
+	return (uint64_t)gui_window_publish_edits((int64_t)arg0, damage, arg3 > 0 ? edits : NULL, (uint32_t)arg3);
 }
 
 static uint64_t syscall_gui_event_wait(uint64_t arg0, uint64_t arg1, uint64_t arg2,

@@ -38,6 +38,7 @@
 #include "audio/audio.h"         // kaudio_thread — the "/kaudio" task's body
 #include "gui/compositor.h"
 #include "gui/gui_demos.h"
+#include "gui/plane.h"        // gui_task_planes_release — a buried task's planes' pairs
 #include "tty.h"   // per-tty foreground (task_wait) + the task-departure hook (shell gone, or the foreground job)
 
 extern volatile uint64_t kSystemCurrentTime;
@@ -1002,6 +1003,11 @@ static void task_destroy(task_t *t)
 	// it runs BEFORE the thread/page teardown below because a pivoted
 	// canvas unmaps through this task's still-intact page tables.
 	gui_task_destroy_windows(t);
+	// The planes' pairs go back HERE and not at the exit sweep: a sibling
+	// told to die at exit may still be making a pair (gui_plane_create lets
+	// kGuiLock go while it does) or drawing in a canvas, and every thread is
+	// retired before burial. Through the still-intact page tables, as above.
+	gui_task_planes_release(t);
 
 	thread_t *th = t->threads;
 	while (th != NULL) {

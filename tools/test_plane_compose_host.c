@@ -96,18 +96,31 @@ static uint64_t model_area(const pc_place_t *place)
     return n;
 }
 
+// Every top byte, every content byte and every picture byte: the blend
+// works two channels a lane, so each lane position gets every pair (the
+// red and green lanes one way round, blue and the top byte the other),
+// content that is not premultiplied included, which saturates. Then
+// channels that differ from one another, at random.
 static void blend_cases(void)
 {
     for (uint32_t a = 0; a < 256; a++)
-        for (uint32_t c = 0; c <= a; c += (a > 64 ? 7 : 1))
-            for (uint32_t p = 0; p < 256; p += 5) {
-                uint32_t content = a << 24 | c << 16 | c << 8 | c, picture = 0xFF000000u | p << 16 | p << 8 | p;
+        for (uint32_t c = 0; c < 256; c++)
+            for (uint32_t p = 0; p < 256; p++) {
+                uint32_t content = a << 24 | c << 16 | p << 8 | c, picture = p << 24 | p << 16 | c << 8 | p;
                 uint32_t got = plane_blend(content, picture), want = model_blend(content, picture);
                 if (got != want) {
+                    fprintf(stderr, "blend %08x over %08x: %08x, want %08x\n", content, picture, got, want);
                     CHECK(got == want);
                     return;
                 }
             }
+    for (int i = 0; i < 1000000; i++) {
+        uint32_t content = rnd(), picture = rnd();
+        if (plane_blend(content, picture) != model_blend(content, picture)) {
+            CHECK(plane_blend(content, picture) == model_blend(content, picture));
+            return;
+        }
+    }
     CHECK(plane_blend(0xFF123456u, 0xFFABCDEFu) == 0xFF123456u);
     CHECK(plane_blend(0x00000000u, 0xFFABCDEFu) == 0xFFABCDEFu);
     // A half-covering black content: rounded to nearest, 0x80 * 127 / 255 = 63.75 -> 64.

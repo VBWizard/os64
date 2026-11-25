@@ -141,6 +141,7 @@ static const fixture_t kFixtures[] = {
     { "/tests/avbench",         argv_avbench_x_c,    0xAB0C0000, 0, "libav.so's scaler: the same conversion with FFmpeg's C routines gives the same CRC" },
     { "/tests/avbench",         argv_avbench_x_enlarge, 0xAB0C0000, 0, "libav.so's scaler: enlarging, the fast scaler runs no code written into data memory (it is bilinear there)" },
     { "/tests/titletest",       NULL, 0x711E0000,  0x711E0002, "GUI rename: the owner retitles and sets the encoding; create's title refusals, another task's NOT_OWNER" },
+    { "/tests/planetest",       NULL, 0x91A40000,  0x91A40002, "a window's plane: the creator rule, refused commits change nothing, a placed plane is drawn and holds its window, its thread's end takes it; prices the compositor's part" },
     { "/tests/frametest",       NULL, 0xF4A30000,  0xF4A30002, "the display's frame: a request is answered, numbers rise, twice is once, if-drawn waits for a publish, take leaves other events, an unread answer is one, an asker dying unanswered breaks nothing" },
     { "/tests/pintest",         NULL, 0x91A70000,  0,          "a handle closed by a sibling thread under a parked read: pipe, pty master, thread handle" },
     { "/tests/pincputest",      NULL, 0xC02E0000,  0,          "PINCPU=<n> pins a program and its threads to CPU n; PINCORE still works; bad values leave it unpinned" },
