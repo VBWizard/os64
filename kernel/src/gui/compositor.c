@@ -648,6 +648,11 @@ void gui_frame_nudge(void)
 void gui_frame_request_arrived(void)
 {
 	s_fr_counts.requests++;
+	gui_frame_wait_arrived();
+}
+
+void gui_frame_wait_arrived(void)
+{
 	__atomic_store_n(&s_fr_arrived, true, __ATOMIC_SEQ_CST);
 	gui_frame_nudge();
 }

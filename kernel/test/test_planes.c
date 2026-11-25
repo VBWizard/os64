@@ -8,6 +8,7 @@
 #include "CONFIG.h"
 #include "memory/kmalloc.h"
 #include "micros.h"
+#include "video.h"
 
 // A window's planes through the calls a syscall reaches (VIDEO_PLANE.md
 // § 3.10): the commit is the lock hold, the copy and the edits together, so
@@ -268,12 +269,12 @@ bool test_planes(void)
 	check(rc == 0 && fr.why == OS64_GUI_PLANE_PATIENCE && fr.number == 0 && waited >= 60000,
 	      "not shown: no frame, the patience ends the wait (and the second poke was not owed)", rc);
 	rc = gui_plane_frame_wait(handle, pb, 0, &fr);
-	check(rc == 0 && fr.why == OS64_GUI_PLANE_PATIENCE, "patience 0 asks and answers at once", rc);
+	check(rc == 0 && fr.why == OS64_GUI_PLANE_PATIENCE, "patience 0 asks for no frame and answers at once", rc);
 	irq = gui_lock(GUI_LOCK_OTHER);
 	w = window_of(handle);
 	gui_plane_t *pw = w ? &w->planes[(pb & 0xFF) - 1] : NULL;
 	bool clear = pw && !pw->frame_wanted && !pw->answered && pw->waiter == NULL && !pw->poke_owed &&
-	             pw->frames_asked == 2 && pw->waits_poked == 1 && pw->waits_patience == 2;
+	             pw->frames_asked == 1 && pw->waits_poked == 1 && pw->waits_patience == 2;
 	if (pw)
 		pw->creator = NULL;
 	gui_unlock(irq);
@@ -347,6 +348,36 @@ bool test_planes(void)
 	rc = gui_plane_create(handle, PT_PIC_W, PT_PIC_H);
 	check(rc == OS64_GUI_ERR_OVER_BUDGET, "over the budget refused", rc);
 	gui_plane_budget_for_test(0);
+
+	// Off the screen's edge (last, so its kept pair is in no earlier count):
+	// a window whose left part is on the screen and whose plane is past the
+	// right edge is not covered, and its plane is not shown (the occlusion
+	// walk knows only the windows above).
+	int64_t edge = gui_window_create("planes edge", (int32_t)kFrameBuffer.width - 150, 40, 400, 200,
+	                                 GUI_WINDOW_START_UNFOCUSED);
+	int64_t ep = edge > 0 ? gui_plane_create(edge, PT_PIC_W, PT_PIC_H) : -1;
+	if (ep > 0) {
+		gui_plane_publish(edge, (uint32_t)ep, PT_PIC_W, PT_PIC_H);
+		os64_gui_plane_edit_t ee = place_edit((uint32_t)ep, 250, 20, 0);
+		rc = gui_window_publish_edits(edge, NULL, &ee, 1);
+		gui_plane_status_t rows[8];
+		uint64_t ref[GUI_PLANE_REFUSALS], prs, kp, by;
+		uint32_t n = gui_planes_status(rows, 8, ref, &prs, &kp, &by);
+		bool found = false, shown = true;
+		for (uint32_t i = 0; i < n && i < 8; i++)
+			if (rows[i].window == (uint32_t)edge && rows[i].name == (uint32_t)ep) {
+				found = true;
+				shown = rows[i].shown;
+			}
+		check(rc == 0 && found && !shown, "a plane past the screen's edge is not shown", rc);
+		os64_gui_plane_edit_t eh = hide_edit((uint32_t)ep);
+		gui_window_publish_edits(edge, NULL, &eh, 1);
+		gui_plane_destroy(edge, (uint32_t)ep);
+	}
+	check(edge > 0 && ep > 0, "the edge window and its plane", ep);
+	if (edge > 0)
+		gui_window_destroy(edge);
+
 
 out:
 	// Every plane gone (a test that failed midway may have left some), the

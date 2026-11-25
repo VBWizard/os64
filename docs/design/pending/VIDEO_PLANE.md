@@ -191,8 +191,8 @@ and the new are both damaged.
 
 **One test says whether a plane is shown**, and both the frame clock's count
 of shown waiters and the answers use it: the window is not covered, the
-committed clip is not empty, and the clip meets the window's visible pieces
-as the compositor's own occlusion walk gives them. The walk is bounded as the
+committed clip is not empty, and the clip, cut to the screen, meets the
+window's visible pieces as the compositor's own occlusion walk gives them. The walk is bounded as the
 visible-damage walk is; when it runs out of pieces it answers "shown". It is
 worked out once a pass for each plane with a waiter.
 

@@ -22,6 +22,7 @@
 #include "signals.h"          // the wait's park and its exit
 #include "kernel.h"           // kTicksSinceStart — the park's deadline
 #include "micros.h"           // the patience
+#include "video.h"            // kFrameBuffer — "shown" ends at the screen's edge
 
 _Static_assert(GUI_WINDOW_PLANES == OS64_GUI_PLANES, "the plane ABI's slots drifted from the kernel's");
 _Static_assert(PLANE_OVERLAYS_MAX == OS64_GUI_PLANE_OVERLAYS, "the plane ABI's overlays drifted from the composer's");
@@ -745,9 +746,10 @@ int64_t gui_window_publish_edits(int64_t handle, const os64_gui_rect_t *damage,
 // ── Frames (VIDEO_PLANE.md § 3.6) ───────────────────────────────────────────
 
 // The one test of whether a plane is shown: its window not covered, its
-// place not empty, and its clip, as the content stands, meeting what of the
-// window is visible (wm_visible_damage's walk, which answers with the
-// pieces' bounding box when it runs out of them). Under kGuiLock.
+// place not empty, and its clip, as the content stands and cut to the
+// screen, meeting what of the window is visible (wm_visible_damage's walk,
+// which answers with the pieces' bounding box when it runs out of them, and
+// knows only the windows above, not the screen's edge). Under kGuiLock.
 static bool plane_shown_locked(window_t *win, const gui_plane_t *p)
 {
 	if (p->state != GUI_PLANE_PLACED || (win->flags & GUI_WINDOW_COVERED))
@@ -756,8 +758,12 @@ static bool plane_shown_locked(window_t *win, const gui_plane_t *p)
 	if (pc_empty(clip))
 		return false;
 	rect_t cs = wm_content_rect_on_screen(win);
+	pc_rect_t on_screen = pc_cut((pc_rect_t){cs.x + clip.x, cs.y + clip.y, clip.w, clip.h},
+	                             (pc_rect_t){0, 0, (int32_t)kFrameBuffer.width, (int32_t)kFrameBuffer.height});
+	if (pc_empty(on_screen))
+		return false;
 	rect_t seen[4];
-	return wm_visible_damage(win, (rect_t){cs.x + clip.x, cs.y + clip.y, clip.w, clip.h}, seen, 4) > 0;
+	return wm_visible_damage(win, to_rect(on_screen), seen, 4) > 0;
 }
 
 void gui_planes_frame_waiters_locked(uint32_t *shown, uint32_t *hidden)
@@ -823,6 +829,10 @@ uint32_t gui_planes_frame_answer_locked(uint64_t number, uint64_t blank_us, uint
 // an answer, a poke, the patience's end or a caught signal, and every end
 // clears the request, the answer and any poke it took. The plane is looked
 // up again every pass, as a window is: it may be gone when the wait wakes.
+// Patience 0 makes no request (it could never be answered): it takes a
+// poke owed, or ends by its patience. A request starts a stopped frame
+// clock only if the plane is shown when it is made; one hidden then is
+// counted by the next pass that finds it shown.
 int64_t gui_plane_frame_wait(int64_t handle, uint32_t name, uint32_t patience_ms, os64_gui_plane_frame_t *out)
 {
 	thread_t *self = current_thread();
@@ -843,13 +853,14 @@ int64_t gui_plane_frame_wait(int64_t handle, uint32_t name, uint32_t patience_ms
 		}
 		if (p->waiter == self)
 			p->waiter = NULL;
-		if (!asked && !p->poke_owed) {
+		if (!asked && !p->poke_owed && patience_ms != 0) {
 			p->frame_wanted = true;
 			p->answered = false;
 			p->frame_epoch = gui_frame_epoch_locked();
 			p->frames_asked++;
 			asked = true;
-			gui_frame_request_arrived();   // a stopped clock starts for a shown waiter
+			if (plane_shown_locked(win, p))
+				gui_frame_wait_arrived();   // a stopped clock starts for a shown waiter
 		}
 		uint32_t why = p->poke_owed ? OS64_GUI_PLANE_POKED
 		             : p->answered ? OS64_GUI_PLANE_FRAME
@@ -882,7 +893,8 @@ int64_t gui_plane_frame_wait(int64_t handle, uint32_t name, uint32_t patience_ms
 		gui_unlock(flags);
 		uint64_t now = micros_now(), ticks = PLANE_WAIT_BACKSTOP_TICKS;
 		if (deadline != UINT64_MAX) {
-			uint64_t left = (deadline - now) * TICKS_PER_SECOND / 1000000 + 1;
+			// The deadline may have passed since the check above.
+			uint64_t left = now >= deadline ? 1 : (deadline - now) * TICKS_PER_SECOND / 1000000 + 1;
 			ticks = left < ticks ? left : ticks;
 		}
 		signal_raise(SIGSLEEP, kTicksSinceStart + ticks, self);

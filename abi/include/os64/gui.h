@@ -700,12 +700,13 @@ static inline int64_t os64_gui_popup_create(const char *title, int64_t owner,
 //     every plane.
 //   - plane_frame_wait (the creator) parks until the display's next frame
 //     while the plane is SHOWN (its window not covered, its place not
-//     empty, its clip meeting what of the window is visible), a poke, or
-//     the patience's end. A plane that is not shown is answered nothing and
-//     the wait goes on. The answer is one wait's: its request, and anything
-//     owed it, end with it, so a frame never reaches the next wait. A
-//     caught signal ends it with INTERRUPTED. Shown waiters keep the
-//     display's frame clock running, as a window's frame request does.
+//     empty, its clip meeting what of the window is visible on the screen),
+//     a poke, or the patience's end. A plane that is not shown is answered
+//     nothing and the wait goes on. The answer is one wait's: its
+//     request, and anything owed it, end with it, so a frame never reaches
+//     the next wait. A caught signal ends it with INTERRUPTED. Shown
+//     waiters keep the display's frame clock running, as a window's frame
+//     request does.
 //   - plane_poke (any thread of the owner) ends the creator's wait, or its
 //     next one if none is under way. One poke is owed at most.
 #define OS64_GUI_PLANES 4
@@ -783,7 +784,9 @@ static inline int64_t os64_gui_plane_destroy(int64_t handle, uint32_t plane)
     return (int64_t)os64_syscall2(SYSCALL_GUI_PLANE_DESTROY, (uint64_t)handle, plane);
 }
 // 0 with *out filled, or a negative OS64_GUI_ERR_* (INTERRUPTED for a
-// caught signal, *out untouched). Patience 0 asks and answers at once.
+// caught signal, *out untouched). Patience 0 asks for no frame: it answers
+// a poke owed, or the patience, at once. A wait whose *out cannot be
+// written answers BAD_ARGS after it has ended, a poke it took taken.
 static inline int64_t os64_gui_plane_frame_wait(int64_t handle, uint32_t plane, uint32_t patience_ms,
                                                 os64_gui_plane_frame_t *out)
 {
