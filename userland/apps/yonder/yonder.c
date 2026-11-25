@@ -4555,7 +4555,8 @@ static yonder_tr_collector_t tr_collector(void)
     os64_js_collector_t c;
     yonder_scripts_collector(g.page.scripts, &c);
     return (yonder_tr_collector_t){c.runs, c.runs_by_allocation, c.walked, c.freed, c.walked_most,
-                                   c.bytes_before, c.bytes_after, c.threshold, c.ticks, c.ticks_most};
+                                   c.bytes_before, c.bytes_after, c.threshold, c.ticks, c.ticks_most,
+                                   c.runs_by_limit, c.refused_by_limit};
 }
 
 // The shown page's timer list, in the reading's words.

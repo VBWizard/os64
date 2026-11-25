@@ -71,7 +71,9 @@ static size_t limit(const JSMallocState *state)
 static void refused(JSMallocState *state, unsigned reason)
 {
     JSPortAllocator *owner = state->opaque;
-    if (owner != NULL) owner->failures |= reason;
+    if (owner == NULL) return;
+    owner->failures |= reason;
+    if (reason == JSPORT_ALLOC_LIMIT) owner->refused_by_limit++;
 }
 
 /* After every change to the charge: the owner's live figure takes it, and
