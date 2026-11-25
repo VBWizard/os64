@@ -138,8 +138,14 @@ static void dom_turn_check_cases(void)
     check(!turn_poll(&f, true, &node, &visited) && visited > 0,
           "turn checks: an insertion into another document makes the next check walk");
     check(!turn_poll(&f, true, &node, &visited) && visited == 0, "turn checks: and quiet again");
+    /* replaceChildren moves a lone node that is in a tree through a
+     * fragment of this document, an insertion; one in no tree is the case
+     * the replacement itself must tell. */
     dom_script(&f, "var box=document.createElement('div');document.body.appendChild(box);"
-        "box.replaceChildren(e);", "turn checks: an image carried in by replaceChildren");
+               "var stray=other.createElement('img');", "turn checks: a box, and an image in no tree");
+    while (turn_poll(&f, true, &node, &visited)) {}
+    check(!turn_poll(&f, true, &node, &visited) && visited == 0, "turn checks: quiet before a replaceChildren");
+    dom_script(&f, "box.replaceChildren(stray);", "turn checks: an image carried in by replaceChildren");
     check(!turn_poll(&f, true, &node, &visited) && visited > 0,
           "turn checks: replaceChildren from another document makes the next check walk");
     check(!turn_poll(&f, true, &node, &visited) && visited == 0, "turn checks: quiet once more");
@@ -247,8 +253,8 @@ static void dom_turn_check_cases(void)
     /* A provider with no answers makes every pass, as before. */
     provider.answers = NULL;
     os64_dom_set_images(f.binding, &provider);
-    check(!turn_poll(&f, false, &node, &visited) && visited == 6 &&
-          !turn_poll(&f, false, &node, &visited) && visited == 6,
+    check(!turn_poll(&f, false, &node, &visited) && visited == 7 &&
+          !turn_poll(&f, false, &node, &visited) && visited == 7,
           "turn checks: with no answers every pass walks the images");
 
     /* A listener removed under a dispatch is swept from its record when the
