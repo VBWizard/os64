@@ -3455,7 +3455,9 @@ JS_PUBLIC void os64_js_collector(const os64_js_runtime_t *runtime, os64_js_colle
     JSCollectorCounts c;
     JS_GetCollectorCounts(runtime->engine, &c);
     *out = (os64_js_collector_t){c.runs, c.runs_by_allocation, c.walked, c.freed, c.walked_most,
-                                 c.bytes_before, c.bytes_after, c.threshold, c.ticks, c.ticks_most};
+                                 c.bytes_before, c.bytes_after, c.threshold, c.ticks, c.ticks_most,
+                                 c.limit == UINT64_MAX ? 0 : c.limit, c.runs_by_limit,
+                                 runtime->allocator.refused_by_limit};
 }
 
 /* The public kinds are the ledger's, one for one. */

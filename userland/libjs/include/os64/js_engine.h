@@ -113,13 +113,24 @@ size_t os64_js_heap_bytes(const os64_js_runtime_t *runtime);
  * before and after each run, summed (the engine's own count, which the
  * memory limit is not held against); the threshold the next
  * allocation-asked run waits for; and their time on os64_js_ledger_now()'s
- * clock, with the longest. Zeroed for NULL or a runtime whose engine is
- * gone. No engine entry. */
+ * clock, with the longest.
+ * THE LIMIT (patch 0048): the engine's memory limit (0 for none); of the
+ * allocation-asked runs, those whose threshold the limit lowered (half
+ * again what the last run left, lowered to the limit less a sixteenth,
+ * raised where that lowered it to a sixty-fourth above what the run left,
+ * then lowered to the limit less a 256th; such a run also waits for the
+ * heap to grow by that 256th from its least since the last run, so the
+ * threshold alone is not the whole condition); and the allocations the
+ * limit refused, each counted. A refusal ends the runtime (it is sticky),
+ * so the schedule's job is that none comes while there is garbage a run at
+ * an object's creation could have freed. Zeroed for NULL or a runtime
+ * whose engine is gone. No engine entry. */
 typedef struct {
     uint64_t runs, runs_by_allocation;
     uint64_t walked, freed, walked_most;
     uint64_t bytes_before, bytes_after, threshold;
     uint64_t ticks, ticks_most;
+    uint64_t limit, runs_by_limit, refused_by_limit;
 } os64_js_collector_t;
 void os64_js_collector(const os64_js_runtime_t *runtime, os64_js_collector_t *out);
 

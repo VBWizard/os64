@@ -41,6 +41,7 @@ CASES_READING = 'bash tools/test_thread_reading_host.sh'
 CASES_DOM = 'bash tools/test_dom_host.sh --events'
 CASES_JS = 'bash tools/test_js_runtime_host.sh'
 CASES_YONDER = 'YONDER_PROFILE_ONLY=1 bash tools/test_yonder_scripts_host.sh'
+CASES_YONDER_ALL = 'bash tools/test_yonder_scripts_host.sh'
 TIMEOUT = 2400
 
 mutants = [
@@ -132,6 +133,12 @@ mutants = [
      '    t->observed += targets;', '    (void)targets;'),
     ('collector-behind-its-start-wraps', READING, CASES_READING,
      '        a = &kNone;\n', '        (void)kNone;\n'),
+    ('limit-runs-not-the-reading-s', READING, CASES_READING,
+     '        put_u(&o, b->runs_by_limit - a->runs_by_limit);', '        put_u(&o, b->runs_by_limit);'),
+    ('refusals-not-the-reading-s', READING, CASES_READING,
+     '    put_u(&o, b->refused_by_limit - a->refused_by_limit);', '    put_u(&o, b->refused_by_limit);'),
+    ('refusals-behind-their-start-wrap', READING, CASES_READING,
+     ' || b->refused_by_limit < a->refused_by_limit) {', ') {'),
     ('timer-list-behind-its-start-wraps', READING, CASES_READING,
      '    bool behind = list_now->arms < t->list_from.arms || list_now->walked < t->list_from.walked;',
      '    bool behind = false;'),
@@ -169,6 +176,14 @@ mutants = [
     ('timers-not-by-site', YONDER, CASES_YONDER,
      '            yonder_tr_timer(&s_tr, site, spent, forced.layouts, forced_ticks);',
      '            yonder_tr_timer(&s_tr, NULL, spent, forced.layouts, forced_ticks);'),
+    # The reading's profile (the ledger case, in the whole suite).
+    ('the-profile-reading-not-written', YONDER, CASES_YONDER_ALL,
+     '    diag_profile_reading(p, n);\n', '    (void)diag_profile_reading;\n'),
+    ('the-first-profile-reading-unmarked', YONDER, CASES_YONDER_ALL,
+     '    if (k.since < s_cost.from_cycles)\n        dt_put(&u, "since the page\'s script began: ");',
+     '    if (0)\n        dt_put(&u, "since the page\'s script began: ");'),
+    ('forgetting-a-key-takes-the-lines-it-begins', 'userland/apps/yonder/diag.c', CASES_YONDER_ALL,
+     '    forget_lines(d, key, true);', '    forget_lines(d, key, false);'),
     ('no-turn-is-slow', YONDER, CASES_YONDER,
      '    yonder_tr_slow(&s_tr, TR_SLOW_TURN_MS * s_tr_per_ms, TR_SLOW_TURN_MS);', '    (void)0;'),
     ('tasks-not-told-their-turn', YONDER, CASES_YONDER,

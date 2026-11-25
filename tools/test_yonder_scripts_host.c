@@ -7949,6 +7949,19 @@ static void diag_lost_distinct_case(void) {
           "diag: a line given room after all is no longer counted as not kept");
     yonder_diag_free(d);
 }
+/* Forgetting one key exactly leaves the lines whose keys begin with it:
+ * the page's script profile goes, its readings stay. */
+static void diag_forget_key_case(void) {
+    yonder_diag_t *d=yonder_diag_new("http://fixture.test/",1,0);
+    static char text[16384];
+    yonder_diag_fact(d,"script profile","now");
+    yonder_diag_reading_fact(d,"script profile reading 1","then");
+    yonder_diag_forget_key(d,"script profile");
+    yonder_diag_render(d,text,sizeof(text));
+    check(strstr(text,"\nscript profile: now\n")==NULL && strstr(text,"\nscript profile reading 1: then\n")!=NULL,
+          "diag: forgetting a key exactly keeps the lines that begin with it");
+    yonder_diag_free(d);
+}
 /* Past the lines the record can tell apart, it says there are more and
  * never counts one twice. */
 static void diag_lost_overflow_case(void) {
@@ -12029,6 +12042,7 @@ static void diag_cases(void) {
     diag_css_unasked_case();
     diag_style_case();
     diag_lost_distinct_case();
+    diag_forget_key_case();
     picture_tick_cases();
     picture_text_cases();
     round_picture_glass_cases();
@@ -12674,6 +12688,32 @@ static void ledger_case(void)
         diag_ledger(p);
         check(yonder_diag_fact_value(p->diag, "script ledger") != NULL && yonder_diag_fact_value(p->diag, "script ledger calls") != NULL,
               "ledger: the record's ledger lines are written");
+    }
+    loop_drop();
+    // With the profile on, a reading (the whole of one, as the chord makes
+    // it) writes the functions its span sampled:
+    // the first counts from the page's script's start and says so; one after
+    // the ledger and the counts start again is the span alone.
+    s_ledger = YONDER_LEDGER_PROFILE;
+    loop_page("<p id=out></p><script>function spin(){var x=0;for(var i=0;i<2000000;i++)x+=i%7;return x}"
+              "document.getElementById('out').textContent=''+spin();</script>");
+    settled = loop_settle();
+    host = g.page.scripts != NULL ? g.page.scripts : g.stream.scripts;
+    p = page_of_host(host);
+    check(settled && p != NULL && p->diag != NULL && yonder_scripts_ledger(host) != NULL,
+          "ledger profile: the page's runtime keeps a ledger");
+    if (p != NULL && p->diag != NULL) {
+        diag_paint_reading(p, 1);
+        const char *first = yonder_diag_fact_value(p->diag, "script profile reading 1");
+        check(first != NULL && !strncmp(first, "since the page's script began: ", 31) && strstr(first, " samples") != NULL,
+              "ledger profile: the first reading's profile counts from the script's start");
+        cost_reset();
+        yonder_scripts_ledger_reset(host);
+        diag_paint_reading(p, 2);
+        const char *second = yonder_diag_fact_value(p->diag, "script profile reading 2");
+        check(second != NULL && !strncmp(second, "0 samples", 9),
+              "ledger profile: a reading after the reset is its own span, here with nothing sampled");
+        printf("  profile reading 1: %.200s\n", first ? first : "(none)");
     }
     loop_drop();
     s_ledger = YONDER_LEDGER_OFF;
