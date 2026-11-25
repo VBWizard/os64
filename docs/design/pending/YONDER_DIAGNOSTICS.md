@@ -601,9 +601,11 @@ names a `diagnostics` directory, each reading adds four lines:
   the page holds, its nodes' wrappers among them, so `a run` grows with
   what a page keeps alive. The engine starts a run only when an object is
   made past the threshold, which is half again the heap the last run left,
-  held below the memory limit (patch 0048: never above a sixteenth under
-  it, never within a 256th of it, and a sixty-fourth above what the run
-  left when its live part is inside that margin). The line says how many
+  held below the memory limit (patch 0048: lowered to the limit less a
+  sixteenth, raised where that lowered it to a sixty-fourth above what the
+  run left, then lowered to the limit less a 256th; such a run also waits
+  for that 256th of growth, so the threshold the line prints can sit below
+  the heap). The line says how many
   runs waited for a threshold the limit lowered, and how many allocations
   the limit refused: on a page that is truly full, the second rises while
   the runs stop.

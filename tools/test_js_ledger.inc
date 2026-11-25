@@ -186,12 +186,14 @@ static void collector_cases(void)
  * seven tenths of the limit, half as much again is past it: upstream's
  * threshold would wait for a heap the limit refuses, and a page making
  * garbage there would fail with the collector never asked. Here:
- * - garbage made with the live part at seven tenths, then at most a 128th
- *   of the limit from it, is collected and nothing is refused, and so is
+ * - garbage made with the live part at seven tenths, then at 99.2% of the
+ *   limit, is collected and nothing is refused, and so is
  *   garbage of strings too large for the last stretch, which the margin
  *   leaves room for;
  * - a heap that is all live, from inside the margin (a sixteenth of the
- *   limit) to its refusal, is walked by at most 8 runs.
+ *   limit) to its refusal, is walked by at most 8 runs; dropped and filled
+ *   again with garbage, it is collected;
+ * - a host's threshold of -1 survives its own collection.
  * Each phase is a runtime of its own at the fixture's 16 MiB. */
 #include "os64/fmt.h"
 static os64_js_runtime_t *limit_runtime(void)
@@ -204,9 +206,11 @@ static os64_js_runtime_t *limit_runtime(void)
     return runtime;
 }
 
-/* Live objects, each with a string of about a kilobyte, until the heap holds
+/* Live objects, each with a string of about a kilobyte, chained in a list
+ * (so no array grows by a large step near the limit), until the heap holds
  * `share` thousandths of the engine's limit: in rounds that each go half the
- * way left at no less than 4 KiB an object, so none overshoots. */
+ * way left at no less than 4 KiB an object, so a round overshoots by at
+ * most an object. */
 static bool limit_fill(os64_js_runtime_t *runtime, uint64_t limit, unsigned share)
 {
     char source[256];
@@ -214,7 +218,7 @@ static bool limit_fill(os64_js_runtime_t *runtime, uint64_t limit, unsigned shar
     for (size_t heap = os64_js_heap_bytes(runtime); heap < target; heap = os64_js_heap_bytes(runtime)) {
         size_t count = (target - heap) / 2 / 4096 + 1;
         os64_snprintf(source, sizeof(source),
-                      "globalThis.live=globalThis.live||[];for(let i=0;i<%lu;i++)live.push({s:'x'.repeat(1000)+i});1",
+                      "globalThis.live=globalThis.live||null;for(let i=0;i<%lu;i++)live={n:live,s:'x'.repeat(1000)+i};1",
                       (unsigned long)count);
         os64_js_outcome_t outcome;
         if (execute_fixture(runtime, source, &outcome) != OS64_JS_OK) return false;
@@ -260,7 +264,7 @@ static void collector_limit_cases(void)
         check(0, "limit: the second runtime is made");
         return;
     }
-    check(limit_fill(runtime, limit, 992), "limit: the live part filled to within a 128th of the limit");
+    check(limit_fill(runtime, limit, 992), "limit: the live part filled to 99.2% of the limit, past the step from it");
     check(execute_fixture(runtime, kLimitGarbage, &outcome) == OS64_JS_OK,
           "limit: garbage in the last stretch before the limit is collected");
     os64_js_collector(runtime, &c);
@@ -275,10 +279,44 @@ static void collector_limit_cases(void)
     check(limit_fill(runtime, limit, 950), "limit: the live part filled inside the margin");
     os64_js_collector_t before;
     os64_js_collector(runtime, &before);
-    check(execute_fixture(runtime, "for(;;)live.push({s:'z'.repeat(1000)+live.length})", &outcome) != OS64_JS_OK,
+    check(execute_fixture(runtime, "for(let i=0;;i++)live={n:live,s:'z'.repeat(1000)+i}", &outcome) != OS64_JS_OK,
           "limit: a heap that is all live is refused at last");
     os64_js_collector(runtime, &c);
     check(c.refused_by_limit > before.refused_by_limit, "limit: the refusal is counted");
     check(c.runs - before.runs <= 8, "limit: at most 8 runs walk an all-live heap from inside the margin to its refusal");
+    os64_js_destroy(runtime);
+
+    /* Filled to 99.9% of the limit (a refusal fails a runtime for good, so
+     * this one stops short of it), the last runs leave the heap nearer the
+     * limit than a 256th; dropped whole, it shrinks far below that, and
+     * filled again with cycles it is collected. */
+    runtime = limit_runtime();
+    if (runtime == NULL) {
+        check(0, "limit: the shrinking runtime is made");
+        return;
+    }
+    check(limit_fill(runtime, limit, 999), "limit: the live part filled to 99.9% of the limit");
+    check(execute_fixture(runtime, "live=null;1", &outcome) == OS64_JS_OK, "limit: the live part dropped");
+    os64_js_collector(runtime, &before);
+    check(execute_fixture(runtime, kLimitGarbage, &outcome) == OS64_JS_OK,
+          "limit: a heap that shrank and filled with garbage is collected, however full the last run left it");
+    os64_js_collector(runtime, &c);
+    check(c.runs > before.runs && c.refused_by_limit == before.refused_by_limit, "limit: runs came, nothing refused");
+    os64_js_destroy(runtime);
+
+    /* A host that turned automatic runs off (a threshold of -1) and collects
+     * by hand keeps them off. */
+    runtime = limit_runtime();
+    os64_js_realm_t *realm = runtime != NULL ? os64_js_primary_realm(runtime, OS64_JS_ABI_ID, &outcome) : NULL;
+    JSContext *context = realm != NULL ? os64_js_realm_context(realm, OS64_JS_ABI_ID, &outcome) : NULL;
+    if (context == NULL) {
+        check(0, "limit: the fourth runtime and its context are made");
+        if (runtime != NULL) os64_js_destroy(runtime);
+        return;
+    }
+    JS_SetGCThreshold(JS_GetRuntime(context), (size_t)-1);
+    JS_RunGC(JS_GetRuntime(context));
+    os64_js_collector(runtime, &c);
+    check(c.threshold == (uint64_t)(size_t)-1, "limit: a host's collection leaves automatic runs off");
     os64_js_destroy(runtime);
 }

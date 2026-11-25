@@ -316,8 +316,8 @@
     },
     {
       "path": "patches/0048-collect-under-limit.patch",
-      "sha256": "056154486d0bb2bdba63e50fa36bd0bcfce805b9f165f1f3f64f240dec531c35",
-      "reason": "Hold the collector's next threshold below the memory limit (at most a sixteenth under it; where that lowers it, at least a sixty-fourth above what the run left; never within a 256th of it), and make a limit-scheduled run wait for a 256th of growth, so the collector runs while there is room and an all-live heap reaches the limit in a bounded count of runs; counts the limit-lowered runs and states the limit."
+      "sha256": "b9f3d8ba8b9930ce344f91ea97027f8cd107a4e927b98a4a69dab3fae323c31f",
+      "reason": "Hold the collector's next threshold below the memory limit: half again what a run left, lowered to the limit less a sixteenth, raised (where that lowered it) to a sixty-fourth above what the run left, then lowered to the limit less a 256th; a run the limit scheduled waits for a 256th of growth from the heap's least since the last run, so the collector runs while there is room and an all-live heap reaches the limit in a bounded count of runs. A host's -1 still turns automatic runs off. Counts the limit-lowered runs and states the limit."
     }
   ],
   "configuration_scope": "Atomics-disabled, stack-checked target engine and complete standalone embedding interface; slice review/merge and runner integration are tracked in JAVASCRIPT_TASKS.md"

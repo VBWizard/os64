@@ -50,6 +50,12 @@ mutants = [
     # The trigger: the wait for growth after a run the limit scheduled.
     ('no-wait-for-growth-at-the-limit', PATCH,
      '+    if (force_gc && rt->threshold_by_limit &&', '+    if (0 && force_gc && rt->threshold_by_limit &&'),
+    ('growth-from-the-last-run-not-its-least', PATCH,
+     '+        rt->malloc_low_since_gc = rt->malloc_ctx.malloc_state.malloc_size;\n+    if (force_gc',
+     '+        (void)rt->malloc_low_since_gc;\n+    if (force_gc'),
+    ('a-host-s-off-overwritten', PATCH,
+     '+    if (rt->malloc_gc_threshold == (size_t)-1)\n+        return;',
+     '+    if (0)\n+        return;'),
     ('limit-runs-not-counted', PATCH,
      '+            rt->collector_counts.runs_by_limit++;', '+            (void)rt->collector_counts.runs_by_limit;'),
     # The allocator's count and the reader.
