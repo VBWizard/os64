@@ -360,19 +360,32 @@ static void responsive_turn_check_cases(void)
         "late.src='data:image/png,SIZED%2050x25';"
         "new MutationObserver(function(){document.body.appendChild(late)}).observe(document.getElementById('trigger'),{attributes:true});"
         "</script>",true);
-    data_pool_open();responsive_serial_pool();pictures_start(&g.page);script_turn();
-    for(int t=0;t<12;t++){responsive_drain();script_turn();}
-    check(probe_text_is("out","loaded 1 80") && probe_text_is("out2","loaded 1 60"),
-          "turn checks: the images load and their loads are told");
-    // The fixture paints nothing: the drawn canvas's damage waits for a
-    // paint, so it is visited until this one stands in for it.
+    // The pictures are asked for and held at the fixture's pool.
+    data_pool_open();responsive_serial_pool();pictures_start(&g.page);
+    // The fixture paints nothing: the drawn canvas's reset and damage wait
+    // for a paint (its bitmap read, then acknowledged), so it is visited
+    // after every rebuild until this stands in for one.
+    (void)script_turn();
     uint64_t before=yonder_scripts_checks_visited(g.page.scripts);
     yonder_scripts_canvas_visit_damage(g.page.scripts,turn_check_damage,NULL);
     check(yonder_scripts_checks_visited(g.page.scripts)-before==1,"turn checks: the canvas visit walks the one drawn canvas");
+    canvas_bitmap_t painted;
+    check(yonder_scripts_canvas_bitmap(g.page.scripts,probe_id("c"),&painted),"turn checks: the canvas is painted");
     yonder_scripts_canvas_painted(g.page.scripts,probe_id("c"));
+    // The turns go quiet while the images wait, and the arrivals alone
+    // must move the answers to tell their loads.
+    (void)turn_check_quiet(6);
+    check(turn_check_quiet(10)==0 && probe_text_is("out","waiting") && probe_text_is("out2","waiting"),
+          "turn checks: a quiet turn's checks visit no record of the thousands held, while the images wait");
+    for(int t=0;t<12;t++){responsive_drain();script_turn();}
+    check(probe_text_is("out","loaded 1 80") && probe_text_is("out2","loaded 1 60"),
+          "turn checks: the images arrive and their loads are told");
     (void)turn_check_quiet(4);
-    check(turn_check_quiet(10)==0,"turn checks: a quiet turn's checks visit no record of the thousands held");
+    check(turn_check_quiet(10)==0,"turn checks: and the turns are quiet after");
     responsive_set(probe_id("pic"),"src","data:image/png,SIZED%2040x20");
+    (void)turn_check_quiet(6);
+    check(turn_check_quiet(10)==0 && probe_text_is("out","loaded 1 80"),
+          "turn checks: a source changed waits for its picture, quietly");
     for(int t=0;t<8;t++){responsive_drain();script_turn();}
     check(probe_text_is("out","loaded 2 40"),"turn checks: a source changed is found and its load told");
     (void)turn_check_quiet(4);

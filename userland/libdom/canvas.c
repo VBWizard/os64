@@ -478,13 +478,16 @@ bool os64_dom_canvas_bitmap(os64_dom_t *dom, const os64_html_node_t *node, canva
 }
 /* One listed canvas's damage or reset, visited: false when delivery ended
  * under the visit. *tell: whether it still has either to tell, and so stays
- * listed. A canvas out of the window's tree tells nothing and leaves the
- * list (*away), its damage kept for when an insertion brings it back. */
+ * listed. A canvas another member's document holds is that binding's to
+ * visit and is left as it is. One out of the window's tree tells nothing
+ * and leaves the list (*away), its damage kept for when an insertion
+ * brings it back. */
 static bool canvas_damage_visit(os64_dom_t *dom,DValue *e,os64_dom_canvas_damage_fn visit,void *opaque,bool *tell,
                                 bool *away)
 {
     *tell=true;
     *away=false;
+    if(d_owner(dom,e->node)!=dom)return true;
     if(!d_in_window_tree(dom,e->node)){*tell=false;*away=true;return true;}
     if(d_more_peek(e)->canvas_reset_pending){
         visit(opaque,e->node,0,0,NULL);

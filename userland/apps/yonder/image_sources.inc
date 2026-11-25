@@ -34,13 +34,15 @@ static ImageSource *image_source_find(const Page *p,const os64_html_node_t *node
     return p->image_source_slot_cap?p->image_source_slots[image_source_slot(p,node)]:NULL;
 }
 
-// A selection owed again: its source's, or for an image with none yet
-// (one never asked, or answered from outside this document until an
-// insertion brought it in) the first, which moves the answers all the same.
+// A selection owed again: its source's, read again by the next flush,
+// which moves the answers if the selection changes. An image with none yet
+// (one never asked, or answered from another member's storage until an
+// insertion brought it in) has nothing for a flush to read, so its first
+// selection moves the answers here.
 static void image_source_dirty(Page *p,const os64_html_node_t *node)
 {
     ImageSource *s=image_source_find(p,node);
-    if(s){s->dirty=true;p->image_answers++;}
+    if(s)s->dirty=true;
     else if(node->kind==OS64_HTML_ELEMENT && node->ns==OS64_HTML_NS_HTML && node->tag==OS64_HTML_TAG_IMG)
         p->image_answers++;
 }
@@ -103,10 +105,7 @@ static void image_sources_sync(Page *p)
             for(size_t i=0;i<c->nremoved && !all;i++)all=image_source_subtree(p,c->removed[i],&left);
         }
     }
-    if(all){
-        for(ImageSource *s=p->image_sources;s;s=s->next)s->dirty=true;
-        p->image_answers++;
-    }
+    if(all)for(ImageSource *s=p->image_sources;s;s=s->next)s->dirty=true;
     if(!p->image_source_reader)
         p->image_source_reader=os64_html_reader_new((os64_html_document_t *)doc,version);
     p->image_source_version=version;

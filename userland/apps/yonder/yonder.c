@@ -887,9 +887,9 @@ typedef struct Page {
     uint64_t image_source_version;
     size_t image_source_count, image_source_bytes;
     garb_env_t image_environment;
-    // Moves whenever an image source's selection is made, completed,
-    // refused or owed again, and when the sources are let go
-    // (image_sources.inc): part of
+    // Moves whenever an image source's selection is made, completed or
+    // refused, when a change touches an image with no source yet, and
+    // when the sources are let go (image_sources.inc): part of
     // canvas_source_answers, which lets the binding's image check skip a
     // pass while the answers stand still. A picture's arrival is an answer
     // only once its source completes (image_sources_flush, which the
@@ -19380,14 +19380,16 @@ static os64_dom_image_status_t canvas_source(void *opaque,const os64_html_node_t
 // one on screen and modern, what an image source reads besides its
 // element (the page's address, scripting, and the view and zoom a
 // selection falls back on before the page has an environment), and
-// image_answers, which moves with every selection made, completed,
-// refused or owed again. A new environment re-reads every selection
-// (image_sources_environment), which moves image_answers where one
-// changed. canvas_source reads a picture only through its source's
-// completed selection, so a picture's own changes reach it there. The
-// changes to the document since the last look are read first
-// (image_sources_sync), which owes again the selections they touch. Never
-// 0, which would say "no answers".
+// image_answers, which moves with every selection made, completed or
+// refused. The binding asks after its update, whose flush
+// (image_sources_flush) reads every source again: a change to the
+// document, to a picture's sources or to the environment moves
+// image_answers there, where it changes a selection. canvas_source reads
+// a picture only through its source's completed selection, so a picture's
+// own changes reach it there too. The document's changes are read first
+// here as well (image_sources_sync), for an image a change brought in
+// that has no source for a flush to read. Never 0, which would say "no
+// answers".
 static uint64_t canvas_source_answers(void *opaque)
 {
     Page *p=page_of_doc(opaque);

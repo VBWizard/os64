@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """One deliberate break at a time to yonder's half of the image check's quiet
 key (canvas_source_answers, image_sources.inc's image_answers): the answers
-must move when a selection completes, when one is owed again by a change in
-the document, and when only a picture's source changed, or the binding's
-image check skips the pass that would tell a load. Against the scripted
+must move when a selection completes, or the binding's image check skips
+the pass that would tell a load; and a provider with no answers makes every
+pass walk. Against the scripted
 host's image slice (YONDER_IMAGES_ONLY: responsive_turn_check_cases in
 tools/test_yonder_responsive_images.inc). libdom's half (the lists, its own
 serial, the key's use) is test_dom_mutants.py --turn. A mutant is CAUGHT
@@ -38,18 +38,12 @@ mutants = [
     ('a-completion-moves-nothing', SOURCES,
      '            if(changed || s->current_generation!=s->generation)p->image_answers++;\n',
      ''),
-    ('a-selection-owed-again-moves-nothing', SOURCES,
-     '    if(s){s->dirty=true;p->image_answers++;}',
-     '    if(s){s->dirty=true;}'),
-    ('the-answers-read-no-document-changes', YONDER,
-     '    if(p==&g.page && p->modern)image_sources_sync(p);\n',
-     ''),
     ('the-answers-leave-out-the-selections', YONDER,
      'p?p->modern:0,p?p->scripting:0,p?p->image_answers:0,',
      'p?p->modern:0,p?p->scripting:0,0,'),
     ('the-provider-gives-no-answers', YONDER,
      '.images={canvas_source,canvas_source_release,doc,image_sources_update,canvas_source_answers},',
-     '.images={canvas_source,canvas_source_release,doc,image_sources_update},'),
+     '.images={canvas_source,canvas_source_release,doc,image_sources_update,0?canvas_source_answers:NULL},'),
 ]
 
 if args.only:
