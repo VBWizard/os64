@@ -64,8 +64,8 @@ static void model(uint32_t *out, const pc_image_t *content, const pc_image_t *pi
                 *o = c;
                 continue;
             }
-            int32_t px = x - place->origin.x, py = y - place->origin.y;
-            bool pic = px >= 0 && py >= 0 && px < (int32_t)picture->w && py < (int32_t)picture->h;
+            int64_t px = (int64_t)x - place->origin.x, py = (int64_t)y - place->origin.y;
+            bool pic = px >= 0 && py >= 0 && px < (int64_t)picture->w && py < (int64_t)picture->h;
             uint32_t p = pic ? picture->pixels[(size_t)py * picture->pitch_px + px] : 0;
             bool over = false;
             for (uint32_t i = 0; i < place->noverlays; i++)
@@ -213,12 +213,44 @@ static void compose_cases(unsigned rounds)
     }
 }
 
+// Origins as far as a valid place allows, the picture out of reach of
+// every content pixel: the distance from the origin overflows 32 bits, and
+// the content must come out opaque, with no undefined arithmetic on the way
+// (the suite runs under UBSan).
+static void far_origin_cases(void)
+{
+    enum { W = 4, H = 4 };
+    static const pc_rect_t origins[] = {
+        {INT32_MIN, INT32_MIN, 1, 1}, {0, INT32_MIN, 1, 1}, {INT32_MIN, 0, 1, 1},
+        {INT32_MAX - 1, 0, 1, 1}, {0, INT32_MAX - 1, 1, 1},
+    };
+    uint32_t content_px[W * H], picture_px[3 * 3], got[W * H], want[W * H];
+    for (int i = 0; i < W * H; i++)
+        content_px[i] = 0x80000000u | (uint32_t)i;
+    for (int i = 0; i < 9; i++)
+        picture_px[i] = 0x00ABCDEFu;
+    pc_image_t content = {content_px, W, W, H};
+    pc_image_t picture = {picture_px, 3, 3, 3};
+    for (unsigned i = 0; i < sizeof(origins) / sizeof(origins[0]); i++) {
+        pc_place_t place = {.origin = origins[i], .clip = {0, 0, W, H}, .noverlays = 1};
+        place.overlay[0] = (pc_rect_t){0, 0, W, 2};
+        CHECK(plane_place_valid(&place, W, H, 1000));
+        pc_counts_t c = {0}, m = {0};
+        pc_image_t dst = {got, W, W, H};
+        plane_compose(&dst, &content, &picture, &place, (pc_rect_t){0, 0, W, H}, &c);
+        model(want, &content, &picture, &place, (pc_rect_t){0, 0, W, H}, &m);
+        CHECK(memcmp(got, want, sizeof(got)) == 0 && memcmp(got, content_px, sizeof(got)) == 0);
+        CHECK(c.copied == 0 && c.blended == 0 && c.opaque == W * H && m.opaque == c.opaque);
+    }
+}
+
 int main(int argc, char **argv)
 {
     unsigned rounds = argc > 1 ? (unsigned)atoi(argv[1]) : 3000;
     blend_cases();
     area_cases();
     compose_cases(rounds);
+    far_origin_cases();
     if (s_failed != 0) {
         fprintf(stderr, "plane compose: %d failed\n", s_failed);
         return 1;

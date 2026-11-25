@@ -14,6 +14,8 @@ static void copy_px(uint32_t *to, const uint32_t *from, int32_t n)
 
 static int32_t min32(int32_t a, int32_t b) { return a < b ? a : b; }
 static int32_t max32(int32_t a, int32_t b) { return a > b ? a : b; }
+static int64_t min64(int64_t a, int64_t b) { return a < b ? a : b; }
+static int64_t max64(int64_t a, int64_t b) { return a > b ? a : b; }
 
 uint32_t plane_blend(uint32_t content, uint32_t picture)
 {
@@ -121,18 +123,21 @@ bool plane_place_valid(const pc_place_t *place, uint32_t content_w, uint32_t con
 
 // The run [x0, x1) of content row y inside the clip and outside every
 // overlay: the picture's pixels where it reaches, the content as opaque
-// where it does not.
+// where it does not. A position relative to the origin is worked out in 64
+// bits: a valid origin may lie anywhere, INT32_MIN included, and the
+// distance from it to a content pixel need not fit in 32.
 static void picture_run(uint32_t *dst, const pc_image_t *content, const pc_image_t *picture,
                         const pc_place_t *place, int32_t y, int32_t x0, int32_t x1, int32_t ax,
                         pc_counts_t *counts)
 {
 	// The run is three parts in order, any of them empty: before the
 	// picture, the picture, after it ([x0, px0), [px0, px1), [px1, x1)).
-	int32_t py = y - place->origin.y;
+	int64_t py = (int64_t)y - place->origin.y;
 	int32_t px0 = x1, px1 = x1;
-	if (py >= 0 && py < (int32_t)picture->h) {
-		px0 = min32(max32(x0, place->origin.x), x1);
-		px1 = max32(min32(x1, place->origin.x + (int32_t)picture->w), px0);
+	if (py >= 0 && py < (int64_t)picture->h) {
+		int64_t ox = place->origin.x;
+		px0 = (int32_t)min64(max64(x0, ox), x1);
+		px1 = (int32_t)max64(min64(x1, ox + picture->w), px0);
 	}
 	const uint32_t *crow = content->pixels + (size_t)y * content->pitch_px;
 	if (px0 > x0) {
@@ -141,7 +146,7 @@ static void picture_run(uint32_t *dst, const pc_image_t *content, const pc_image
 	}
 	if (px1 > px0) {
 		const uint32_t *prow = picture->pixels + (size_t)py * picture->pitch_px;
-		copy_px(dst + (px0 - ax), prow + (px0 - place->origin.x), px1 - px0);
+		copy_px(dst + (px0 - ax), prow + ((int64_t)px0 - place->origin.x), px1 - px0);
 		counts->copied += (uint64_t)(px1 - px0);
 	}
 	if (x1 > px1) {
@@ -157,12 +162,12 @@ static void overlay_run(uint32_t *dst, const pc_image_t *content, const pc_image
                         pc_counts_t *counts)
 {
 	const uint32_t *crow = content->pixels + (size_t)y * content->pitch_px;
-	int32_t py = y - place->origin.y;
-	bool row_in = py >= 0 && py < (int32_t)picture->h;
+	int64_t py = (int64_t)y - place->origin.y;
+	bool row_in = py >= 0 && py < (int64_t)picture->h;
 	const uint32_t *prow = row_in ? picture->pixels + (size_t)py * picture->pitch_px : 0;
 	for (int32_t x = x0; x < x1; x++) {
-		int32_t px = x - place->origin.x;
-		if (row_in && px >= 0 && px < (int32_t)picture->w) {
+		int64_t px = (int64_t)x - place->origin.x;
+		if (row_in && px >= 0 && px < (int64_t)picture->w) {
 			dst[x - ax] = plane_blend(crow[x], prow[px]);
 			counts->blended++;
 		} else {
