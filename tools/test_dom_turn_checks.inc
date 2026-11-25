@@ -102,8 +102,14 @@ static void dom_turn_check_cases(void)
     check(!turn_poll(&f, true, &node, &visited) && visited == 0,
           "turn checks: and quiet");
 
-    /* A new wrapped image is the binding's own change. */
-    dom_script(&f, "var d=new Image();d.id='d';d.src='clean';", "turn checks: a new image");
+    /* A new wrapped image is the binding's own change. The image is made by
+     * markup, so no wrapper and no source write moves anything until the
+     * page reaches for it. */
+    dom_script(&f, "var holder=document.createElement('div');document.body.appendChild(holder);"
+        "holder.innerHTML='<img id=d src=clean>';", "turn checks: an image made by markup");
+    check(!turn_poll(&f, true, &node, &visited) && visited == 0,
+          "turn checks: an image no wrapper holds moves nothing");
+    dom_script(&f, "var d=document.getElementById('d');", "turn checks: a new image");
     check(turn_poll(&f, true, &node, &visited) && !strcmp(turn_id(node), "d") && visited == 1,
           "turn checks: a new image is found at once, first");
     check(!turn_poll(&f, true, &node, &visited) && !turn_poll(&f, true, &node, &visited) && visited == 0,
