@@ -284,7 +284,7 @@ HEX_BUFFER_OBJ  := $(OBJ)/$(HEX_BUFFER_SRC).o
 # tar's header codec is pure byte work. The app uses it to handle archives;
 # tartest uses the same object to construct malformed inputs at the format
 # boundary instead of carrying a private almost-tar encoder in the fixture.
-TAR_FORMAT_PROGRAMS := tartest
+TAR_FORMAT_PROGRAMS := tartest porter
 TAR_FORMAT_OBJ      := $(OBJ)/apps/tar/tar_format.c.o
 
 # The telnet protocol engine (RFC 854 + RFC 1143) is bytes in, bytes out and
@@ -300,7 +300,7 @@ TELNET_ENGINE_OBJ      := $(OBJ)/apps/telnet/telnet_protocol.c.o
 # engine into part of the foundational runtime by accident. (os64get is not
 # here: it names libfetch, which carries its own edges on libgzip and libtls;
 # yonder is, for the zlib door it calls itself, unwrapping a WOFF font.)
-LIBGZIP_PROGRAMS := gzip gunzip gziptest vncd yonder
+LIBGZIP_PROGRAMS := gzip gunzip gziptest vncd yonder porter
 
 # Programs that download: they name libfetch and get its whole closure.
 LIBFETCH_PROGRAMS := os64get wend worktest fetchhooktest fetchposttest resumeprobe capprobe yonder h2probe

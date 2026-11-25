@@ -1,5 +1,5 @@
 // Porter metadata is fetched over the same listener as the legacy valet.
-#include "porter.h"
+#include "archive.h"
 #include "os64/os64.h"
 
 #define REQUEST_MS 30000
@@ -147,5 +147,89 @@ bool porter_get_manifest(const char *host, uint16_t port, const porter_selection
     os64_close(wire.fd);
     if (!ok)
         porter_release_inventory(inventory);
+    return ok;
+}
+
+typedef struct {
+    wire_t *wire;
+    uint64_t left;
+} archive_source_t;
+
+static int64_t read_archive(void *context, void *buffer, size_t size)
+{
+    archive_source_t *source = context;
+    wire_t *wire = source->wire;
+    if (!source->left) {
+        wire->started = os64_micros();
+        return complete(wire) ? 0 : -1;
+    }
+    if (wire->pos == wire->length) {
+        // Use an idle limit per chunk. Large approved media may take longer
+        // than one metadata request to transfer.
+        wire->started = os64_micros();
+        if (refill(wire) <= 0)
+            return -1;
+    }
+    size_t n = wire->length - wire->pos;
+    if (n > size)
+        n = size;
+    if ((uint64_t)n > source->left)
+        n = (size_t)source->left;
+    os64_memcpy(buffer, wire->buf + wire->pos, n);
+    wire->pos += n;
+    source->left -= n;
+    return (int64_t)n;
+}
+
+bool porter_get_archive(const char *host, uint16_t port, const char *target,
+                        const size_t *indices, const porter_member_t *members, size_t count)
+{
+    if (!count)
+        return true;
+    if (count > PORTER_RECORDS)
+        return false;
+    size_t cap = count * 6 + 2;
+    char *selection = os64_malloc(cap);
+    if (!selection)
+        return false;
+    selection[0] = '[';
+    size_t length = 1;
+    for (size_t i = 0; i < count; i++) {
+        if (indices[i] >= PORTER_RECORDS || (i && indices[i - 1] >= indices[i])) {
+            os64_free(selection);
+            return false;
+        }
+        length += (size_t)os64_snprintf(selection + length, cap - length, "%s%lu",
+                                       i ? "," : "", (unsigned long)indices[i]);
+    }
+    selection[length++] = ']';
+    char query[100];
+    os64_snprintf(query, sizeof(query), "ARCHIVE %s %lu\n", target, (unsigned long)length);
+    wire_t wire;
+    if (!request(&wire, host, port, query)) {
+        os64_free(selection);
+        return false;
+    }
+    size_t sent = 0;
+    while (sent < length) {
+        int64_t n = os64_write_for(wire.fd, selection + sent, length - sent, remaining(&wire));
+        if (n <= 0)
+            break;
+        sent += (size_t)n;
+    }
+    os64_free(selection);
+    char *header = NULL;
+    size_t header_cap = 0, header_size;
+    uint64_t bytes, expanded = porter_tar_size(members, count);
+    bool ok = sent == length && expanded &&
+              line(&wire, &header, &header_cap, &header_size, 128) && header_size > 3 &&
+              os64_memcmp(header, "OK ", 3) == 0 && os64_parse_u64(header + 3, &bytes) &&
+              bytes && bytes <= 2 * expanded;
+    if (ok) {
+        archive_source_t source = {.wire = &wire, .left = bytes};
+        ok = porter_archive_decode(read_archive, &source, members, count);
+    }
+    os64_free(header);
+    os64_close(wire.fd);
     return ok;
 }

@@ -375,7 +375,18 @@ bool porter_parse_inventory(porter_inventory_t *out, char *data, size_t count, b
     if (!take(&j, '{') || !read_entries(&j, out, receipt))
         return false;
     if (receipt) {
-        if (!next(&j, "previous") || (!literal(&j, "null") && !porter_hex(out->previous = string(&j), 64)))
+        if (!take(&j, ','))
+            return false;
+        const char *name = string(&j);
+        if (!name || !take(&j, ':'))
+            return false;
+        if (os64_streq(name, "operation")) {
+            if (!porter_hex(out->operation = string(&j), 48) || !next(&j, "previous"))
+                return false;
+        } else if (!os64_streq(name, "previous")) {
+            return false;
+        }
+        if (!literal(&j, "null") && !porter_hex(out->previous = string(&j), 64))
             return false;
     } else {
         if (!next(&j, "kernel"))
@@ -391,7 +402,7 @@ bool porter_parse_inventory(porter_inventory_t *out, char *data, size_t count, b
         return false;
     if (receipt && (!next(&j, "target") || !porter_hex(out->target = string(&j), 64)))
         return false;
-    if (!next(&j, "version") || !number(&j, &version) || version != 1 ||
+    if (!next(&j, "version") || !number(&j, &version) || version != (out->operation ? 2u : 1u) ||
         !take(&j, '}') || j.p != j.end)
         return false;
     if (receipt)
