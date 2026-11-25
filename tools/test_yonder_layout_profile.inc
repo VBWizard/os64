@@ -1070,8 +1070,10 @@ static void thread_reading_cases(void)
     // interval: nine timer tasks, each an arm of the list.
     check(timers && strncmp(timers,"9 timer tasks in ",17)==0 && strstr(timers,"from 1 site; arm at the page:1:") &&
           strstr(timers,": 9 tasks, "),"thread reading: the nine timer tasks by the function that set them");
-    check(collector && !strstr(collector,"no runs") && strstr(collector," asked by the allocation threshold) in ") &&
-          strstr(collector,"; the script heap now "),"thread reading: the collector's runs over the reading");
+    check(collector && !strstr(collector,"no runs") && strstr(collector," asked by the allocation threshold, ") &&
+          strstr(collector," of them at a threshold the limit lowered) in ") &&
+          strstr(collector,"; the script heap now ") && strstr(collector," 0 allocations refused at the limit; "),
+          "thread reading: the collector's runs over the reading");
     const char *walks=yonder_diag_fact_value(g.page.diag,"walks reading 1");
     check(walks && strstr(walks," observed targets, 1 a step, the most 1; the timer list: 1 live now, 9 arms walked ") &&
           strstr(walks,"; the binding holds "),"thread reading: the observer's steps and the interval's ten arms");
