@@ -117,8 +117,8 @@
 // nothing (a ring left over from an earlier wait costs one such pass).
 //
 // It is the pipe a thread would otherwise wait on, with the ring buffer and
-// the second handle taken out: a pipe pair is two of a task's
-// OS64_TASK_HANDLES and 64 KiB to carry this one bit. A bell is never given
+// the second handle taken out: a pipe pair is two of a task's handles and
+// 64 KiB to carry this one bit. A bell is never given
 // to a spawned child. libos64 wraps it as os64/bell.h.
 #define SYSCALL_BELL       67
 

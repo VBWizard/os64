@@ -11,9 +11,12 @@
 // space and do not know about each other, so a family that used -2 for
 // something of its own would misname an unreadable argument as that thing).
 
-// How many handles one task may hold open at once: the size of its handle
-// table. A limit in userland that holds one handle per level of something
-// (a directory walk) is derived from this, so it grows with the table.
+// The handles every task has room for without its table growing: the
+// table's first block, inside the task. The kernel adds blocks as a task
+// needs them, up to a ceiling of its own (kernel/include/handle_blocks.h)
+// that a program cannot count on reaching, so a bound in userland that holds
+// one handle per something (a directory walk's levels, kept connections) is
+// derived from this: within room every task always has.
 #define OS64_TASK_HANDLES 64
 
 #define OS64_FILE_ERR_INVALID      (-1)  // boundary-owned: no such handle, or

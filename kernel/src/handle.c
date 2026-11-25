@@ -48,6 +48,23 @@
 // keep a net conn's row but not its line). Lock order: handleLock, then the
 // object's own lock (pipe, listener) inside it — never the reverse, because
 // no object code ever touches a handle table.
+//
+// ── THE BLOCKS (docs/design/pending/VIDEO_PLANE.md § 7) ─────────────────────
+//
+// The table is block 0, inside the task, and blocks added as the task needs
+// them (handle_blocks.h: their sizes, where a number lives, the ceiling).
+// Nothing moves: a block's pointer is written once, NULL to the block, and
+// read without the lock (acquire), so a number handed out names the same
+// entry until the task is buried, and a lookup racing a grow sees either no
+// block (a number nobody could have been handed yet) or the whole zeroed
+// block, every entry free. A block is allocated BEFORE handleLock and
+// installed under it; a grower that finds the pointer set frees its block
+// after the lock and scans again. The install is refused once the task is
+// tearing down, decided under handleLock, and handle_close_all takes the
+// same lock once after the teardown flag is set and before its walk: an
+// install either came first, and the walk sees its block, or sees the flag.
+// Without that order a handle could land in a block the walk never visited
+// and be freed with it at burial, its object never closed.
 
 #include "handle.h"
 #include "task.h"
@@ -68,15 +85,122 @@
 #include "gui/glass.h"               // glass_view_ref / _release / _close — the /dev/glass viewer's
 #include "driver/net/icmp_conn.h"  // icmp_conn_close — HANDLE_NET_ICMP's release
 
+handle_t *handle_entry(struct task *t, int n)
+{
+	task_t *task = (task_t *)t;
+	unsigned block;
+	uint32_t slot;
+	if (!handle_place(n, &block, &slot))
+		return NULL;
+	if (block == 0)
+		return &task->handles[slot];
+	handle_t *entries = __atomic_load_n(&task->handleBlocks[block - 1], __ATOMIC_ACQUIRE);
+	return entries != NULL ? &entries[slot] : NULL;
+}
+
+// The blocks added so far: they are installed in order, so the first NULL
+// pointer ends them.
+static unsigned handle_blocks_added(task_t *task)
+{
+	unsigned k = 0;
+	while (k < TASK_HANDLE_BLOCKS && __atomic_load_n(&task->handleBlocks[k], __ATOMIC_ACQUIRE) != NULL)
+		k++;
+	return k;
+}
+
+uint32_t handle_table_room(struct task *t)
+{
+	return handle_room(handle_blocks_added((task_t *)t));
+}
+
+void handle_table_free(struct task *t)
+{
+	task_t *task = (task_t *)t;
+	for (unsigned k = 0; k < TASK_HANDLE_BLOCKS; k++)
+	{
+		kfree(task->handleBlocks[k]);
+		task->handleBlocks[k] = NULL;
+	}
+}
+
+// Claim the lowest free entry from 3 up as `as` (CLOSING for an alloc,
+// RESERVED for a reservation), across every block installed: its number,
+// or -1 when every one is taken, with *walked the added blocks it looked
+// in (a grow needs it: a sibling may install a block after this scan). CLAIM WITH A CAS, NOT A LOOK-THEN-STORE
+// (the file header): a sibling scanning the same table sees NONE and races
+// us for the CAS, exactly one winning, or sees a claimed entry and moves on.
+static int handle_claim(task_t *task, handle_type_t as, handle_t **out, unsigned *walked)
+{
+	*walked = 0;
+	for (unsigned k = 0; k <= TASK_HANDLE_BLOCKS; k++)
+	{
+		handle_t *entries = k == 0 ? task->handles
+		                           : __atomic_load_n(&task->handleBlocks[k - 1], __ATOMIC_ACQUIRE);
+		if (entries == NULL)
+			return -1;
+		*walked = k;
+		uint32_t size = handle_block_size(k);
+		for (uint32_t i = k == 0 ? 3 : 0; i < size; i++)
+		{
+			// A plain look first: an exchange on every taken entry would
+			// pull each one's line from every thread reading through it.
+			if (__atomic_load_n(&entries[i].type, __ATOMIC_RELAXED) != HANDLE_NONE)
+				continue;
+			handle_type_t expected = HANDLE_NONE;
+			if (__atomic_compare_exchange_n(&entries[i].type, &expected, as,
+			                                false, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED))
+			{
+				handle_counts_took(&task->handleCounts);
+				*out = &entries[i];
+				return (int)(handle_block_first(k) + i);
+			}
+		}
+	}
+	return -1;
+}
+
+// Add the next block after a scan that walked `walked` added blocks and found
+// nothing free: true when the table has more room than that scan saw (ours
+// installed, or a sibling's, before or during this call), false at the
+// ceiling, when the block could not be had, or once the task is tearing
+// down. The block is allocated outside handleLock and installed under it,
+// where the teardown flag is read (§ The blocks).
+static bool handle_grow(task_t *task, unsigned walked)
+{
+	unsigned k = handle_blocks_added(task);
+	if (k > walked)
+		return true;   // a sibling grew the table after our scan: look again
+	if (k == TASK_HANDLE_BLOCKS)
+		return false;
+	handle_t *block = kmalloc_try((uint64_t)handle_block_size(k + 1) * sizeof(handle_t));
+	if (block == NULL)
+		return false;
+	bool installed = false, dying;
+	uint64_t flags = spinlock_acquire_irqsave(&task->handleLock);
+	dying = __atomic_load_n(&task->tearingDown, __ATOMIC_ACQUIRE);
+	if (!dying && task->handleBlocks[k] == NULL)
+	{
+		__atomic_store_n(&task->handleBlocks[k], block, __ATOMIC_RELEASE);
+		installed = true;
+	}
+	spinlock_release_irqrestore(&task->handleLock, flags);
+	if (!installed)
+		kfree(block);
+	return !dying;
+}
+
 void handle_table_init(struct task *t)
 {
 	task_t *task = (task_t *)t;
 
-	for (int i = 0; i < TASK_MAX_HANDLES; i++)
+	for (int i = 0; i < OS64_TASK_HANDLES; i++)
 	{
 		task->handles[i].type = HANDLE_NONE;
 		task->handles[i].object = NULL;
 	}
+	for (unsigned k = 0; k < TASK_HANDLE_BLOCKS; k++)
+		task->handleBlocks[k] = NULL;
+	task->handleCounts = (handle_counts_t){.held = 3, .most = 3};
 
 	// Every task is born wired to the console. The shell overwrites 0 and/or 1
 	// with pipe ends when it builds a pipeline; a task that isn't in a pipeline
@@ -92,29 +216,30 @@ int handle_alloc(struct task *t, handle_type_t type, void *object)
 
 	// Start at 3: 0/1/2 are the standard streams and are never handed out as
 	// fresh handles (a pipe landing in slot 1 by accident would silently
-	// redirect the task's own stdout — a fun afternoon of debugging).
-	for (int i = 3; i < TASK_MAX_HANDLES; i++)
+	// redirect the task's own stdout — a fun afternoon of debugging). The
+	// claim is CLOSING rather than the final type so that a handle number
+	// leaked to a sibling before `object` is stored cannot be used:
+	// handle_get treats CLOSING as "not operable". Object first, then the
+	// real type with release semantics, so whoever reads the type sees the
+	// object behind it.
+	for (;;)
 	{
-		// CLAIM WITH A CAS, NOT A LOOK-THEN-STORE (see the file header). A
-		// sibling thread scanning this same table sees either NONE (and races
-		// us for the CAS — exactly one wins) or CLOSING (and moves on). The
-		// reservation is CLOSING rather than the final type so that a handle
-		// number leaked to a sibling before `object` is stored cannot be used:
-		// handle_get treats CLOSING as "not operable". Object first, then the
-		// real type with release semantics, so whoever reads the type sees the
-		// object behind it.
-		handle_type_t expected = HANDLE_NONE;
-		if (__atomic_compare_exchange_n(&task->handles[i].type, &expected, HANDLE_CLOSING,
-		                                false, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED))
+		handle_t *entry;
+		unsigned walked;
+		int n = handle_claim(task, HANDLE_CLOSING, &entry, &walked);
+		if (n >= 0)
 		{
-			task->handles[i].object = object;
-			__atomic_store_n(&task->handles[i].type, type, __ATOMIC_RELEASE);
-			return i;
+			entry->object = object;
+			__atomic_store_n(&entry->type, type, __ATOMIC_RELEASE);
+			return n;
 		}
+		if (!handle_grow(task, walked))
+			break;
 	}
 
-	printd(DEBUG_TASK, "handle_alloc: task %s is out of handles (max %u)\n",
-		task->exename, TASK_MAX_HANDLES);
+	handle_counts_refused(&task->handleCounts);
+	printd(DEBUG_TASK, "handle_alloc: task %s is out of handles (room %u, ceiling %u)\n",
+		task->exename, handle_table_room(t), TASK_HANDLES_CEILING);
 	return -1;
 }
 
@@ -122,28 +247,31 @@ int handle_reserve(struct task *t)
 {
 	task_t *task = (task_t *)t;
 
-	for (int i = 3; i < TASK_MAX_HANDLES; i++)
+	for (;;)
 	{
-		handle_type_t expected = HANDLE_NONE;
-		if (__atomic_compare_exchange_n(&task->handles[i].type, &expected,
-		                                HANDLE_RESERVED, false,
-		                                __ATOMIC_ACQ_REL, __ATOMIC_RELAXED))
+		handle_t *entry;
+		unsigned walked;
+		int n = handle_claim(task, HANDLE_RESERVED, &entry, &walked);
+		if (n >= 0)
 		{
-			task->handles[i].object = NULL;
-			return i;
+			entry->object = NULL;
+			return n;
 		}
+		if (!handle_grow(task, walked))
+			break;
 	}
 
-	printd(DEBUG_TASK, "handle_reserve: task %s is out of handles (max %u)\n",
-	       task->exename, TASK_MAX_HANDLES);
+	handle_counts_refused(&task->handleCounts);
+	printd(DEBUG_TASK, "handle_reserve: task %s is out of handles (room %u, ceiling %u)\n",
+	       task->exename, handle_table_room(t), TASK_HANDLES_CEILING);
 	return -1;
 }
 
 bool handle_commit_reserved(struct task *t, int slot, handle_type_t type, void *object)
 {
 	task_t *task = (task_t *)t;
-	if (slot < 3 || slot >= TASK_MAX_HANDLES || type == HANDLE_NONE ||
-	    type == HANDLE_RESERVED || type == HANDLE_CLOSING)
+	handle_t *entry = slot >= 3 ? handle_entry(t, slot) : NULL;
+	if (entry == NULL || type == HANDLE_NONE || type == HANDLE_RESERVED || type == HANDLE_CLOSING)
 		return false;
 
 	// Claim the reservation through CLOSING before publishing its object. A
@@ -152,13 +280,18 @@ bool handle_commit_reserved(struct task *t, int slot, handle_type_t type, void *
 	// finish. After publication, a teardown that already passed the slot is
 	// detected through tearingDown and this owner closes the new handle.
 	handle_type_t expected = HANDLE_RESERVED;
-	if (!__atomic_compare_exchange_n(&task->handles[slot].type, &expected,
+	if (!__atomic_compare_exchange_n(&entry->type, &expected,
 	                                 HANDLE_CLOSING, false,
 	                                 __ATOMIC_ACQ_REL, __ATOMIC_RELAXED))
 		return false;
 
-	task->handles[slot].object = object;
-	__atomic_store_n(&task->handles[slot].type, type, __ATOMIC_RELEASE);
+	entry->object = object;
+	__atomic_store_n(&entry->type, type, __ATOMIC_RELEASE);
+	// The store above and the load below must not trade places: teardown
+	// sets its flag and then sweeps, and a commit that read the flag clear
+	// while its entry still looked CLOSING to the sweep would leave a
+	// handle neither of them closes.
+	__atomic_thread_fence(__ATOMIC_SEQ_CST);
 	if (__atomic_load_n(&task->tearingDown, __ATOMIC_ACQUIRE))
 		(void)handle_close(t, slot);
 	return true;
@@ -167,32 +300,38 @@ bool handle_commit_reserved(struct task *t, int slot, handle_type_t type, void *
 bool handle_cancel_reserved(struct task *t, int slot)
 {
 	task_t *task = (task_t *)t;
-	if (slot < 3 || slot >= TASK_MAX_HANDLES)
+	handle_t *entry = slot >= 3 ? handle_entry(t, slot) : NULL;
+	if (entry == NULL)
 		return false;
 
 	handle_type_t expected = HANDLE_RESERVED;
-	if (!__atomic_compare_exchange_n(&task->handles[slot].type, &expected,
+	if (!__atomic_compare_exchange_n(&entry->type, &expected,
 	                                 HANDLE_CLOSING, false,
 	                                 __ATOMIC_ACQ_REL, __ATOMIC_RELAXED))
 		return false;
-	task->handles[slot].object = NULL;
-	__atomic_store_n(&task->handles[slot].type, HANDLE_NONE, __ATOMIC_RELEASE);
+	// The count first, then the slot: a claim that takes the slot the
+	// instant it reads NONE must not find it still counted.
+	handle_counts_gave(&task->handleCounts);
+	entry->object = NULL;
+	__atomic_store_n(&entry->type, HANDLE_NONE, __ATOMIC_RELEASE);
 	return true;
 }
 
 bool handle_install(struct task *t, int slot, handle_type_t type, void *object)
 {
 	task_t *task = (task_t *)t;
-
-	if (slot < 0 || slot >= TASK_MAX_HANDLES)
+	handle_t *entry = handle_entry(t, slot);
+	if (entry == NULL)
 		return false;
 
 	// Replacing a live handle means giving up whatever was there.
-	if (task->handles[slot].type != HANDLE_NONE)
+	if (entry->type != HANDLE_NONE)
 		handle_close(t, slot);
 
-	task->handles[slot].type = type;
-	task->handles[slot].object = object;
+	entry->type = type;
+	entry->object = object;
+	if (type != HANDLE_NONE)
+		handle_counts_took(&task->handleCounts);
 	return true;
 }
 
@@ -202,17 +341,16 @@ bool handle_install(struct task *t, int slot, handle_type_t type, void *object)
 // Every syscall resolves through handle_pin.
 static handle_t *handle_get(struct task *t, int h)
 {
-	task_t *task = (task_t *)t;
-
 	// This IS the range check: ring 3 passes whatever integer it feels like.
-	if (h < 0 || h >= TASK_MAX_HANDLES)
+	handle_t *entry = handle_entry(t, h);
+	if (entry == NULL)
 		return NULL;
-	if (task->handles[h].type == HANDLE_NONE ||
-	    task->handles[h].type == HANDLE_RESERVED ||
-	    task->handles[h].type == HANDLE_CLOSING)
+	if (entry->type == HANDLE_NONE ||
+	    entry->type == HANDLE_RESERVED ||
+	    entry->type == HANDLE_CLOSING)
 		return NULL;   // free, reserved, or mid-close — none is operable
 
-	return &task->handles[h];
+	return entry;
 }
 
 // The object-reference half of a pin, in each object's own currency. Runs
@@ -253,11 +391,12 @@ bool handle_pin(struct task *t, int h, handle_t *out)
 {
 	task_t *task = (task_t *)t;
 
-	if (h < 0 || h >= TASK_MAX_HANDLES)
+	handle_t *entry = handle_entry(t, h);
+	if (entry == NULL)
 		return false;
 
 	uint64_t flags = spinlock_acquire_irqsave(&task->handleLock);
-	handle_type_t type = __atomic_load_n(&task->handles[h].type, __ATOMIC_ACQUIRE);
+	handle_type_t type = __atomic_load_n(&entry->type, __ATOMIC_ACQUIRE);
 	if (type == HANDLE_NONE || type == HANDLE_RESERVED || type == HANDLE_CLOSING)
 	{
 		spinlock_release_irqrestore(&task->handleLock, flags);
@@ -267,7 +406,7 @@ bool handle_pin(struct task *t, int h, handle_t *out)
 	// lock, so the object is alive and its own reference count can be
 	// taken safely. (alloc published `object` before the live type with
 	// release semantics; the acquire load above sees it.)
-	void *object = task->handles[h].object;
+	void *object = entry->object;
 	handle_object_ref(type, object);
 	spinlock_release_irqrestore(&task->handleLock, flags);
 
@@ -317,12 +456,13 @@ bool handle_share(struct task *t, int h, handle_t *out)
 {
 	task_t *task = (task_t *)t;
 
-	if (h < 0 || h >= TASK_MAX_HANDLES)
+	handle_t *entry = handle_entry(t, h);
+	if (entry == NULL)
 		return false;
 
 	uint64_t flags = spinlock_acquire_irqsave(&task->handleLock);
-	handle_type_t type = __atomic_load_n(&task->handles[h].type, __ATOMIC_ACQUIRE);
-	void *object = task->handles[h].object;
+	handle_type_t type = __atomic_load_n(&entry->type, __ATOMIC_ACQUIRE);
+	void *object = entry->object;
 	// The child's reference, in the handle's own currency, taken while the
 	// slot is provably live — the closer's claim cannot straddle this lock.
 	bool shareable = true;
@@ -594,9 +734,9 @@ bool handle_close_rc(struct task *t, int h, int *rc, bool *deferred)
 {
 	*rc = 0;
 	*deferred = false;
-	// Everything below works through `handle` (== &task->handles[h]); the slot
-	// index is closed over by that pointer. The task is needed for one thing,
-	// its handleLock.
+	// Everything below works through `handle` (handle h's entry, which never
+	// moves); the slot index is closed over by that pointer. The task is
+	// needed for its handleLock and its counts.
 	handle_t *handle = handle_get(t, h);
 
 	if (handle == NULL)
@@ -621,8 +761,8 @@ bool handle_close_rc(struct task *t, int h, int *rc, bool *deferred)
 	// nature — it needs two threads inside the same slot — which is why it
 	// took a busy machine to show up and did not reproduce on demand.
 	//
-	// The claim is an ATOMIC EXCHANGE to a CLOSING sentinel, and the SENTINEL
-	// (not HANDLE_NONE) is the fix's whole point (tightened twice):
+	// The claim moves the slot to a CLOSING sentinel, and the SENTINEL (not
+	// HANDLE_NONE) is the fix's whole point (tightened three times):
 	//
 	//   Round 1 exchanged straight to HANDLE_NONE, which shut the two-CLOSERS
 	//   race (xchg makes exactly one win). But NONE means "free", and
@@ -638,26 +778,32 @@ bool handle_close_rc(struct task *t, int h, int *rc, bool *deferred)
 	//   console handle's object is legitimately NULL, so it cannot be one);
 	//   a loser sees CLOSING or NONE and bails.
 	//
+	//   It was a blind exchange, putting back what it should not have taken.
+	//   That wrote CLOSING, for a few instructions, over a free slot or a
+	//   RESERVED one whose number a sibling's close had raced to — and a
+	//   reservation's owner does not take the lock, so its commit or cancel
+	//   in that window failed (Fable's read of H0). The claim is now a LOOK
+	//   AND A CAS: under the lock a free, reserved or closing slot is left
+	//   untouched, and a live type is changed to CLOSING. Under the lock only
+	//   another closer can change a live type, and closers are excluded, so
+	//   the CAS succeeds; a close never writes a slot it does not own.
+	//
 	// UNDER handleLock (the file header's § The pin): the claim is what a
-	// handle_pin in progress must not straddle. The lock covers the exchange
+	// handle_pin in progress must not straddle. The lock covers the claim
 	// and the read of `object` only — the release below can sleep in the
 	// VFS, and it does not need the lock, because a pin that got in first
 	// already holds its own reference on the object.
 	task_t *task = (task_t *)t;
 	uint64_t lockFlags = spinlock_acquire_irqsave(&task->handleLock);
-	handle_type_t type = __atomic_exchange_n(&handle->type, HANDLE_CLOSING, __ATOMIC_ACQ_REL);
-	if (type == HANDLE_NONE)
+	handle_type_t type = __atomic_load_n(&handle->type, __ATOMIC_ACQUIRE);
+	// Free, a reservation (its owner's alone), or another closer's: none is
+	// ours to write.
+	if (type == HANDLE_NONE || type == HANDLE_RESERVED || type == HANDLE_CLOSING ||
+	    !__atomic_compare_exchange_n(&handle->type, &type, HANDLE_CLOSING, false,
+	                                 __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
 	{
-		// We stamped CLOSING onto an already-free slot — undo it so alloc can
-		// have it back. (Nobody else can be mid-close on a NONE slot.)
-		__atomic_store_n(&handle->type, HANDLE_NONE, __ATOMIC_RELEASE);
 		spinlock_release_irqrestore(&task->handleLock, lockFlags);
 		return false;
-	}
-	if (type == HANDLE_CLOSING)
-	{
-		spinlock_release_irqrestore(&task->handleLock, lockFlags);
-		return false;   // another closer owns it — must NOT revert, that frees it mid-close
 	}
 
 	// We own it, and alloc cannot touch a CLOSING slot, so `object` is stable.
@@ -755,6 +901,9 @@ bool handle_close_rc(struct task *t, int h, int *rc, bool *deferred)
 	// this slot (type == NONE), object is already NULL and never a dangling
 	// pointer to what we just closed. The slot was UNREUSABLE the whole time
 	// it held HANDLE_CLOSING, which is what shut the close-vs-alloc race.
+	// The count before the slot, as cancel does: reuse must not count it
+	// twice.
+	handle_counts_gave(&task->handleCounts);
 	handle->object = NULL;
 	__atomic_store_n(&handle->type, HANDLE_NONE, __ATOMIC_RELEASE);
 	return true;
@@ -774,7 +923,17 @@ void handle_close_all(struct task *t)
 {
 	task_t *task = (task_t *)t;
 
-	for (int i = 0; i < TASK_MAX_HANDLES; i++)
-		if (task->handles[i].type != HANDLE_NONE)
-			handle_close(t, i);
+	// Ordered against a grow's install (§ The blocks): once the lock has been
+	// taken and let go after the teardown flag was set, every block that can
+	// ever hold a handle is installed, and the walk below sees it.
+	uint64_t flags = spinlock_acquire_irqsave(&task->handleLock);
+	spinlock_release_irqrestore(&task->handleLock, flags);
+
+	uint32_t room = handle_table_room(t);
+	for (uint32_t i = 0; i < room; i++)
+	{
+		handle_t *entry = handle_entry(t, (int)i);
+		if (entry->type != HANDLE_NONE)
+			handle_close(t, (int)i);
+	}
 }

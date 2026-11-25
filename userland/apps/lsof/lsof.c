@@ -294,6 +294,19 @@ static bool parse_handle(char *line, uint64_t *number,
     return **type != '\0' && os64_parse_u64(line, number);
 }
 
+// Whether `line` is the handles report's first line, the table's own
+// (`table<TAB>held ...`), which names no handle. Stops at the line's end.
+static bool table_line(const char *line)
+{
+    const char *word = "table\t";
+    while (*word != '\0' && *line == *word)
+    {
+        line++;
+        word++;
+    }
+    return *word == '\0';
+}
+
 static int list_handles(const os64_proc_info_t *task,
                         const lsof_options_t *options,
                         bool emit, lsof_claims_t *claims,
@@ -328,7 +341,7 @@ static int list_handles(const os64_proc_info_t *task,
             cursor++;
         if ((size_t)(cursor - (char *)contents) < length)
             *cursor++ = '\0';
-        if (*line == '\0')
+        if (*line == '\0' || table_line(line))
             continue;
 
         uint64_t handle;

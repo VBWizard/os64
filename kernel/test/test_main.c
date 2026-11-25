@@ -81,6 +81,9 @@ static bool g_framework_initialized = false;
 
 bool test_vma_file_backed_page_fault_resolved(void);
 bool test_vma_partial_page_bss_zero_filled(void);
+bool test_handle_table_grows(void);
+bool test_handle_table_ceiling(void);
+bool test_handle_table_no_grow_in_teardown(void);
 bool test_pty_publication_hold(void);
 bool test_pty_resize_modes(void);
 bool test_pty_history(void);
@@ -6421,6 +6424,9 @@ static void register_builtin_tests(void)
     test_register("vma_partial_page_bss_zero_filled", test_vma_partial_page_bss_zero_filled, TEST_PHASE_POSTBOOT);
     test_register("elf_loader", test_elf_loader, TEST_PHASE_POSTBOOT);
     test_register("dynamic_linking", test_dynamic_linking, TEST_PHASE_POSTBOOT);
+    test_register("handle_table_grows", test_handle_table_grows, TEST_PHASE_POSTBOOT);
+    test_register("handle_table_ceiling", test_handle_table_ceiling, TEST_PHASE_POSTBOOT);
+    test_register("handle_table_no_grow_in_teardown", test_handle_table_no_grow_in_teardown, TEST_PHASE_POSTBOOT);
     test_register("pty_publication_hold", test_pty_publication_hold, TEST_PHASE_POSTBOOT);
     test_register("pty_history", test_pty_history, TEST_PHASE_POSTBOOT);
     test_register("pty_resize_modes", test_pty_resize_modes, TEST_PHASE_POSTBOOT);

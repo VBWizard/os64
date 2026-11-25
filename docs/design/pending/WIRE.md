@@ -283,7 +283,8 @@ redirect it follows itself). Where the build departs from the brief, or
 says more than it did:
 
 - **Sixteen kept in all, not thirty-two.** Every kept connection holds one
-  of a task's 64 handles (`OS64_TASK_HANDLES`), and thirty-two kept beside
+  of the 64 handles every task has without its table growing
+  (`OS64_TASK_HANDLES`), and thirty-two kept beside
   a dozen in use was most of a browser's table before it opened a file
   (the cold read's finding). The pool keeps at most a quarter of the table,
   asserted at build; and a dial the kernel refuses for want of resources

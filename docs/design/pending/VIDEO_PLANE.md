@@ -500,8 +500,8 @@ slice and the libmedia slice on the P5 before a page is involved.
 ## 7. The handle table
 
 A plane needs no handle, but each playing video now has one more thread, and a
-thread is a handle; yonder was measured at 55 of the 64 a task may hold
-(DEBTS, "A task holds at most 64 handles"). Chris ruled a table that grows,
+thread is a handle; yonder was measured at 55 of the 64 a task could hold
+(the DEBTS row H0 paid). Chris ruled a table that grows,
 with a way to interrogate it:
 
 - `task_t.handles` becomes a table grown in blocks under `handleLock`, with a
@@ -512,6 +512,31 @@ with a way to interrogate it:
   call's failure leaves no thread running (§ 4.3).
 - Its own slice, first, with the kernel's own review rules: it touches every
   handle lookup.
+
+### 7.1 As built (H0)
+
+Block 0 is the task's own (`OS64_TASK_HANDLES`, 64); blocks of 64, 128, 256,
+512, 1024 and 2048 follow as needed, to `TASK_HANDLES_CEILING` (4096,
+`kernel/include/handle_blocks.h`). A block is allocated outside `handleLock`
+and installed under it; its pointer is written once and read without the
+lock; blocks are freed only by `task_destroy`. Entries are still claimed by a
+CAS on their type, as before.
+
+| state | who reads entries | who writes entries | who writes a block pointer | a lookup racing it sees |
+|---|---|---|---|---|
+| block 0 only | any thread, lock-free (pin, share and close's claim take `handleLock`, as before) | CAS claims | a grow, under `handleLock` | a number past 63: no entry, invalid; no such number was handed out |
+| growing | as above | as above | the grower, once, NULL to the zeroed block, release, under `handleLock` | no block (invalid, as above) or the whole block, every entry free |
+| grown | any thread, the pointer read with acquire | CAS claims in any installed block | the next grow only | every number below the room names one entry for the task's life |
+| at the ceiling | as grown | closes free entries, claims take them again | nobody | as grown; an open fails with its usual code and `failed` counts it |
+| tearing down | as grown | `handle_close_all`; a sibling's late `handle_alloc` lands in an installed block (DEBTS: a late alloc after the sweep is never closed) | nobody: the install reads `tearingDown` under `handleLock`, and `handle_close_all` takes that lock once before its walk | as grown |
+| buried | nobody | nobody | `task_destroy` frees the blocks, then the task | n/a |
+
+The thread call reserves its handle, then makes the thread, then commits: a
+refused reservation makes no thread, and a failed make cancels the
+reservation. A reservation is its owner's alone — a close refuses one, and
+teardown's sweep passes it by — so the commit cannot be refused; a commit
+after the teardown began closes the handle it published, as every commit
+does, in a task that is dying.
 
 ## 8. Slices
 
