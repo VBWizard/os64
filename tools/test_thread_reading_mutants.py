@@ -172,7 +172,7 @@ mutants = [
      '            yonder_tr_timer(&s_tr, NULL, spent, forced.layouts, forced_ticks);'),
     # The reading's profile (the ledger case, in the whole suite).
     ('the-profile-reading-not-written', YONDER, CASES_YONDER_ALL,
-     '    diag_profile_reading(p, n);\n', ''),
+     '    diag_profile_reading(p, n);\n', '    (void)diag_profile_reading;\n'),
     ('the-first-profile-reading-unmarked', YONDER, CASES_YONDER_ALL,
      '    if (k.since < s_cost.from_cycles)\n        dt_put(&u, "since the page\'s script began: ");',
      '    if (0)\n        dt_put(&u, "since the page\'s script began: ");'),
