@@ -222,3 +222,24 @@ of it, summed with the longest. `JS_GetCollectorCounts` reads them at any
 moment, so what a page's collector costs is known without the ledger's
 per-call brackets. The runtime sets its ledger clock (the TSC) when it makes
 the engine. Covered by the runtime host suite's collector case.
+
+Patch 0048 holds the collector's next threshold below the memory limit.
+Upstream sets it to half again the heap a run left, so with the live part
+past two thirds of the limit the next run waits for a heap the limit
+refuses, and a page making garbage there fails with the collector never
+asked. The threshold is now set after every run (`gc_schedule`, also after
+a `JS_RunGC` from the host): never above the limit less a sixteenth (the
+margin); where that lowers it, never less than a sixty-fourth of the limit
+above what the run left, so a heap whose live part is inside the margin is
+walked again only after that much growth; and never above the limit less a
+256th, so the last stretch still has a run. A run the limit scheduled also
+waits until the heap has grown by that 256th since the last run
+(`js_trigger_gc`), so a heap that is all live reaches the limit in at most
+eight runs once inside the margin, not a run at every object made. The
+engine collects only where it always has, at an object's creation: a
+collection inside any other allocation could mark an object halfway
+through a change. So an allocation of another kind the limit refuses still
+throws, and the next object made collects. The counts gain the runs whose
+threshold the limit lowered and the limit itself; libjs's allocator counts
+each refusal. Covered by the runtime host suite's limit case and
+`tools/test_collector_limit_mutants.py`.

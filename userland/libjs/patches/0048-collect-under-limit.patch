@@ -1,0 +1,125 @@
+# Hold the collector's next threshold below the memory limit: at most the limit
+# less a sixteenth; where that lowers it, at least a sixty-fourth of the limit
+# above what the run left; never above the limit less a 256th. A run the limit
+# scheduled waits for the heap to have grown by that 256th since the last run,
+# so an all-live heap reaches the limit in a bounded count of runs (eight once
+# inside the margin). The threshold is set after every run, not only an
+# allocation-asked one, and the counts gain the limit-lowered runs and the limit.
+--- a/quickjs.h
++++ b/quickjs.h
+@@ -530,13 +530,16 @@
+    before and after each run, summed;
+    the threshold the next allocation-asked run waits for; the most one run
+    walked; and, with a clock (JS_SetCollectorClock), the runs' time in its
+-   ticks and the longest. Owner thread. */
++   ticks and the longest. Of the allocation-asked runs, those whose
++   threshold the memory limit lowered (patch 0048), and the limit itself
++   (SIZE_MAX for none). Owner thread. */
+ typedef struct JSCollectorCounts {
+     uint64_t runs, runs_by_allocation;
+     uint64_t walked, freed, walked_most;
+     uint64_t bytes_before, bytes_after;
+     uint64_t threshold;
+     uint64_t ticks, ticks_most;
++    uint64_t runs_by_limit, limit;
+ } JSCollectorCounts;
+ void JS_GetCollectorCounts(JSRuntime *rt, JSCollectorCounts *out);
+ /* The clock the counts time runs with; NULL leaves them untimed. It must
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -410,6 +410,8 @@
+     JSCollectorCounts collector_counts;
+     uint64_t (*collector_clock)(void);
+     BOOL collector_by_allocation; /* the run under way was js_trigger_gc's */
++    size_t malloc_after_gc;  /* the heap's bytes when the last run ended */
++    BOOL threshold_by_limit; /* the memory limit lowered the threshold (gc_schedule) */
+     struct JSSettingsFrame *settings_script_frame;
+     JSContext *settings_entry;
+     JSContext *settings_backup;
+@@ -1860,6 +1862,45 @@
+ 
+ /* end JS malloc */
+ 
++/* The threshold the next allocation-asked run waits for, set after every
++   run: half as much again as the run left, as upstream, but held below the
++   memory limit, so the collector runs while there is room and is not the
++   reason an allocation fails. With a limit L:
++   - never above L - L/16, the margin;
++   - where that lowers it, never less than L/64 above what the run left, so
++     a heap whose live part is inside the margin is walked again only after
++     it has grown by that step;
++   - never above L - L/256, so the last stretch before the limit still has
++     a run.
++   A run the limit scheduled also waits for the heap to have grown by L/256
++   since the last run (js_trigger_gc): one that found the heap all live is
++   not repeated at every object made. So a heap that is all live reaches
++   the limit in at most L/16 / (L/64) + (L/64) / (L/256) = 8 runs once it is
++   inside the margin. */
++static void gc_schedule(JSRuntime *rt)
++{
++    const size_t size = rt->malloc_ctx.malloc_state.malloc_size;
++    const size_t limit = rt->malloc_ctx.malloc_state.malloc_limit;
++    size_t next = size + (size >> 1);
++    BOOL by_limit = FALSE;
++    rt->malloc_after_gc = size;
++    if (limit != (size_t)-1 && limit != 0) {
++        const size_t margin = limit >> 4, step = limit >> 6, last = limit >> 8;
++        if (next > limit - margin) {
++            next = limit - margin;
++            by_limit = TRUE;
++            if (next < size + step)
++                next = size + step;
++        }
++        if (next > limit - last) {
++            next = limit - last;
++            by_limit = TRUE;
++        }
++    }
++    rt->malloc_gc_threshold = next;
++    rt->threshold_by_limit = by_limit;
++}
++
+ static void js_trigger_gc(JSRuntime *rt, size_t size)
+ {
+     BOOL force_gc;
+@@ -1868,17 +1909,22 @@
+ #else
+     force_gc = ((rt->malloc_ctx.malloc_state.malloc_size + size) >
+                 rt->malloc_gc_threshold);
++    if (force_gc && rt->threshold_by_limit &&
++        rt->malloc_ctx.malloc_state.malloc_size <
++        rt->malloc_after_gc + (rt->malloc_ctx.malloc_state.malloc_limit >> 8))
++        force_gc = FALSE;
+ #endif
+     if (force_gc) {
+ #ifdef DUMP_GC
+         printf("GC: size=%" PRIu64 "\n",
+                (uint64_t)rt->malloc_ctx.malloc_state.malloc_size);
+ #endif
++        const BOOL by_limit = rt->threshold_by_limit;
+         rt->collector_by_allocation = TRUE;
+         JS_RunGC(rt);
+         rt->collector_by_allocation = FALSE;
+-        rt->malloc_gc_threshold = rt->malloc_ctx.malloc_state.malloc_size +
+-            (rt->malloc_ctx.malloc_state.malloc_size >> 1);
++        if (by_limit)
++            rt->collector_counts.runs_by_limit++;
+     }
+ }
+ 
+@@ -7637,6 +7683,7 @@
+         if (spent > counts->ticks_most)
+             counts->ticks_most = spent;
+     }
++    gc_schedule(rt);
+     if (unlikely(hooks != NULL))
+         hooks->collector_leave(opaque);
+ }
+@@ -7645,6 +7692,7 @@
+ {
+     *out = rt->collector_counts;
+     out->threshold = rt->malloc_gc_threshold;
++    out->limit = rt->malloc_ctx.malloc_state.malloc_limit;
+ }
+ 
+ void JS_SetCollectorClock(JSRuntime *rt, uint64_t (*now)(void))

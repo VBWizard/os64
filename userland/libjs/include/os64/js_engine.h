@@ -113,13 +113,20 @@ size_t os64_js_heap_bytes(const os64_js_runtime_t *runtime);
  * before and after each run, summed (the engine's own count, which the
  * memory limit is not held against); the threshold the next
  * allocation-asked run waits for; and their time on os64_js_ledger_now()'s
- * clock, with the longest. Zeroed for NULL or a runtime whose engine is
- * gone. No engine entry. */
+ * clock, with the longest.
+ * THE LIMIT (patch 0048): the engine's memory limit (0 for none); of the
+ * allocation-asked runs, those whose threshold the limit lowered, which
+ * hold the next run below it: never above a sixteenth under it, never
+ * within a 256th of it, and, for a heap whose live part is inside that
+ * margin, a sixty-fourth above what the run left; and the allocations the
+ * limit refused, each counted. Zeroed for NULL or a runtime whose engine
+ * is gone. No engine entry. */
 typedef struct {
     uint64_t runs, runs_by_allocation;
     uint64_t walked, freed, walked_most;
     uint64_t bytes_before, bytes_after, threshold;
     uint64_t ticks, ticks_most;
+    uint64_t limit, runs_by_limit, refused_by_limit;
 } os64_js_collector_t;
 void os64_js_collector(const os64_js_runtime_t *runtime, os64_js_collector_t *out);
 

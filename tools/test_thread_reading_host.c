@@ -175,7 +175,8 @@ static void collector_cases(void)
     char line[1024];
     memset(&t, 0, sizeof(t));
     yonder_tr_collector_t from = {.runs = 10, .runs_by_allocation = 10, .walked = 1000, .freed = 50,
-                                  .bytes_before = 10ull << 20, .bytes_after = 8ull << 20, .ticks = 20 * MS};
+                                  .bytes_before = 10ull << 20, .bytes_after = 8ull << 20, .ticks = 20 * MS,
+                                  .runs_by_limit = 4, .refused_by_limit = 6};
     yonder_tr_reset(&t, 0, &from, NULL);
     yonder_tr_collector_t now = from;
     now.threshold = 300ull << 20;
@@ -183,26 +184,38 @@ static void collector_cases(void)
     now.walked_most = 400000;
     yonder_tr_collector_line(&t, &now, 200ull << 20, 512ull << 20, MS, line, sizeof(line));
     LINE(line, "no runs; the next run waits for the engine's heap to reach 300.0 MiB; the script heap now 200.0 MiB of "
-               "512.0 MiB; since the script began, the longest run 90.0 ms, the most walked in one 400000");
+               "512.0 MiB, 0 allocations refused at the limit; since the script began, the longest run 90.0 ms, the "
+               "most walked in one 400000");
     now.runs += 2;
     now.runs_by_allocation += 2;
+    now.runs_by_limit += 1;
+    now.refused_by_limit += 3;
     now.walked += 600000;
     now.freed += 7;
     now.bytes_before += 400ull << 20;
     now.bytes_after += 390ull << 20;
     now.ticks += 160 * MS;
     yonder_tr_collector_line(&t, &now, 200ull << 20, 512ull << 20, MS, line, sizeof(line));
-    LINE(line, "2 runs (2 asked by the allocation threshold) in 160.0 ms, each 80.0 ms on average; walked 600000 "
-               "objects, 300000 a run, and freed 7 in cycles; the engine's heap 200.0 MiB before a run and 195.0 MiB "
-               "after, on average; the next run waits for the engine's heap to reach 300.0 MiB; the script heap now "
-               "200.0 MiB of 512.0 MiB; since the script began, the longest run 90.0 ms, the most walked in one 400000");
+    LINE(line, "2 runs (2 asked by the allocation threshold, 1 of them at a threshold the limit lowered) in 160.0 ms, "
+               "each 80.0 ms on average; walked 600000 objects, 300000 a run, and freed 7 in cycles; the engine's heap "
+               "200.0 MiB before a run and 195.0 MiB after, on average; the next run waits for the engine's heap to "
+               "reach 300.0 MiB; the script heap now 200.0 MiB of 512.0 MiB, 3 allocations refused at the limit; since "
+               "the script began, the longest run 90.0 ms, the most walked in one 400000");
     // Counts behind the reading's start (the runtime let go, another made):
     // said from their own start, never wrapped.
     yonder_tr_collector_t fresh = {.runs = 1, .runs_by_allocation = 1, .walked = 30, .freed = 2,
                                    .bytes_before = 3ull << 20, .bytes_after = 2ull << 20, .ticks = 5 * MS};
     yonder_tr_collector_line(&t, &fresh, 0, 512ull << 20, MS, line, sizeof(line));
     CHECK(strstr(line, "counted from the script's start, the reading's being gone: 1 run (1 asked by the "
-                       "allocation threshold) in 5.0 ms") == line);
+                       "allocation threshold, 0 of them at a threshold the limit lowered) in 5.0 ms") == line);
+    // A limit count behind the reading's start is another runtime's too.
+    yonder_tr_collector_t start = from;
+    start.refused_by_limit = 5;
+    yonder_tr_reset(&t, 0, &start, NULL);
+    yonder_tr_collector_t behind = start;
+    behind.refused_by_limit = 2;
+    yonder_tr_collector_line(&t, &behind, 0, 512ull << 20, MS, line, sizeof(line));
+    CHECK(strstr(line, "counted from the script's start, the reading's being gone: ") == line);
     yonder_tr_collector_t gone = {0};
     yonder_tr_collector_line(&t, &gone, 0, 512ull << 20, MS, line, sizeof(line));
     CHECK(strstr(line, "counted from the script's start, the reading's being gone: no runs;") == line);

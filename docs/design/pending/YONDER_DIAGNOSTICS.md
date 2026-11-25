@@ -559,7 +559,7 @@ names a `diagnostics` directory, each reading adds four lines:
 
     thread reading 3: in 4900.0 ms the loop's steps took 4900.0 ms, busy 77%; scripts 1747.1 ms in 980 turns (a task found and run 820.4 ms 980 times, the rendering step after a task 640.2 ms 402 times, the pointer's events 210.0 ms 980 times, the other calls 76.5 ms 1960 times; inside: tasks 402 in 654.0 ms, layouts 3 in 120.0 ms, model rebuilds 402 in 590.1 ms, what tasks said 402 in 80.2 ms); waiting 1130.0 ms in 600 turns; ...
     timers reading 3: 380 timer tasks in 590.2 ms, from 12 sites; tick at the page:1:131: 300 tasks, 450.0 ms (each 1.5, the most 9.0); ...
-    collector reading 3: 2 runs (2 asked by the allocation threshold) in 160.0 ms, each 80.0 ms on average; walked 600000 objects, 300000 a run, and freed 7000 in cycles; the engine's heap 200.0 MiB before a run and 195.0 MiB after, on average; the next run waits for the engine's heap to reach 300.0 MiB; the script heap now 210.0 MiB of 512.0 MiB; since the script began, the longest run 90.0 ms, the most walked in one 400000
+    collector reading 3: 2 runs (2 asked by the allocation threshold, 0 of them at a threshold the limit lowered) in 160.0 ms, each 80.0 ms on average; walked 600000 objects, 300000 a run, and freed 7000 in cycles; the engine's heap 200.0 MiB before a run and 195.0 MiB after, on average; the next run waits for the engine's heap to reach 300.0 MiB; the script heap now 210.0 MiB of 512.0 MiB, 0 allocations refused at the limit; since the script began, the longest run 90.0 ms, the most walked in one 400000
     walks reading 3: 300 intersection steps walked 90000 observed targets, 300 a step, the most 310; the timer list: 40 live now, 380 arms walked 7600 entries to find their places, 20 an arm; the binding holds 41000 values for the engine
 
 (The numbers above are made up to show the shape.)
@@ -591,7 +591,8 @@ names a `diagnostics` directory, each reading adds four lines:
   instead of a timer are `with no site known`.
 - **The collector**, from libjs's counts (`os64_js_collector`, which the
   engine keeps at every run with or without the ledger, patch 0047): the
-  runs in the reading and those the allocation threshold asked for, their
+  runs in the reading and those the allocation threshold asked for (and of
+  them those at a threshold the limit lowered), their
   time, the GC objects walked and the objects, functions and modules freed
   from cycles, the engine's heap
   before and after a run, the threshold the next run waits for, the
@@ -599,7 +600,13 @@ names a `diagnostics` directory, each reading adds four lines:
   longest run and the most one walked. Every run walks every GC object
   the page holds, its nodes' wrappers among them, so `a run` grows with
   what a page keeps alive. The engine starts a run only when an object is
-  made past the threshold, which is half again the heap the last run left.
+  made past the threshold, which is half again the heap the last run left,
+  held below the memory limit (patch 0048: never above a sixteenth under
+  it, never within a 256th of it, and a sixty-fourth above what the run
+  left when its live part is inside that margin). The line says how many
+  runs waited for a threshold the limit lowered, and how many allocations
+  the limit refused: on a page that is truly full, the second rises while
+  the runs stop.
 - **The walks whose size the page sets**: the intersection steps and the
   observed targets they walked (every target of every observer, at each
   step where anything moved); the timer list (kept in due order, so each

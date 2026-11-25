@@ -95,6 +95,7 @@ typedef struct {
     uint64_t walked, freed, walked_most;
     uint64_t bytes_before, bytes_after, threshold;
     uint64_t ticks, ticks_most;
+    uint64_t runs_by_limit, refused_by_limit;
 } yonder_tr_collector_t;
 
 typedef struct {

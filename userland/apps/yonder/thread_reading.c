@@ -429,7 +429,7 @@ void yonder_tr_collector_line(const yonder_tr_t *t, const yonder_tr_collector_t 
     const yonder_tr_collector_t *a = &t->collector_from, *b = now_counts;
     if (b->runs < a->runs || b->runs_by_allocation < a->runs_by_allocation || b->walked < a->walked ||
         b->freed < a->freed || b->bytes_before < a->bytes_before || b->bytes_after < a->bytes_after ||
-        b->ticks < a->ticks) {
+        b->ticks < a->ticks || b->runs_by_limit < a->runs_by_limit || b->refused_by_limit < a->refused_by_limit) {
         a = &kNone;
         put(&o, "counted from the script's start, the reading's being gone: ");
     }
@@ -440,7 +440,9 @@ void yonder_tr_collector_line(const yonder_tr_t *t, const yonder_tr_collector_t 
         put_u(&o, runs);
         put(&o, runs == 1 ? " run (" : " runs (");
         put_u(&o, b->runs_by_allocation - a->runs_by_allocation);
-        put(&o, " asked by the allocation threshold) in ");
+        put(&o, " asked by the allocation threshold, ");
+        put_u(&o, b->runs_by_limit - a->runs_by_limit);
+        put(&o, " of them at a threshold the limit lowered) in ");
         put_ms(&o, b->ticks - a->ticks, per_ms);
         put(&o, " ms, each ");
         put_ms(&o, (b->ticks - a->ticks) / runs, per_ms);
@@ -462,7 +464,9 @@ void yonder_tr_collector_line(const yonder_tr_t *t, const yonder_tr_collector_t 
     put_mib(&o, heap);
     put(&o, " MiB of ");
     put_mib(&o, limit);
-    put(&o, " MiB; since the script began, the longest run ");
+    put(&o, " MiB, ");
+    put_u(&o, b->refused_by_limit - a->refused_by_limit);
+    put(&o, " allocations refused at the limit; since the script began, the longest run ");
     put_ms(&o, b->ticks_most, per_ms);
     put(&o, " ms, the most walked in one ");
     put_u(&o, b->walked_most);

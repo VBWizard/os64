@@ -181,3 +181,93 @@ static void collector_cases(void)
           c.runs > before.runs, "collector: its runs are the ledger's collector frames, one for one");
     os64_js_destroy(runtime);
 }
+
+/* THE COLLECTOR UNDER THE LIMIT (patch 0048). With the heap's live part at
+ * seven tenths of the limit, half as much again is past it: upstream's
+ * threshold would wait for a heap the limit refuses, and a page making
+ * garbage there would fail with the collector never asked. Here:
+ * - garbage made with the live part at seven tenths, then at most a 128th
+ *   of the limit from it, is collected and nothing is refused;
+ * - a heap that is all live, from inside the margin (a sixteenth of the
+ *   limit) to its refusal, is walked by at most 8 runs.
+ * Each phase is a runtime of its own at the fixture's 16 MiB. */
+#include "os64/fmt.h"
+static os64_js_runtime_t *limit_runtime(void)
+{
+    os64_js_config_t config = fixture_config();
+    config.limits.execution_ms = 60000;
+    os64_js_runtime_t *runtime = NULL;
+    os64_js_outcome_t outcome;
+    if (os64_js_create(&config, OS64_JS_ABI_ID, &runtime, &outcome) != OS64_JS_OK) return NULL;
+    return runtime;
+}
+
+/* Live objects, each with a string of about a kilobyte, until the heap holds
+ * `share` thousandths of the engine's limit: in rounds that each go half the
+ * way left at no less than 4 KiB an object, so none overshoots. */
+static bool limit_fill(os64_js_runtime_t *runtime, uint64_t limit, unsigned share)
+{
+    char source[256];
+    size_t target = (size_t)(limit * share / 1000);
+    for (size_t heap = os64_js_heap_bytes(runtime); heap < target; heap = os64_js_heap_bytes(runtime)) {
+        size_t count = (target - heap) / 2 / 4096 + 1;
+        os64_snprintf(source, sizeof(source),
+                      "globalThis.live=globalThis.live||[];for(let i=0;i<%lu;i++)live.push({s:'x'.repeat(1000)+i});1",
+                      (unsigned long)count);
+        os64_js_outcome_t outcome;
+        if (execute_fixture(runtime, source, &outcome) != OS64_JS_OK) return false;
+    }
+    return true;
+}
+
+static const char kLimitGarbage[] =
+    "for(let i=0;i<40000;i++){const a={s:'y'.repeat(1000)+i},b={a};a.b=b}1";
+
+static void collector_limit_cases(void)
+{
+    os64_js_outcome_t outcome;
+    os64_js_runtime_t *runtime = limit_runtime();
+    if (runtime == NULL) {
+        check(0, "limit: the fixture runtime is made");
+        return;
+    }
+    os64_js_collector_t c;
+    os64_js_collector(runtime, &c);
+    uint64_t limit = c.limit;
+    check(limit > 0 && limit <= fixture_config().limits.memory_bytes, "limit: the engine's limit is said");
+    check(limit_fill(runtime, limit, 700), "limit: the live part filled to seven tenths");
+    check(execute_fixture(runtime, kLimitGarbage, &outcome) == OS64_JS_OK,
+          "limit: garbage beside a live part of seven tenths is collected, nothing refused");
+    os64_js_collector(runtime, &c);
+    check(c.runs_by_limit >= 1 && c.refused_by_limit == 0,
+          "limit: the runs there waited for a threshold the limit lowered");
+    check(c.threshold < limit, "limit: the next threshold is below the limit");
+    os64_js_destroy(runtime);
+
+    runtime = limit_runtime();
+    if (runtime == NULL) {
+        check(0, "limit: the second runtime is made");
+        return;
+    }
+    check(limit_fill(runtime, limit, 992), "limit: the live part filled to within a 128th of the limit");
+    check(execute_fixture(runtime, kLimitGarbage, &outcome) == OS64_JS_OK,
+          "limit: garbage in the last stretch before the limit is collected");
+    os64_js_collector(runtime, &c);
+    check(c.refused_by_limit == 0 && c.threshold < limit, "limit: nothing refused, and the threshold below the limit");
+    os64_js_destroy(runtime);
+
+    runtime = limit_runtime();
+    if (runtime == NULL) {
+        check(0, "limit: the third runtime is made");
+        return;
+    }
+    check(limit_fill(runtime, limit, 950), "limit: the live part filled inside the margin");
+    os64_js_collector_t before;
+    os64_js_collector(runtime, &before);
+    check(execute_fixture(runtime, "for(;;)live.push({s:'z'.repeat(1000)+live.length})", &outcome) != OS64_JS_OK,
+          "limit: a heap that is all live is refused at last");
+    os64_js_collector(runtime, &c);
+    check(c.refused_by_limit > before.refused_by_limit, "limit: the refusal is counted");
+    check(c.runs - before.runs <= 8, "limit: at most 8 runs walk an all-live heap from inside the margin to its refusal");
+    os64_js_destroy(runtime);
+}

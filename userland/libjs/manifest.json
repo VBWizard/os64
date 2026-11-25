@@ -313,6 +313,11 @@
       "path": "patches/0047-collector-counts.patch",
       "sha256": "098c30e651675984e9675baab9284479b035bd68f1aa95a9cafb814c61eee373",
       "reason": "Count each cycle collection (runs by trigger, objects walked and freed, heap bytes before and after, the next threshold) and time it with a host clock, readable without the ledger; one addition per object walked."
+    },
+    {
+      "path": "patches/0048-collect-under-limit.patch",
+      "sha256": "056154486d0bb2bdba63e50fa36bd0bcfce805b9f165f1f3f64f240dec531c35",
+      "reason": "Hold the collector's next threshold below the memory limit (at most a sixteenth under it; where that lowers it, at least a sixty-fourth above what the run left; never within a 256th of it), and make a limit-scheduled run wait for a 256th of growth, so the collector runs while there is room and an all-live heap reaches the limit in a bounded count of runs; counts the limit-lowered runs and states the limit."
     }
   ],
   "configuration_scope": "Atomics-disabled, stack-checked target engine and complete standalone embedding interface; slice review/merge and runner integration are tracked in JAVASCRIPT_TASKS.md"
