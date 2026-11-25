@@ -437,6 +437,13 @@ was shown, or since its record was last written on asking:
   the counts since the last reading that reached its file: one that did
   not keeps its reading in
   the record, lets the counts run on, and says so on the status line.
+- **With `ledger = profile`, each reading also writes `script profile
+  reading N`**: the sampled functions of that reading's span, in the
+  `script profile` line's form (the costliest twenty, each where it is
+  defined and what called it, its milliseconds and samples), so a quiet
+  minute is read apart from the load before it. The first reading's span
+  begins with the page's script and says `since the page's script began`;
+  `script profile` itself is the span since the last reading.
 
 ### The load's timeline (load_timeline.h)
 

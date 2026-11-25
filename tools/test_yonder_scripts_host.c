@@ -12676,6 +12676,31 @@ static void ledger_case(void)
               "ledger: the record's ledger lines are written");
     }
     loop_drop();
+    // With the profile on, a reading writes the functions its span sampled:
+    // the first counts from the page's script's start and says so; one after
+    // the ledger and the counts start again is the span alone.
+    s_ledger = YONDER_LEDGER_PROFILE;
+    loop_page("<p id=out></p><script>function spin(){var x=0;for(var i=0;i<2000000;i++)x+=i%7;return x}"
+              "document.getElementById('out').textContent=''+spin();</script>");
+    settled = loop_settle();
+    host = g.page.scripts != NULL ? g.page.scripts : g.stream.scripts;
+    p = page_of_host(host);
+    check(settled && p != NULL && p->diag != NULL && yonder_scripts_ledger(host) != NULL,
+          "ledger profile: the page's runtime keeps a ledger");
+    if (p != NULL && p->diag != NULL) {
+        diag_profile_reading(p, 1);
+        const char *first = yonder_diag_fact_value(p->diag, "script profile reading 1");
+        check(first != NULL && !strncmp(first, "since the page's script began: ", 31) && strstr(first, " samples") != NULL,
+              "ledger profile: the first reading's profile counts from the script's start");
+        cost_reset();
+        yonder_scripts_ledger_reset(host);
+        diag_profile_reading(p, 2);
+        const char *second = yonder_diag_fact_value(p->diag, "script profile reading 2");
+        check(second != NULL && !strncmp(second, "0 samples", 9),
+              "ledger profile: a reading after the reset is its own span, here with nothing sampled");
+        printf("  profile reading 1: %.200s\n", first ? first : "(none)");
+    }
+    loop_drop();
     s_ledger = YONDER_LEDGER_OFF;
     os64_dom_name_host_functions(false);
     loop_page("<p id=out>off</p><script>document.getElementById('out').textContent='ran';</script>");
