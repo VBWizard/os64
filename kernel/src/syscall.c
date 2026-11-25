@@ -2091,9 +2091,9 @@ static uint64_t syscall_read_pinned(task_t *task, const handle_t *h,
 			// table handle_close_all had already swept, and a conn that is
 			// no longer the listener's and never closed by anyone stays
 			// listed with its buffers and its port forever (Codex #101
-			// rd6). A reservation is what teardown cancels, and a commit
-			// that lands after teardown passed the slot closes the handle
-			// itself. A full table is also discovered before the handshake
+			// rd6). A reservation is its owner's alone (teardown's sweep
+			// passes it by), and a commit that lands after teardown began
+			// closes the handle itself. A full table is also discovered before the handshake
 			// is spent, which the alloc-after could not do.
 			int ch = handle_reserve(task);
 			if (ch < 0)
@@ -2121,9 +2121,9 @@ static uint64_t syscall_read_pinned(task_t *task, const handle_t *h,
 			                      .peer_port = conn->peer_port, ._reserved = 0 };
 			if (!handle_commit_reserved(task, ch, HANDLE_NET_TCP, conn))
 			{
-				// Teardown cancelled the reservation first: the task is
-				// dying, and this conn has no owner but us. Hang it up
-				// cleanly (the peer gets a FIN) rather than strand it.
+				// Not this call's reservation any more (handle.h: commit):
+				// this conn has no owner but us. Hang it up cleanly (the
+				// peer gets a FIN) rather than strand it.
 				tcp_conn_release(conn);
 				return SYSCALL_RESULT_INVALID;
 			}
@@ -2634,8 +2634,9 @@ static uint64_t syscall_pty_create_common(uint32_t cols, uint32_t rows, uint8_t 
 	pty_master_hold(slave);
 	if (!handle_commit_reserved(task, mh, HANDLE_PTY_MASTER, slave))
 	{
-		// Teardown cancelled the slot first: release the master's ownership
-		// and then our hold, which permits the never-seated slave's burial.
+		// Not this call's reservation any more (handle.h: commit): release
+		// the master's ownership and then our hold, which permits the
+		// never-seated slave's burial.
 		pty_master_close(slave);
 		pty_master_unhold(slave);
 		return SYSCALL_RESULT_INVALID;
@@ -3030,7 +3031,7 @@ static uint64_t syscall_net_announce(uint64_t arg0, uint64_t arg1, uint64_t arg2
 	}
 	if (!handle_commit_reserved(task, h, HANDLE_NET_LISTENER, l))
 	{
-		tcp_listener_close(l);   // teardown cancelled the slot first: the task is dying
+		tcp_listener_close(l);   // not this call's reservation any more (handle.h: commit)
 		return SYSCALL_RESULT_INVALID;
 	}
 	printd(DEBUG_NET, "net_announce: task %s <- tcp!%s!%u = handle %d\n",
@@ -5270,19 +5271,30 @@ static uint64_t syscall_thread(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		return SYSCALL_RESULT_BAD_USER_DATA;
 	}
 
-	thread_join_t *j = thread_join_create(task, arg0, arg1, arg2);
-	if (j == NULL)
-		return SYSCALL_RESULT_INVALID;
-
-	int h = handle_alloc(task, HANDLE_THREAD, j);
+	// THE HANDLE BEFORE THE THREAD: thread_join_create submits the thread to
+	// the scheduler, so a handle asked for afterwards could be refused with
+	// the thread already running, and a caller told "no thread" would have
+	// one. Reserved first, a refusal creates nothing; a create that fails
+	// gives the reservation back; an error from this call means no thread.
+	int h = handle_reserve(task);
 	if (h < 0)
 	{
-		// Out of handle slots. The thread is ALREADY RUNNING — it was
-		// submitted to the scheduler inside thread_join_create — so this
-		// drops the handle's reference and lets it run detached rather
-		// than pretending it never started.
-		printd(DEBUG_THREAD, "syscall_thread: %s out of handles; thread 0x%08lx runs detached\n",
-		       task->exename, j->threadID);
+		printd(DEBUG_THREAD, "syscall_thread: %s out of handles; no thread made\n", task->exename);
+		return SYSCALL_RESULT_INVALID;
+	}
+	thread_join_t *j = thread_join_create(task, arg0, arg1, arg2);
+	if (j == NULL)
+	{
+		(void)handle_cancel_reserved(task, h);
+		return SYSCALL_RESULT_INVALID;
+	}
+	if (!handle_commit_reserved(task, h, HANDLE_THREAD, j))
+	{
+		// Cannot happen: commit refuses only a slot that is not this call's
+		// reservation (handle.h), and nothing but this call writes it — a
+		// close never writes a reserved slot, and teardown's sweep passes
+		// it by. Were it ever to, the thread already runs: detached, with
+		// no handle to answer for it.
 		thread_join_close(j);
 		return SYSCALL_RESULT_INVALID;
 	}

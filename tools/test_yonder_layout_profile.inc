@@ -1050,18 +1050,28 @@ static void thread_reading_cases(void)
           "thread reading: the page arrives, with its record");
     cost_reset();
     check(s_tr.on,"thread reading: on with page files");
+    check(s_tr_per_ms!=0 && s_tr.slow_ticks==TR_SLOW_TURN_MS*s_tr_per_ms,
+          "thread reading: a turn of a tenth of a second is slow");
+    // The host's clock is the fixture's, so every turn is made slow here.
+    yonder_tr_slow(&s_tr,1,0);
     for(int i=0;i<10;i++){
         now_ms+=100;
+        tr_call(YONDER_TR_DISPATCH);
         tr_call(YONDER_TR_OWED);
         script_turn();
         tr_call(YONDER_TR_INTERSECTIONS);
         intersections_turn();
         tr_call(YONDER_TR_PAINT);
+        tr_call(YONDER_TR_WAIT);
     }
     diag_paint_reading(&g.page,1);
     const char *steps=yonder_diag_fact_value(g.page.diag,"thread reading 1");
     const char *timers=yonder_diag_fact_value(g.page.diag,"timers reading 1");
     const char *collector=yonder_diag_fact_value(g.page.diag,"collector reading 1");
+    const char *slow=yonder_diag_fact_value(g.page.diag,"slow turns reading 1");
+    check(slow && strncmp(slow,"10 of 10 turns took ",20)==0 && strstr(slow,"; the longest: (1) ") &&
+          strstr(slow,"; its longest task a timer set by arm at the page:1:"),
+          "thread reading: the slow turns, a timer's by the function that set it");
     // The host's clock is the fixture's, so the times are not the case;
     // the turns and the counts are.
     check(steps && strstr(steps,"; scripts ") && strstr(steps," ms in 10 turns (") &&
@@ -1075,10 +1085,11 @@ static void thread_reading_cases(void)
           strstr(collector,"; the script heap now ") && strstr(collector," 0 allocations refused at the limit; "),
           "thread reading: the collector's runs over the reading");
     const char *walks=yonder_diag_fact_value(g.page.diag,"walks reading 1");
-    check(walks && strstr(walks," observed targets, 1 a step, the most 1; the timer list: 1 live now, 9 arms walked ") &&
+    check(walks && strstr(walks," observed targets, 1 a step, the most 1; the every-turn checks visited ") &&
+          strstr(walks,"; the timer list: 1 live now, 9 arms walked ") &&
           strstr(walks,"; the binding holds "),"thread reading: the observer's steps and the interval's ten arms");
-    printf("  thread: %s\n  timers: %s\n  collector: %s\n  walks: %s\n",steps?steps:"(none)",timers?timers:"(none)",
-           collector?collector:"(none)",walks?walks:"(none)");
+    printf("  thread: %s\n  slow: %s\n  timers: %s\n  collector: %s\n  walks: %s\n",steps?steps:"(none)",
+           slow?slow:"(none)",timers?timers:"(none)",collector?collector:"(none)",walks?walks:"(none)");
     cost_reset();
     diag_paint_reading(&g.page,2);
     timers=yonder_diag_fact_value(g.page.diag,"timers reading 2");

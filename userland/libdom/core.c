@@ -414,6 +414,26 @@ void d_unretain(os64_dom_t *dom, JSContext *ctx, DValue *entry)
     d_free(dom, entry);
 }
 
+bool d_turn_list_room(os64_dom_t *dom, DValue ***list, size_t n, size_t *cap, size_t need)
+{
+    if (need <= *cap) return true;
+    size_t grown = *cap ? *cap : 16;
+    while (grown < need && grown <= SIZE_MAX / 2) grown *= 2;
+    DValue **bigger = grown >= need && grown <= SIZE_MAX / sizeof(*bigger) ? d_alloc(dom, grown * sizeof(*bigger)) : NULL;
+    if (bigger == NULL) return false;
+    if (n != 0) os64_memcpy(bigger, *list, n * sizeof(*bigger));
+    d_free(dom, *list);
+    *list = bigger;
+    *cap = grown;
+    return true;
+}
+
+void d_images_moved(os64_dom_t *dom)
+{
+    if (dom->cluster) dom->cluster->image_serial++;
+    else dom->image_serial++;
+}
+
 void d_more_free(os64_dom_t *dom, DValue *entry)
 {
     d_free(dom, entry->more);
@@ -999,18 +1019,20 @@ static int install_binding(os64_dom_t *dom, JSContext *ctx)
     os64_html_document_t *document = dom->document;
     os64_dom_cluster_t *cluster = dom->cluster;
     const JSClassDef anchor_definition = {.class_name = "DOMBinding", .finalizer = clear_opaque};
-    const JSClassDef node_definition = {.class_name = "Node", .finalizer = clear_opaque, .exotic = &d_node_exotic};
+    const JSClassDef node_definition = {.class_name = "Node", .finalizer = clear_opaque, .gc_mark = d_node_mark,
+                                        .exotic = &d_node_exotic};
     const JSClassDef style_definition = {
-        .class_name = "CSSStyleDeclaration", .finalizer = clear_opaque, .exotic = &d_style_exotic
+        .class_name = "CSSStyleDeclaration", .finalizer = d_view_class_finalize, .gc_mark = d_view_class_mark, .exotic = &d_style_exotic
     };
     const JSClassDef token_definition = {
-        .class_name = "DOMTokenList", .finalizer = clear_opaque, .exotic = &d_token_exotic
+        .class_name = "DOMTokenList", .finalizer = d_view_class_finalize, .gc_mark = d_view_class_mark, .exotic = &d_token_exotic
     };
     const JSClassDef map_definition = {
-        .class_name = "DOMStringMap", .finalizer = clear_opaque, .exotic = &d_map_exotic
+        .class_name = "DOMStringMap", .finalizer = d_view_class_finalize, .gc_mark = d_view_class_mark, .exotic = &d_map_exotic
     };
     const JSClassDef collection_definition = {
-        .class_name = "HTMLCollection", .finalizer = clear_opaque, .exotic = &d_collection_exotic
+        .class_name = "HTMLCollection", .finalizer = d_query_finalize, .gc_mark = d_query_mark,
+        .exotic = &d_collection_exotic
     };
     if ((!JS_IsRegisteredClass(dom->engine, dom->anchor_class) && JS_NewClass(dom->engine, dom->anchor_class, &anchor_definition) < 0) ||
         (!JS_IsRegisteredClass(dom->engine, dom->node_class) && JS_NewClass(dom->engine, dom->node_class, &node_definition) < 0) ||
@@ -1526,16 +1548,25 @@ static void binding_drain(os64_dom_t *dom)
     d_web_animations_drain(dom);
     d_pointer_drain(dom);
     d_observers_drain(dom);
+    d_custom_drain(dom);
     d_intersections_drain(dom);
     d_resizes_drain(dom);
     d_walkers_drain(dom);
+    d_ranges_drain(dom);
     d_performance_drain(dom);
     /* The media sessions are closed with the host, as the requests below. */
     d_media_elements_drain(dom);
     d_media_session_drain(dom);
     /* The requests out are cancelled with the host and forgotten. */
     d_fetch_drain(dom);
+    /* The views' and collections' counts on their elements' wrappers go
+     * here, not in their finalizers, which no teardown waits for. */
+    for (DQuery *query = dom->queries; query != NULL; query = query->next) {
+        JS_FreeValueRT(dom->engine, query->holder);
+        query->holder = JS_UNDEFINED;
+    }
     for (DValue *entry = dom->values; entry != NULL; entry = entry->next) {
+        if (!d_node_wrapper(entry)) d_view_release(dom->engine, entry);
         JS_FreeValueRT(dom->engine, entry->value);
         entry->value = JS_UNDEFINED;
     }
@@ -1589,6 +1620,9 @@ static void binding_free(os64_dom_t *dom)
         d_free(dom, entry);
         entry = next;
     }
+    d_free(dom, dom->images);
+    d_free(dom, dom->canvases);
+    d_free(dom, dom->sweeps);
     if (dom->cluster) dom->cluster->bytes -= sizeof(*dom);
     else os64_free(dom);
 }
@@ -1662,6 +1696,11 @@ size_t os64_dom_registry_count(const os64_dom_t *dom)
     return dom != NULL ? dom->retained + dom->listeners_held + dom->timers_held + dom->requests_held +
         dom->pending_held + dom->messages_held + dom->idle_live + dom->animation_count + dom->observers_held +
         dom->intersections_held + dom->resizes_held : 0;
+}
+
+uint64_t os64_dom_checks_visited(const os64_dom_t *dom)
+{
+    return dom != NULL ? dom->checks_visited : 0;
 }
 
 #include "retention.inc"

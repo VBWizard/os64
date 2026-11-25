@@ -896,8 +896,9 @@ of the same shape cycles through its seven frames in the guest.
 
 **Sixteen handles were not enough.** The ticker's pipe and thread took
 yonder to fourteen of the kernel's sixteen before its first fetch, and the
-page failed with "out of handles or ports"; the table is 64 now
-(`OS64_TASK_HANDLES`, `abi/include/os64/file.h`).
+page failed with "out of handles or ports"; the table was made 64
+(`OS64_TASK_HANDLES`, `abi/include/os64/file.h`), and it has since grown in
+blocks past that (`kernel/include/handle_blocks.h`).
 
 ## Booked, with their triggers
 

@@ -83,7 +83,10 @@ typedef struct DReaction {
 
 typedef struct DCustom {
     struct DCustom *hash_next;
+    /* Held, with its wrapper (HOLDERS): a pending reaction speaks for the
+     * page. */
     const os64_html_node_t *element;
+    JSValue wrapper;
     DReaction *first, *last;
     /* How many element queues name it, and whether a construction stack
      * does: it is freed when neither does and nothing waits. */
@@ -236,6 +239,7 @@ static DCustom *record_of(os64_dom_t *dom, const os64_html_node_t *element, bool
     os64_memset(r, 0, sizeof(*r));
     r->element = element;
     os64_html_hold(dom->document, element);
+    r->wrapper = d_holder_take(dom, element);
     r->hash_next = s->agent->records[at];
     s->agent->records[at] = r;
     return r;
@@ -257,7 +261,20 @@ static void record_settle(os64_dom_t *dom, DCustom *r)
     while (*link != r) link = &(*link)->hash_next;
     *link = r->hash_next;
     os64_html_release(dom->document, r->element);
+    JS_FreeValueRT(dom->engine, r->wrapper);
     d_free(dom, r);
+}
+
+/* The records' wrappers go at drain: the records outlive the engine. */
+void d_custom_drain(os64_dom_t *dom)
+{
+    struct DCustomAgent *agent = dom->custom != NULL ? dom->custom->agent : NULL;
+    if (agent == NULL) return;
+    for (size_t i = 0; i < D_CUSTOM_BUCKETS; i++)
+        for (DCustom *r = agent->records[i]; r != NULL; r = r->hash_next) {
+            JS_FreeValueRT(dom->engine, r->wrapper);
+            r->wrapper = JS_UNDEFINED;
+        }
 }
 
 static bool queue_push(os64_dom_t *dom, DElementQueue *q, DCustom *r)

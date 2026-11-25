@@ -69,7 +69,6 @@ struct DClicking {
     const os64_html_node_t *node;
     const struct DClicking *next;
 };
-typedef struct DScript DScript;
 typedef struct DRequest DRequest;
 typedef struct DClone DClone;
 typedef struct DMessage DMessage;
@@ -212,6 +211,11 @@ typedef struct DValueMore {
     canvas_gradient_t *canvas_gradient;
     struct DPath2D *canvas_path2d;
     bool canvas_reset_pending;
+    /* On its binding's `canvases` (d_canvas_touch). */
+    bool canvas_listed;
+    /* Taken off `canvases` by a visit that found it out of the window's
+     * tree; an insertion that brings it back touches it (canvas.c). */
+    bool canvas_away;
     DQuery *children, *images, *forms, *links, *scripts, *elements;
     /* A select's options and selectedOptions, each made once ([SameObject]). */
     DQuery *options, *selected_options;
@@ -271,6 +275,15 @@ struct DValue {
     /* A DOMTokenList's own entry: the attribute it is over (D_TOKENS_*). */
     uint8_t tokens;
     bool image_reported;
+    /* On its binding's `sweeps`: a listener of its was removed under a
+     * dispatch and waits to be unlinked (event.c). */
+    bool sweep_owed;
+    /* A node wrapper's record whose object is gone, waiting to be swept: the
+     * door (d_find) answers as if the node had no wrapper. */
+    bool dead;
+    /* An element's record that some Attr has been attached to (attr.c), so
+     * its mark looks for them; never cleared. */
+    bool attrs_attached;
     /* A plain target's entry IN THE OBJECT (d_event_target_init): this
      * record is the first member of the object's own state, outside the
      * registry; `value` is the object itself, not a reference; its
@@ -280,11 +293,15 @@ struct DValue {
      * AbortSignal's GC clause, abort.c); nothing else reads it. */
     bool engine_held;
     /* Plain engine-held targets use the listener hook; node wrappers use the
-     * image generation. Sharing the slot keeps completion polling allocation
-     * free without growing every node's wrapper. */
+     * image generation; a view (a record with no node, kept by an element's
+     * record: d_view_keep) and an attached Attr use `holder`, one count on
+     * that element's wrapper object, which the view's class mark reports.
+     * Sharing the slot keeps completion polling allocation free without
+     * growing every node's wrapper. */
     union {
         void (*listeners_changed)(JSRuntime *rt, DValue *entry);
         uint64_t image_generation;
+        void *holder;
     };
 };
 /* DValue.document_type: the window's document and createHTMLDocument's are
@@ -295,11 +312,26 @@ struct DValue {
  * one is an XML document made for the SVG namespace, which differs from
  * the rest only in its content type (image/svg+xml). */
 enum { D_DOCUMENT_HTML = 0, D_DOCUMENT_XHTML, D_DOCUMENT_XML, D_DOCUMENT_SVG };
+/* A live collection's record. A collection is held one of two ways:
+ * - KEPT: a node's record keeps it ([SameObject]: childNodes, children, a
+ *   form's elements), a view of that node (VIEWS): its registry value
+ *   (`entry`) is the record's count, which d_node_mark reports, and it
+ *   holds the keeper's wrapper (`holder`).
+ * - SCRIPT'S: made fresh for each call (getElementsByTagName and its
+ *   kin), so the object alone holds it. It holds its root's wrapper
+ *   (`holder`), since the nodes it hands back are of that tree. Its
+ *   finalizer marks it `dead`, and d_queries_sweep frees it outside any
+ *   collection, because releasing its nodes may free them (libhtml
+ *   collects at a release).
+ * The class's mark reports `holder` and its finalizer releases it. Both
+ * kinds are on dom->queries until freed. */
 struct DQuery {
     os64_dom_t *dom;
     const os64_html_node_t *root, *owner;
     DQuery *next;
     DValue *entry;
+    JSValue holder;
+    bool dead;
     char *name, *folded, *named;
     /* The root's node document was an HTML document when the query was
      * made: an HTML element's name is then matched against `folded`. */
@@ -318,8 +350,9 @@ struct DQuery {
     DQuery *radio_next;
 };
 /* One addEventListener registration, or a target's on<type> handler slot.
- * The callback is a C-held engine value, drained with the registry. A
- * removed record keeps its place until no dispatch can be walking it. */
+ * Its callback is the target object's (`engine`) or the registry's; drain
+ * releases both kinds. A removed record keeps its place until no dispatch
+ * can be walking it. */
 struct DListener {
     DListener *next;
     os64_dom_t *owner, *callback_owner;
@@ -334,9 +367,12 @@ struct DListener {
     int kind;
     uint8_t handler;
     bool capture, once, removed;
-    /* On a collectable plain target: its callback is the target's to trace
-     * and free, not one of the registry's values. */
-    bool engine;
+    /* `engine`: the callback is the target object's, traced by its class's
+     * mark (a node wrapper's, a plain target's) and freed with it, and not
+     * one of the registry's values.
+     * `uncounted`: on a plain target the host never dispatches to, so it
+     * is left out of listen_counts. */
+    bool engine, uncounted;
     /* The script the callback is (d_callback_script); a handler compiled
      * from its attribute is the page's. */
     uint32_t script;
@@ -370,10 +406,10 @@ struct DTimer {
     int argc;
     JSValue *argv;
 };
-struct DScript {
-    DScript *next;
-    const os64_html_node_t *node;
-};
+/* The binding's bits on a node (os64_html_node_t.binding). STARTED: a
+ * script's ALREADY STARTED, which belongs to the node's identity, so it
+ * lives on the node and goes with it. */
+enum { D_BINDING_STARTED = 1 };
 typedef struct {
     os64_dom_navigation_kind_t kind;
     const os64_html_node_t *node, *submitter;
@@ -437,6 +473,11 @@ struct os64_dom_cluster {
     size_t provider_borrows;
     uint64_t effect_generation, animation_serial;
     uint64_t opaque_origin_serial;
+    /* Moves when an image element's answer may have changed in a way no
+     * image provider sees (d_images_moved). */
+    uint64_t image_serial;
+    /* Canvases with DValueMore.canvas_away set, in every member. */
+    size_t canvases_away;
     bool sweep_pending;
     bool poisoned, drained;
     bool timer_settings, listener_settings, scheduled_settings, handler_settings, observer_settings, custom_settings, synchronous_settings;
@@ -469,6 +510,16 @@ struct os64_dom {
     bool mutation_installed;
     size_t canvas_bytes;
     os64_dom_image_provider_t image_provider;
+    /* The image check's quiet key: what image_quiet_key (canvas_image.c) answered before
+     * the last pass that found nothing owed, which leaves the next pass
+     * nothing to find while the key stays the same; 0, none. */
+    uint64_t image_quiet;
+    /* The standalone binding's image_serial and canvases_away (a cluster
+     * keeps its own). */
+    uint64_t image_serial;
+    size_t canvases_away;
+    /* Records the loop's every-turn checks visited (os64_dom_checks_visited). */
+    uint64_t checks_visited;
     os64_dom_media_provider_t media_provider;
     JSClassID canvas_class, gradient_class, metrics_class, path2d_class;
     os64_dom_text_provider_t canvas_text;
@@ -556,6 +607,8 @@ struct os64_dom {
     /* Set while the map's own ordinary property is asked of the engine,
      * which the map's named properties then do not answer (attr.c). */
     bool attr_ordinary;
+    /* `values`: every record the binding keeps, the list any walk over all
+     * wrappers takes; drain releases their values and free frees them. */
     DValue *values, *anchor, *index_guard, *window, *location, *history, *function_ctor;
     struct DLocationExotic *location_exotic;
     struct DWindowProxy *window_proxy_state;
@@ -571,7 +624,11 @@ struct os64_dom {
     DValue *prototypes[D_PROTO_COUNT];
     DValue *buckets[D_BUCKETS];
     DQuery *queries;
-    /* Listener and timer callbacks are the registry's other two lists. */
+    /* Some script's collection on `queries` is dead (d_queries_sweep). */
+    bool queries_dead;
+    /* The listener callbacks the registry holds (not a node wrapper's or a
+     * plain target's, whose objects own theirs: DListener.engine) and the
+     * timer callbacks: the registry's other two lists. */
     size_t listeners_held, timers_held;
     uint32_t listen_counts[D_EVENT_COUNT];
     os64_dom_handler_mask_t attribute_mask;
@@ -591,6 +648,27 @@ struct os64_dom {
     DValue *event_target_prototype, *window_prototype;
     bool sweep_pending;
     DListener *invoking;
+    /* THE TURN'S OWN LISTS, so a check the loop makes every turn, or after
+     * every dispatch, walks what it may find and not every record on
+     * `values`:
+     * - `images`: the records of image elements' wrappers, in the order
+     *   they were attached (wrapper_attach), which is their order on
+     *   `values` reversed. Room is made as the record is (wrapper_prepare),
+     *   so attaching never fails;
+     * - `canvases`: the records of canvas elements with a 2D context that
+     *   may have damage or a reset to tell (d_canvas_touch), each once
+     *   (DValueMore.canvas_listed), until a visit finds one with neither
+     *   or out of the window's tree (canvas_away, until an insertion
+     *   brings it back). Room for every context, `contexts`, is made as
+     *   each is (get_context), so a touch never fails;
+     * - `sweeps`: records with a listener removed under a dispatch
+     *   (DValue.sweep_owed), each once. A list that could not grow is given
+     *   up (`sweeps_all`) and the sweep takes `values`, as it did before.
+     * Each holds records on this binding's `values` and nothing else, and
+     * is freed with them. */
+    DValue **images, **canvases, **sweeps;
+    size_t nimages, images_cap, ncanvases, canvases_cap, contexts, nsweeps, sweeps_cap;
+    bool sweeps_all;
     /* Listeners a host's dispatch has called, ever (os64_dom_listener_calls). */
     uint64_t listener_calls;
     /* The import map os64_dom_import_map is parsing, while it does
@@ -616,7 +694,6 @@ struct os64_dom {
      * chains belong to the nodes' creation binding so adoption cannot
      * bypass an active flag. */
     const struct DClicking *clicking, *submitting;
-    DScript *scripts[64];
     char *url;
     DNavigation navigation;
     os64_js_outcome_t report;
@@ -807,6 +884,7 @@ struct os64_dom {
     struct DWaAnimation *wa_first, *wa_last;
     size_t wa_count;
     struct DWaEffect *wa_fx_first;      /* every KeyframeEffect, for the drain */
+    struct DWaEffect *wa_fx_dead;       /* those whose objects are gone (d_web_animations_sweep) */
     uint64_t wa_serial, wa_generation, wa_last_step;
     uint64_t wa_borrowed_floor; /* oldest cluster epoch still borrowed by this host */
     double wa_time, wa_face;
@@ -1026,7 +1104,75 @@ const os64_html_node_t *d_node(os64_dom_t *dom, JSContext *ctx, JSValueConst val
 os64_dom_t *d_owner(os64_dom_t *, const os64_html_node_t *);
 os64_dom_t *d_creation_owner(os64_dom_t *, const os64_html_node_t *);
 bool d_same_cluster(const os64_dom_t *, const os64_dom_t *);
+/* The record of the node's wrapper, or NULL when it has none (a dead
+ * record counts as none). */
 DValue *d_find(os64_dom_t *dom, const os64_html_node_t *node);
+/* Room for `need` records on one of a binding's turn lists (os64_dom's
+ * `images`, `canvases`, `sweeps`), growing it; false, the list as it was,
+ * when it cannot grow. */
+bool d_turn_list_room(os64_dom_t *dom, DValue ***list, size_t n, size_t *cap, size_t need);
+/* A canvas element's record whose context a method has used, whose size
+ * changed, or which came back into the window's tree: on its binding's
+ * `canvases` until a damage visit finds nothing to tell or finds it out of
+ * the tree (canvas.c). Nothing for a canvas with no context. */
+void d_canvas_touch(DValue *e);
+/* A 2D context method: the receiver checked, then `body`, then the canvas
+ * touched. The touch comes after the body because converting an argument
+ * runs page code, which can force a layout whose damage visit takes a
+ * canvas with nothing yet to tell off the list before the drawing. */
+typedef JSValue (*d_canvas_body)(JSContext *ctx, os64_dom_t *dom, DValue *e, int argc, JSValueConst *argv,
+                                 int magic);
+JSValue d_canvas_method(JSContext *ctx, JSValueConst self, JSValue *data, d_canvas_body body, int argc,
+                        JSValueConst *argv, int magic);
+/* An image element's answer may have changed where no image provider can
+ * see it: a wrapper made for one, its source changed, or a node moved from
+ * one document to another (by adoptNode, or by an insertion under a parent
+ * in another document), which the provider's view of either document need
+ * not show. The image check's next pass walks its images whatever the
+ * provider says. */
+void d_images_moved(os64_dom_t *dom);
+/* Before `node` goes under `parent` (dom, the parent's owner): when it
+ * comes from another document, d_images_moved for the binding it leaves and
+ * the one it enters. */
+void d_documents_moved(os64_dom_t *dom, const os64_html_node_t *parent, const os64_html_node_t *node);
+/* The record of the node's wrapper, the wrapper made when it has none, and
+ * the wrapper itself in *held, which the caller frees when it is done with
+ * the record. NULL with an exception pending when it could not be made. */
+DValue *d_wrap_record(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, JSValue *held);
+/* HOLDERS: a holder that can hand a node back to script holds the node's
+ * wrapper as well as the node, so the node's tree keeps what the page hung
+ * on it while the holder lives. d_holder_take answers the wrapper (made if
+ * the node has none) as a count the holder owns, freed when the holder is;
+ * JS_UNDEFINED, with no exception left pending, for a NULL node, a closed
+ * binding, or when it could not be made. A holder whose record is a JS
+ * object's own state (a Range, a walker, a KeyframeEffect) reports the
+ * count in its class's mark; a record the binding keeps for itself (a
+ * queue's entry, an observer's registration or root) keeps it as a root
+ * while it lasts. Drain releases what holders keep, as their records are
+ * freed after the engine is. */
+JSValue d_holder_take(os64_dom_t *dom, const os64_html_node_t *node);
+/* Whether the record is a node wrapper's (wrapper_attach gave it its node). */
+static inline bool d_node_wrapper(const DValue *entry) { return entry->node != NULL; }
+/* The Node class's mark: every count a wrapper's record owns. */
+void d_node_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark);
+/* VIEWS: an object an element's record keeps for it ([SameObject]: style,
+ * classList, attributes, a kept collection (DQuery)...). The record owns
+ * the view's count (its registry value, which d_node_mark reports) and the
+ * view owns one count on the element's wrapper, so a view held alone keeps
+ * its element. d_view_keep takes that count for a view's record (`holder`);
+ * d_view_mark reports it and d_view_release lets it go, from the view
+ * class's mark and finalizer, and at drain. */
+void d_view_keep(const DValue *owner, DValue *view);
+void d_view_mark(JSRuntime *rt, const DValue *view, JS_MarkFunc *mark);
+void d_view_release(JSRuntime *rt, DValue *view);
+/* A view class's mark and finalizer, when its object's opaque is its own
+ * record. */
+void d_view_class_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark);
+void d_view_class_finalize(JSRuntime *rt, JSValue value);
+/* The element's attached Attrs' counts (attr.c), and a root's
+ * adoptedStyleSheets array and its assigner (adopted.c), for d_node_mark. */
+void d_attrs_mark(JSRuntime *rt, const DValue *element, JS_MarkFunc *mark);
+void d_adopted_mark(JSRuntime *rt, const DValueMore *more, JS_MarkFunc *mark);
 int d_point_install(os64_dom_t *, JSContext *, JSValueConst);
 int d_point_dictionary(JSContext *, JSValueConst, double out[4]);
 bool d_svg_geometry_node(const os64_html_node_t *);
@@ -1243,8 +1389,16 @@ JSValue d_attribute_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_
  * when `fold`). */
 bool d_has_token(const char *list, const char *token, size_t length, bool fold);
 extern JSClassExoticMethods d_collection_exotic;
+/* A live collection over `root`. `keeper`: the node record that will keep
+ * it (DQuery's KEPT); NULL, it is the script's alone. */
 JSValue d_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *root,
-                     bool descendants, bool elements, const char *name);
+                     bool descendants, bool elements, const char *name, const DValue *keeper);
+/* The collection class's finalizer and mark (core.c defines the class). */
+void d_query_finalize(JSRuntime *rt, JSValue value);
+void d_query_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark);
+/* Frees the script's collections whose objects are gone. Not inside an
+ * engine collection: freeing one releases its nodes. */
+void d_queries_sweep(os64_dom_t *dom);
 JSValue d_children(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *root,
                    bool elements);
 bool d_string(os64_dom_t *dom, JSContext *ctx, JSValueConst value, DString *out);
@@ -1330,7 +1484,9 @@ bool d_listed(const os64_html_node_t *node);
  * (classic.c): the `index`th, NULL past the last; *count, when not NULL,
  * how many there are. */
 const os64_html_node_t *d_form_control(const os64_html_node_t *form, uint32_t index, uint32_t *count);
-JSValue d_special_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *root, unsigned kind, const char *named);
+/* `keeper` as d_collection's. */
+JSValue d_special_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *root, unsigned kind,
+                             const char *named, const DValue *keeper);
 JSValue d_classic_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, unsigned kind);
 int d_classic_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* NEVER SWALLOW A RUNTIME'S FAILURE. Whether the exception pending may be
@@ -1532,8 +1688,10 @@ void d_errors_fire(os64_dom_t *dom, os64_js_outcome_t *outcome);
 void d_task_settle(os64_dom_t *dom, os64_js_outcome_t *outcome);
 /* As a task named `task` closes, visit the cluster's bindings (or this one
  * standalone binding). Each first report is folded into an OK outcome or
- * told to its own host, then cleared; counted rejections get one summary. */
+ * told to its own host, then cleared; counted rejections get one summary.
+ * It ends at the safe point. */
 void d_task_close(os64_dom_t *dom, const char *task, os64_js_outcome_t *outcome);
+void d_safe_point(os64_dom_t *dom);
 /* After a script the host ran with os64_js_run (and a string timer the
  * binding did): what it left owed, settled in a task of its own named
  * `name`, folded into `outcome`. No engine entry when nothing is owed. */
@@ -2000,6 +2158,10 @@ const os64_html_node_t *d_body_context(os64_dom_t *dom, int64_t *status);
  * or d_body_context's body for one in no namespace or another one. */
 const os64_html_node_t *d_fragment_context(os64_dom_t *dom, const os64_html_node_t *element, int64_t *status);
 void d_ranges_sweep(os64_dom_t *dom);
+/* The live ranges' boundary wrappers re-taken where libhtml moved a point
+ * (after each tree change), and every range's let go (drain). */
+void d_ranges_follow(os64_dom_t *dom);
+void d_ranges_drain(os64_dom_t *dom);
 void d_ranges_free(os64_dom_t *dom);
 /* A label's labeled control (HTML § 4.10.4): the labelable element its
  * `for` names, when the first element of its tree with that ID is one;
@@ -2134,6 +2296,9 @@ void d_animation_drain(os64_dom_t *dom);
  * every animation and buries its data; and the free, which frees what is
  * buried (no layout reads an effect once the binding is freed). */
 int d_web_animations_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* The dead KeyframeEffects freed, outside any collection (their targets
+ * released). */
+void d_web_animations_sweep(os64_dom_t *dom);
 void d_web_animations_drain(os64_dom_t *dom);
 void d_web_animations_cancel(os64_dom_t *dom);
 void d_web_animations_free(os64_dom_t *dom);
@@ -2306,6 +2471,7 @@ void d_custom_adopted(os64_dom_t *dom, const os64_html_node_t *root, const os64_
                       const os64_html_node_t *to);
 /* Teardown: the listener taken away with the engine's values; the
  * records and definitions' memory after the engine. */
+void d_custom_drain(os64_dom_t *dom);
 void d_custom_free(os64_dom_t *dom);
 /* THE [CEReactions] TABLE (ce_reactions.inc, written by
  * tools/ce_reactions.py from the standard's IDL): a row's interface, its

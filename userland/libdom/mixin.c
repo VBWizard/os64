@@ -934,6 +934,7 @@ static JSValue element_view(os64_dom_t *dom, JSContext *ctx, const os64_html_nod
     entry->target = node;
     entry->tokens = view == VIEW_REL_LIST ? D_TOKENS_REL : view == VIEW_FOR_LIST ? D_TOKENS_FOR : D_TOKENS_CLASS;
     os64_html_hold(dom->document, node);
+    d_view_keep(owner, entry);
     JS_SetOpaque(object, entry);
     *slot = entry;
     return JS_DupValue(ctx, object);

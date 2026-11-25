@@ -33,12 +33,8 @@ static int matrix(JSContext *ctx,JSValueConst object,os64_geometry_map_t *m)
     }
     *m=(os64_geometry_map_t){values[0],values[1],values[2],values[3],values[4],values[5]};return 0;
 }
-static JSValue member(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv,int magic,JSValue *data)
+static JSValue member_on(JSContext *ctx, os64_dom_t *dom, DValue *e, int argc, JSValueConst *argv, int magic)
 {
-    os64_dom_t *dom=d_callback(ctx,data,OS64_JS_ABI_ID);
-    if(!dom)return JS_EXCEPTION;
-    DValue *e=JS_GetOpaque(self,dom->canvas_class);
-    if(!e||!d_same_cluster(e->dom, dom))return JS_ThrowTypeError(ctx,"Expected a CanvasRenderingContext2D");
     dom = e->dom;
     bool set=magic&D_SET;magic&=~D_SET;
     JSValueConst value=argc?argv[0]:JS_UNDEFINED;
@@ -171,6 +167,10 @@ static JSValue member(JSContext *ctx,JSValueConst self,int argc,JSValueConst *ar
         status=canvas_transform(d_more_peek(e)->canvas,&transform,magic==P_SET_TRANSFORM||magic==P_RESET_TRANSFORM);
     }
     return d_canvas_result(ctx,status);
+}
+static JSValue member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic, JSValue *data)
+{
+    return d_canvas_method(ctx, self, data, member_on, argc, argv, magic);
 }
 int d_canvas_paths_install(os64_dom_t *dom,JSContext *ctx,JSValueConst prototype)
 {

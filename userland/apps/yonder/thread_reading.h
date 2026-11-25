@@ -13,12 +13,16 @@
 //   - inside each step, what ran in it wherever the call: script tasks,
 //     layouts, model rebuilds, what the tasks said afterwards (the status
 //     line, the record, the audit) and drawing, each with a count;
+//   - the loop's slow TURNS (a turn: from the dispatcher's call to the next
+//     call of the dispatcher or the wait), each whole: its calls, what ran
+//     inside it, its longest task;
 //   - the timer tasks by the site that set them (the dom's
 //     os64_dom_timer_sites), the costliest first;
 //   - the script runtime's collector over the reading, from two readings
 //     of its counts (os64_js_collector) the caller hands over.
 // A reading is the span between two resets: the caller resets after it
-// writes the lines, and the call under way goes on from the reset.
+// writes the lines, and the call and the loop's turn under way go on from
+// the reset.
 //
 // Pure: no clock (every time is the caller's, in ticks of one counter, and
 // the lines turn ticks into time with the rate the caller says), no
@@ -108,6 +112,29 @@ typedef struct {
     uint64_t live, arms, walked;
 } yonder_tr_list_t;
 
+#define YONDER_TR_SLOW_KEPT 6
+#define YONDER_TR_SLOW_STARTS 48
+// The calls a kept turn names, its costliest; the rest are summed.
+#define YONDER_TR_TURN_CALLS 4
+// Room enough for yonder_tr_slow_line's longest line: the starts, and six
+// turns each with four calls, five kinds inside and a task's full name.
+#define YONDER_TR_SLOW_LINE 8192
+// Room for "a timer set by " and a site as the timers line keeps it.
+#define YONDER_TR_TASK_TEXT (YONDER_TR_SITE_TEXT + 24)
+
+// ONE TURN OF THE LOOP: from the dispatcher's call to the next call of the
+// dispatcher or the wait, so its time is the loop's work and never its
+// sleep. Its calls' time, what ran inside it, and its longest task, named
+// as yonder_tr_task's caller named it ("" for none).
+typedef struct {
+    int64_t from;
+    uint64_t ticks;
+    uint64_t call_ticks[YONDER_TR_CALLS];
+    uint64_t in_ticks[YONDER_TR_INS], in_n[YONDER_TR_INS];
+    char task[YONDER_TR_TASK_TEXT];
+    uint64_t task_ticks, task_layouts, task_layout_ticks;
+} yonder_tr_turn_t;
+
 typedef struct {
     bool on;
     // The reading's start: the reset's moment, or with no call under way
@@ -137,19 +164,46 @@ typedef struct {
     // The intersection steps: how many, the observed targets they walked,
     // and the most one walked.
     uint64_t observed_steps, observed, observed_most;
+    // The loop's every-turn checks (the dom's os64_dom_checks_visited): the
+    // turns told, the records visited in them, and the most in one turn.
+    uint64_t checked_turns, checked, checked_most;
+    // THE SLOW TURNS: those that took `slow_ticks` or more (0: none is
+    // slow), of the `turns_ended` that ended in the reading. Their count and
+    // time; when the first YONDER_TR_SLOW_STARTS began, in order, so a beat
+    // shows as evenly spaced starts; and the YONDER_TR_SLOW_KEPT longest,
+    // whole. The turn under way is `turn` while `turn_open`.
+    uint64_t slow_ticks, slow_ms;
+    uint64_t turns_ended, slow_n, slow_all;
+    int64_t slow_starts[YONDER_TR_SLOW_STARTS];
+    uint32_t nstarts, nslow;
+    yonder_tr_turn_t slow[YONDER_TR_SLOW_KEPT];
+    bool turn_open;
+    yonder_tr_turn_t turn;
 } yonder_tr_t;
 
 // The reading starts at `now`, its counts zero, the collector's and the
 // timer list's counts as `collector` and `list` (NULL for none); the call
 // under way, if any, goes on from now as the reading's first call and its
-// step's first turn.
+// step's first turn, and the loop's turn under way goes on from now too.
+// No turn is slow until yonder_tr_slow says what slow is.
 void yonder_tr_reset(yonder_tr_t *t, int64_t now, const yonder_tr_collector_t *collector,
                      const yonder_tr_list_t *list);
 // Nothing more is taken until the next reset, which turns it on again.
 void yonder_tr_off(yonder_tr_t *t);
 // The loop makes `call` from `now`: the call under way ends there, and a
-// call in another step than the one under way is a turn of its step.
+// call in another step than the one under way is a turn of its step. The
+// wait and the dispatcher's call end the loop's turn under way; the
+// dispatcher's begins the next.
 void yonder_tr_call(yonder_tr_t *t, yonder_tr_call_t call, int64_t now);
+// A loop's turn of `ticks` or more is slow, until the next reset; `ms` is
+// that threshold as the line says it, so the line never turns it back
+// through a rate measured later. 0 ticks: no turn is judged (the caller
+// had no rate to turn `ms` into ticks with), and the line says so.
+void yonder_tr_slow(yonder_tr_t *t, uint64_t ticks, uint64_t ms);
+// A task of any kind ended after `ticks`, forcing `layouts` in
+// `layout_ticks`: `what` names it (copied, cut to fit), and the longest of
+// a turn is the one its slow-turn entry names.
+void yonder_tr_task(yonder_tr_t *t, const char *what, uint64_t ticks, uint64_t layouts, uint64_t layout_ticks);
 // `ticks` of `in` inside the step under way (nothing outside any).
 void yonder_tr_inside(yonder_tr_t *t, yonder_tr_in_t in, uint64_t ticks);
 // A timer task that took `ticks`, forcing `layouts` in `layout_ticks`, set
@@ -157,6 +211,8 @@ void yonder_tr_inside(yonder_tr_t *t, yonder_tr_in_t in, uint64_t ticks);
 void yonder_tr_timer(yonder_tr_t *t, const char *site, uint64_t ticks, uint64_t layouts, uint64_t layout_ticks);
 // An intersection step that walked `targets` observed targets.
 void yonder_tr_intersections(yonder_tr_t *t, uint64_t targets);
+// A turn whose every-turn checks visited `records` records.
+void yonder_tr_checked(yonder_tr_t *t, uint64_t records);
 
 // The lines, written into `out` (cut to `cap`, always terminated), for the
 // reading as it stands at `now` with the call under way ended there (the
@@ -175,8 +231,18 @@ void yonder_tr_timers_line(const yonder_tr_t *t, uint64_t per_ms, char *out, siz
 void yonder_tr_collector_line(const yonder_tr_t *t, const yonder_tr_collector_t *now_counts, uint64_t heap,
                               uint64_t limit, uint64_t per_ms, char *out, size_t cap);
 
+// The slow turns: how many of the turns that ended, their time, when the
+// kept starts began (ms from the reading's start), and the longest, each
+// with when it began, its YONDER_TR_TURN_CALLS costliest calls of a
+// millisecond or more by step (the rest summed), what ran inside it and its
+// longest task. A turn still under way is not in it. YONDER_TR_SLOW_LINE
+// holds the longest it writes.
+void yonder_tr_slow_line(const yonder_tr_t *t, uint64_t per_ms, char *out, size_t cap);
+
 // The record walks a turn can make whose size the page sets: the
-// intersection steps and the targets they walked; the timer list, live now,
+// intersection steps and the targets they walked; the records the loop's
+// every-turn checks visited, over the turns told, and the most in one; the
+// timer list, live now,
 // with the arms since the reading began and the entries they walked past
 // (`list_now` against the reading's start, or from its own start when it is
 // behind it: another binding's); and the values the binding

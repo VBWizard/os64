@@ -553,7 +553,7 @@ ICON_METADATA := $(ICON_MANIFEST) $(ICON_ASSET_DIR)/provenance.json $(ICON_ASSET
 SYSTEM_CONFIG := $(addprefix etc/,husk.rc logd.conf os64get.conf hosts crontab \
                  net.conf desktop.conf gclock.conf gterm.conf os64.conf gui.conf menu.conf \
                  mouse.conf icons.conf roam.conf file-associations.conf bootenv.conf \
-                 sshd.conf vncd.conf fonts.conf)
+                 sshd.conf vncd.conf fonts.conf porter.conf)
 BOOT_MODULES := $(wildcard external/*)
 SYSTEM_LICENSES := $(foreach n,libjpeg-turbo libwebp libpage-numeric freetype unicode \
                      libmath speexdsp ffmpeg big-buck-bunny android-sbc,$(n).txt:license/$(n)-LICENSE) \
@@ -663,7 +663,7 @@ $(EXT2_TEST_IMAGE): $(SYSTEM_LICENSE_SOURCES) $(SYSTEM_CONFIG) $(FONT_FIXTURES) 
 # arrived (2026-08-23) — editing it left the image stale, which presents as "I
 # changed my wallpaper and nothing happened". Any file the recipe copies belongs
 # here; that is the whole contract of a prerequisite list.
-$(DISK_IMAGE): $(SYSTEM_LICENSE_SOURCES) $(DEPLOY_ELFS) $(FONT_FIXTURES) $(FONT_PRODUCT) $(ICON_ASSET_DIR) $(ICON_ASSETS) $(ICON_METADATA) $(PAGE_FIXTURES) tools/html_corpus/SOURCES.json $(FRAME_COMPOSITIONS) kernel/test/partition_info.txt etc/husk.rc etc/desktop.conf etc/gclock.conf etc/gterm.conf etc/os64.conf etc/gui.conf etc/bootenv.conf etc/icons.conf etc/roam.conf etc/file-associations.conf etc/fonts.conf limine-hd.conf $(BOOT_MODULES) $(EXT2_TEST_IMAGE) GNUmakefile
+$(DISK_IMAGE): $(SYSTEM_LICENSE_SOURCES) $(DEPLOY_ELFS) $(FONT_FIXTURES) $(FONT_PRODUCT) $(ICON_ASSET_DIR) $(ICON_ASSETS) $(ICON_METADATA) $(PAGE_FIXTURES) tools/html_corpus/SOURCES.json $(FRAME_COMPOSITIONS) kernel/test/partition_info.txt etc/husk.rc etc/desktop.conf etc/gclock.conf etc/gterm.conf etc/os64.conf etc/gui.conf etc/bootenv.conf etc/icons.conf etc/roam.conf etc/file-associations.conf etc/fonts.conf etc/porter.conf limine-hd.conf $(BOOT_MODULES) $(EXT2_TEST_IMAGE) GNUmakefile
 	@mkdir -p "$$(dirname $(DISK_IMAGE))"
 	# rm + truncate instead of dd-from-/dev/zero: creates a sparse file, so
 	# rebuilding the image doesn't write $(DISK_SIZE_MB)MB of zeros each time.
@@ -732,6 +732,7 @@ $(DISK_IMAGE): $(SYSTEM_LICENSE_SOURCES) $(DEPLOY_ELFS) $(FONT_FIXTURES) $(FONT_
 	# Product fonts live beside their configuration; create the parent first.
 	mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/etc/fonts
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/fonts.conf ::/etc/fonts.conf
+	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/porter.conf ::/etc/porter.conf
 	$(foreach f,$(FONT_PRODUCT),mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(f) ::/etc/fonts/$(notdir $(f));)
 	mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/etc/icons
 	mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/etc/icons/default
