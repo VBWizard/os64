@@ -40,7 +40,8 @@
 // window that paints every picture, as below.
 //
 // THE THREADS. main: the window, and without a plane the frame requests and
-// at each frame answer the player's picture for that blank; every player
+// at each frame answer the player's picture for that blank (on a plane it
+// asks for frames only while the readout shows, to refresh it); every player
 // call. keys: the media-key session and a --script's timed actions, handed
 // to main through the window's doorbell. The app's lock guards only what
 // the two share (the actions, whether it is playing).
@@ -69,6 +70,14 @@
 #define MARGIN 48                         // the first window leaves this much of the screen
 #define ACTIONS 16
 #define READOUT_LINES 8                   // what readout_lines writes at most
+#define READOUT_CHARS 96                  // a line's buffer, its NUL included
+// Over a placed plane the readout is an overlay rectangle, and the kernel
+// refuses a publish whose overlays blend more than GUI_PLANE_OVERLAY_PIXELS
+// (kernel/include/gui/plane.h, VIDEO_PLANE.md § 3.3): the widest box the
+// readout can make must stay inside it, or every refresh would be refused.
+#define READOUT_OVERLAY_BUDGET 98304u
+_Static_assert((READOUT_CHARS - 1) * 8 * READOUT_LINES * 16 <= READOUT_OVERLAY_BUDGET,
+               "the readout's widest box outgrows a plane's overlay budget");
 #define OPEN_WAIT_MS 30000                // a probe that says nothing for this long fails the open
 #define TAIL_WAIT_MS 1000                 // at the end, the sound still in the device plays out this long
 
@@ -249,7 +258,9 @@ typedef struct {
     uint32_t refresh;                     // frames since the readout was last painted over a plane
 } view_t;
 
-static void readout_lines(app_t *a, const os64_media_player_facts_t *f, char lines[][96], uint32_t *count)
+// `placed`: whether gplay's last publish placed the plane.
+static void readout_lines(app_t *a, const os64_media_player_facts_t *f, bool placed, char lines[][READOUT_CHARS],
+                          uint32_t *count)
 {
     char t[16], len[16];
     gplay_time_text(f->position, t, sizeof(t));
@@ -258,27 +269,28 @@ static void readout_lines(app_t *a, const os64_media_player_facts_t *f, char lin
                                              "following", "starved", "still"};
     static const char *const pace_name[] = {"on time", "decoding late", "far behind"};
     uint32_t n = 0;
-    os64_snprintf(lines[n++], 96, "%s / %s  %s  clock %s, drift %ld ms", t, f->length >= 0 ? len : "?",
+    os64_snprintf(lines[n++], READOUT_CHARS, "%s / %s  %s  clock %s, drift %ld ms", t, f->length >= 0 ? len : "?",
                   kStateName[f->state], clock_name[f->clock_state], (long)(f->drift * 1000 / RATE));
-    os64_snprintf(lines[n++], 96, "pace %s, lead %ld ms", pace_name[f->pace.state],
+    os64_snprintf(lines[n++], READOUT_CHARS, "pace %s, lead %ld ms", pace_name[f->pace.state],
                   (long)(f->pace.lead * 1000 / RATE));
-    os64_snprintf(lines[n++], 96, "shown %lu dropped %lu skipped %lu starved %lu", (unsigned long)f->pace.shown,
+    os64_snprintf(lines[n++], READOUT_CHARS, "shown %lu dropped %lu skipped %lu starved %lu", (unsigned long)f->pace.shown,
                   (unsigned long)f->pace.dropped, (unsigned long)f->pace.skipped, (unsigned long)f->pace.starved);
-    os64_snprintf(lines[n++], 96, "resyncs %lu (%lu ms holding), display missed %lu",
+    os64_snprintf(lines[n++], READOUT_CHARS, "resyncs %lu (%lu ms holding), display missed %lu",
                   (unsigned long)f->pace.resyncs, (unsigned long)(f->pace.far_behind_us / 1000),
                   (unsigned long)(f->plane_state == OS64_MEDIA_PLANE_ON ? f->frames_missed : a->display_missed));
-    os64_snprintf(lines[n++], 96, "queues: decoded %u/%u ready %u/%u sound %lu ms", f->decoded, f->decoded_depth,
+    os64_snprintf(lines[n++], READOUT_CHARS, "queues: decoded %u/%u ready %u/%u sound %lu ms", f->decoded, f->decoded_depth,
                   f->ready, f->ready_depth, (unsigned long)(f->sound_queued * 1000ull / RATE));
-    os64_snprintf(lines[n++], 96, "ear: stills %lu, held ahead %lu, stepped behind %lu",
+    os64_snprintf(lines[n++], READOUT_CHARS, "ear: stills %lu, held ahead %lu, stepped behind %lu",
                   (unsigned long)f->clock.stills, (unsigned long)f->clock.held_ahead,
                   (unsigned long)f->clock.jumped_behind);
-    os64_snprintf(lines[n++], 96, "sync %ld ms  sink delay %u ms%s%s%s", (long)(f->sync * 1000 / RATE),
+    os64_snprintf(lines[n++], READOUT_CHARS, "sync %ld ms  sink delay %u ms%s%s%s", (long)(f->sync * 1000 / RATE),
                   f->delay_us / 1000, f->muted ? "  muted" : "", f->refused ? "  sound: " : "",
                   f->refused && f->refused_why ? f->refused_why : "");
     if (f->plane_state == OS64_MEDIA_PLANE_ON)
-        os64_snprintf(lines[n++], 96, "plane %u %ux%u: published %lu, waits %lu, %s", f->plane_name, f->plane_cap_w,
-                      f->plane_cap_h, (unsigned long)f->plane_published, (unsigned long)f->waits_patience,
-                      f->plane_stale ? "stale" : f->plane_ready ? "ready" : "not ready");
+        os64_snprintf(lines[n++], READOUT_CHARS, "plane %u %ux%u: published %lu, waits %lu, %s, %s", f->plane_name,
+                      f->plane_cap_w, f->plane_cap_h, (unsigned long)f->plane_published,
+                      (unsigned long)f->waits_patience, f->plane_stale ? "stale" : f->plane_ready ? "ready" : "not ready",
+                      placed ? "placed" : "hidden");
     *count = n;
 }
 
@@ -298,9 +310,9 @@ static void draw_canvas(app_t *a, view_t *v)
     if (v->readout) {
         os64_media_player_facts_t f;
         os64_media_player_facts(a->player, &f);
-        char lines[READOUT_LINES][96];
+        char lines[READOUT_LINES][READOUT_CHARS];
         uint32_t count = 0;
-        readout_lines(a, &f, lines, &count);
+        readout_lines(a, &f, v->placed, lines, &count);
         for (uint32_t i = 0; i < count; i++)
             os64_draw_text(s, 8, 8 + 16 * (int32_t)i, lines[i], os64_strlen(lines[i]), 0xFFFFFFFFu, 0xFF000000u);
     }
@@ -310,7 +322,7 @@ static void draw_canvas(app_t *a, view_t *v)
 // ---------------------------------------------------------------- main: on a plane
 
 // The readout's box (content coordinates) as painted at (8, 8).
-static os64_gui_rect_t readout_box(char lines[][96], uint32_t count)
+static os64_gui_rect_t readout_box(char lines[][READOUT_CHARS], uint32_t count)
 {
     uint32_t widest = 0;
     for (uint32_t i = 0; i < count; i++) {
@@ -346,9 +358,9 @@ static void paint_plane_window(app_t *a, view_t *v, bool hole, os64_gui_rect_t *
     if (v->readout) {
         os64_media_player_facts_t f;
         os64_media_player_facts(a->player, &f);
-        char lines[READOUT_LINES][96];
+        char lines[READOUT_LINES][READOUT_CHARS];
         uint32_t count = 0;
-        readout_lines(a, &f, lines, &count);
+        readout_lines(a, &f, v->placed, lines, &count);
         for (uint32_t i = 0; i < count; i++)
             os64_draw_text(s, 8, 8 + 16 * (int32_t)i, lines[i], os64_strlen(lines[i]), 0xFFFFFFFFu, 0xFF000000u);
         os64_gui_rect_t box = readout_box(lines, count);
@@ -377,6 +389,10 @@ static bool plane_publish(app_t *a, view_t *v, bool place)
             e.noverlays = 1;
             e.overlay[0] = overlay;
         }
+    } else if (!v->placed) {
+        // Nothing to hide: a plain publish, which no recreate on the show
+        // thread can refuse by retiring the plane's name under it.
+        return os64_draw_publish(&v->ctx, 0) == 0;
     } else {
         e.hide = 1;
     }
@@ -605,6 +621,10 @@ static void run(app_t *a, view_t *v, const os64_media_info_t *info, const char *
                 // until it is ready at the new size (plane_step places it).
                 layout(a, v, info, v->ctx.surf.width, v->ctx.surf.height);
                 (void)plane_publish(a, v, false);
+                // A hole the same size as the plane's picture (a window made
+                // wider than its video) changes neither ready nor stale, so the
+                // show thread rings no look for it: place it now if it is ready.
+                plane_step(a, v);
                 break;
             }
             layout(a, v, info, v->ctx.surf.width, v->ctx.surf.height);
@@ -621,7 +641,8 @@ static void run(app_t *a, view_t *v, const os64_media_info_t *info, const char *
 
 // ---------------------------------------------------------------- start and end
 
-static void say_counts(app_t *a, const os64_media_player_facts_t *f, const char *name)
+// `placed`: whether gplay's last publish placed the plane.
+static void say_counts(app_t *a, const os64_media_player_facts_t *f, bool placed, const char *name)
 {
     char at[16];
     gplay_time_text(f->position, at, sizeof(at));
@@ -638,11 +659,12 @@ static void say_counts(app_t *a, const os64_media_player_facts_t *f, const char 
                 (unsigned long)(f->plane_state == OS64_MEDIA_PLANE_ON || f->plane_published > 0 ? f->frames_missed
                                                                                                : a->display_missed));
     if (f->plane_published > 0 || f->plane_state != OS64_MEDIA_PLANE_NONE)
-        os64_printf("  plane: %s %u (%ux%u), published %lu, recreates %lu, waits ended by patience %lu, "
-                    "frame calls refused %lu, closes ended placed %lu, refusal %d\n",
+        os64_printf("  plane: %s %u (%ux%u), %s at the end, published %lu, recreates %lu, waits ended by patience "
+                    "%lu, frame calls refused %lu, closes ended placed %lu, refusal %d\n",
                     f->plane_state == OS64_MEDIA_PLANE_ON ? "on" : f->plane_state == OS64_MEDIA_PLANE_REFUSED ? "refused"
                     : f->plane_state == OS64_MEDIA_PLANE_ENDED ? "ended" : "starting",
-                    f->plane_name, f->plane_cap_w, f->plane_cap_h, (unsigned long)f->plane_published,
+                    f->plane_name, f->plane_cap_w, f->plane_cap_h, placed ? "placed" : "hidden",
+                    (unsigned long)f->plane_published,
                     (unsigned long)f->plane_recreates, (unsigned long)f->waits_patience,
                     (unsigned long)f->frame_refused, (unsigned long)f->plane_ended_placed, f->plane_refusal);
     os64_printf("  sound: decoded %lu frames, written %lu, let go unheard %lu; buffering %lu, stalls %lu, "
@@ -675,9 +697,11 @@ static bool counts_hold(const os64_media_player_facts_t *f, const char *name)
         ok = false;
     }
     if (s_cover) {
-        // Covered, nobody asks for a frame and none is shown: the player
-        // retires every picture by the clock, so each decoded one was shown,
-        // dropped or skipped, and the end came all the same.
+        // Covered, the window is answered no frames: without a plane the
+        // player retires every picture by the clock, and on one the show
+        // thread picks at each wait its patience ends. Either way each
+        // decoded picture was shown, dropped or skipped, and the end came
+        // all the same.
         uint64_t gone = f->pace.shown + f->pace.dropped + f->pace.skipped;
         if (gone != f->pictures_decoded) {
             os64_printf("gplay: check: covered, %lu pictures decoded and %lu shown, dropped or skipped\n",
@@ -712,8 +736,9 @@ static bool counts_hold(const os64_media_player_facts_t *f, const char *name)
         ok = false;
     }
     // The path asked for is the one that ran: with --no-plane no plane at
-    // all; otherwise a plane on to the end, every picture it showed
-    // published by the show thread, and main never asking for one.
+    // all; otherwise a plane on to the end, main never asking the player
+    // for a picture, and (when the window can be seen) pictures published
+    // to the plane.
     if (s_no_plane && f->plane_state != OS64_MEDIA_PLANE_NONE) {
         os64_printf("gplay: check: --no-plane, yet the plane's state is %d\n", f->plane_state);
         ok = false;
@@ -887,7 +912,7 @@ int main(int argc, char **argv)
         os64_thread_join((int32_t)keys, 0);
     if (f.failure != 0)
         os64_printf("gplay: %s: %s\n", path, os64_media_strerror(f.failure));
-    say_counts(a, &f, name);
+    say_counts(a, &f, v.placed, name);
     bool checked = !s_check || counts_hold(&f, name);
     int code = f.failure != 0 || !checked ? 3 : 0;
 

@@ -357,12 +357,16 @@ of § 3.5's rules.
   after the bound with the plane taken out, refused with no slot).
 - **P2b**: gplay on a plane, as § 6 says. Its window is painted only when
   something but the picture changes (the readout, refreshed every fifteen
-  display frames while shown; a resize; the plane placed or hidden), and it is the
-  facts' READY at the hole's own size that places the plane. `--no-plane`
-  asks for none, for § 8's measurements with the plane off. Proof:
-  `/tests/gplaytest`, where `--check` now also judges the path (a plane on
-  to the end with `frame` never called, or none with `--no-plane`; step 10
-  is the window's path) and step 5's script resizes on a plane.
+  display frames while shown; a resize; the plane placed or hidden), and
+  the facts' READY at the hole's own size places the plane, asked at each
+  look and right after a resize's hide (a hole the plane's picture already
+  fits changes neither ready nor stale, so the show thread rings no look). Between the hide
+  and the place the window holds `shown`, painted once: a still for the
+  pictures queued at the old size. `--no-plane` asks for none, for § 8's
+  measurements with the plane off. Proof: `/tests/gplaytest`, where
+  `--check` now also judges the path (a plane on to the end with `frame`
+  never called, or none with `--no-plane`; steps 10 and 11 are the
+  window's path, 11 covered) and step 5's script resizes on a plane.
 - **Open**: kept pairs of smaller classes can fill
   a task's budget for its life, so a larger plane is refused until it dies
   (beside one 4K pair in use, two kept 1080p pairs leave no room in 128 MiB
