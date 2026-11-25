@@ -31,7 +31,10 @@
 // The most pixels a place's overlay rectangles may cover together: about a
 // player's control strip across a 1080p picture. The compositor blends
 // each of them under kGuiLock at every picture, so this is a time bound
-// (VIDEO_PLANE.md § 3.3), to be judged against the P5's measured cost.
+// (VIDEO_PLANE.md § 3.3) for a hold of about a millisecond. PROVISIONAL:
+// the P5 priced the first composer at 19.77 ns a blended pixel (1.9 ms at
+// this number); the number is set again from the P5's price for the
+// composer as it now is (planetest prints it).
 #define GUI_PLANE_OVERLAY_PIXELS 98304u
 
 typedef enum {
