@@ -44,6 +44,9 @@ static void graft_public_equal(const flow_tree_t *ta,const flow_tree_t *tb,
         flow_box_t x=*a,y=*b;
         x.style=y.style=NULL;x.run=y.run=NULL;x.text=y.text=NULL;x.ellipsis=y.ellipsis=NULL;
         x.frame=y.frame=NULL;x.parent=y.parent=x.first=y.first=x.next=y.next=NULL;
+        // A drawn stamp is the tree's own count of its writes: a kept tree's
+        // moves as its boxes are written, and says nothing of the page.
+        x.drawn=y.drawn=0;
         expect("graft: public geometry, links, controls, clips and ink agree",!memcmp(&x,&y,sizeof(x)),NULL);
         expect("graft: public text bytes agree",a->length==b->length &&
                (!a->length || (a->text && b->text && !memcmp(a->text,b->text,a->length))),NULL);
@@ -356,65 +359,112 @@ static flow_restyle_t restyle_keep(Sheeted *p, flow_tree_t *tree)
     os64_page_free(model);
     return kept;
 }
-// A WRITE THAT CHANGED ONLY AN ELEMENT'S INSETS is declined as geometry,
-// and the decline says which case it was (restyle.inc keep_offset_case,
-// BRIEF_LAYOUT_NEEDS.md N4): a row for each case, from the element's
-// style before to the one written (or, where a row names an attribute,
-// that attribute written with `after` under the row's sheet). One under a
-// `display: none` ancestor is answered as no style having come out
-// different, and nothing is written.
+// A WRITE THAT CHANGED ONLY AN ELEMENT'S INSETS (restyle.inc keep_move,
+// BRIEF_LAYOUT_NEEDS.md N4): taken where nothing reads the insets (no box,
+// a static box) and where a positioned block-level box only moves, the kept
+// tree then answering as a whole layout of the changed document does,
+// every box, overflow, clip, layer, extent and range (flow_restyle_check);
+// declined as geometry, saying which case, everywhere else. A row names its
+// style before and the one written (or, where it names an attribute, that
+// attribute written with `after` under the row's sheet), and `inside` the
+// markup in the element. One under a `display: none` ancestor is answered
+// as no style having come out different, and nothing is written.
 static void restyle_offset_cases(void)
 {
     static const struct {
-        const char *before, *after, *said;
+        const char *before, *after, *said;      // `said` NULL: taken (or, hidden, nothing)
         bool hidden;
-        const char *tag, *sheet, *attr;
+        const char *tag, *sheet, *attr, *inside;
+        uint64_t moved;
     } kRows[] = {
-        {"left:0px", "left:5px", "an inset, static", false, NULL, NULL, NULL},
-        {"position:relative;left:0px", "position:relative;left:0.5px", "an inset, relative, moves less than a pixel", false, NULL, NULL, NULL},
-        {"position:relative;left:2px", "position:relative;left:6px", "an inset, relative, moves 2 to 8 px", false, NULL, NULL, NULL},
-        {"position:relative;left:0px", "position:relative;left:8.5px", "an inset, relative, moves 2 to 8 px", false, NULL, NULL, NULL},
-        {"position:relative;top:0px", "position:relative;top:100px", "an inset, relative, moves over 64 px", false, NULL, NULL, NULL},
-        {"position:relative;left:3px", "position:relative;left:3px;right:9px", "an inset, relative, resolves the same", false, NULL, NULL, NULL},
-        {"position:relative;left:1%", "position:relative;left:2%", "an inset, a percentage", false, NULL, NULL, NULL},
-        {"position:relative;left:1px", "position:relative;right:1px", "an inset, another side places it", false, NULL, NULL, NULL},
-        {"position:relative;left:1px;right:2px", "position:relative;right:5px", "an inset, another side places it", false, NULL, NULL, NULL},
-        {"position:sticky;top:0px", "position:sticky;top:10px", "an inset, sticky", false, NULL, NULL, NULL},
-        {"position:absolute;width:100%;left:0px", "position:absolute;width:100%;left:30px", "an inset, absolute, moves 9 to 64 px", false, NULL, NULL, NULL},
-        {"position:absolute;width:50px;left:0px;transform:scaleX(0.5)", "position:absolute;width:50px;left:1px;transform:scaleX(0.7)",
-         "an inset, absolute, moves 1 px", false, NULL, NULL, NULL},
-        {"position:absolute;width:10px;top:50%;left:0px", "position:absolute;width:10px;top:50%;left:10px",
-         "an inset, absolute, moves 9 to 64 px", false, NULL, NULL, NULL},
-        {"position:absolute;left:0px;top:0px", "position:absolute;left:0px;top:5px", "an inset, absolute, moves 2 to 8 px", false, NULL, NULL, NULL},
+        {"left:0px", "left:5px", NULL, false, NULL, NULL, NULL, NULL, 0},
+        {"position:relative;left:0px", "position:relative;left:0.5px", NULL, false, NULL, NULL, NULL, NULL, 1},
+        {"position:relative;left:2px", "position:relative;left:6px", NULL, false, NULL, NULL, NULL, NULL, 1},
+        {"position:relative;left:0px", "position:relative;left:8.5px", NULL, false, NULL, NULL, NULL, NULL, 1},
+        {"position:relative;top:0px", "position:relative;top:100px", NULL, false, NULL, NULL, NULL, NULL, 1},
+        {"position:relative;left:3px", "position:relative;left:3px;right:9px", NULL, false, NULL, NULL, NULL, NULL, 0},
+        {"position:relative;left:1%", "position:relative;left:2%", "an inset, a percentage", false, NULL, NULL, NULL, NULL, 0},
+        {"position:relative;left:1px", "position:relative;right:1px", "an inset, another side places it", false, NULL, NULL, NULL, NULL, 0},
+        {"position:relative;left:1px;right:2px", "position:relative;right:5px", "an inset, another side places it", false, NULL, NULL, NULL, NULL, 0},
+        {"position:sticky;top:0px", "position:sticky;top:10px", "an inset, sticky", false, NULL, NULL, NULL, NULL, 0},
+        {"position:absolute;width:100%;left:0px", "position:absolute;width:100%;left:30px", NULL, false, NULL, NULL, NULL, NULL, 1},
+        {"position:absolute;width:50px;left:0px;transform:scaleX(0.5)", "position:absolute;width:50px;left:1.37px;transform:scaleX(0.7)",
+         NULL, false, NULL, NULL, NULL, NULL, 1},
+        {"position:absolute;width:10px;top:50%;left:0px", "position:absolute;width:10px;top:50%;left:10px", NULL, false, NULL, NULL, NULL, NULL, 1},
+        {"position:absolute;left:0px;top:0px", "position:absolute;left:0px;top:5px", NULL, false, NULL, NULL, NULL, NULL, 1},
         {"position:absolute;width:10px;top:0px;bottom:0px;left:0px", "position:absolute;width:10px;top:0px;bottom:0px;left:5px",
-         "an inset, absolute, moves 2 to 8 px", false, NULL, NULL, NULL},
-        {"position:fixed;width:20px;top:0px", "position:fixed;width:20px;top:3px", "an inset, fixed, moves 2 to 8 px", false, NULL, NULL, NULL},
-        {"position:absolute;left:0px", "position:absolute;left:30px", "an inset, its width follows them", false, NULL, NULL, NULL},
+         NULL, false, NULL, NULL, NULL, NULL, 1},
+        {"position:fixed;width:20px;top:0px", "position:fixed;width:20px;top:3px", NULL, false, NULL, NULL, NULL, NULL, 1},
+        {"position:absolute;width:20px;bottom:0px", "position:absolute;width:20px;bottom:7.25px", NULL, false, NULL, NULL, NULL, NULL, 1},
+        {"position:absolute;left:0px", "position:absolute;left:30px", "an inset, its width follows them", false, NULL, NULL, NULL, NULL, 0},
         {"position:absolute;height:auto;top:0px;bottom:0px;width:5px", "position:absolute;height:auto;top:4px;bottom:0px;width:5px",
-         "an inset, its height follows them", false, NULL, NULL, NULL},
+         "an inset, its height follows them", false, NULL, NULL, NULL, NULL, 0},
         {"position:absolute;width:50px;left:0px;right:0px;margin:0 auto", "position:absolute;width:50px;left:10px;right:0px;margin:0 auto",
-         "an inset, auto margins place it", false, NULL, NULL, NULL},
+         "an inset, auto margins place it", false, NULL, NULL, NULL, NULL, 0},
         {"position:absolute;width:50px;left:0px;right:0px;margin-left:auto", "position:absolute;width:50px;left:10px;right:0px;margin-left:auto",
-         "an inset, auto margins place it", false, NULL, NULL, NULL},
+         "an inset, auto margins place it", false, NULL, NULL, NULL, NULL, 0},
         {"position:absolute;width:50px;left:0px;margin:0 auto", "position:absolute;width:50px;right:0px;margin:0 auto",
-         "an inset, another side places it", false, NULL, NULL, NULL},
-        {"position:absolute;display:table;left:0px", "position:absolute;display:table;left:5px", "an inset, a table", false, NULL, NULL, NULL},
+         "an inset, another side places it", false, NULL, NULL, NULL, NULL, 0},
+        {"position:absolute;display:table;left:0px", "position:absolute;display:table;left:5px", "an inset, a table", false, NULL, NULL, NULL, NULL, 0},
         {"position:absolute;aspect-ratio:2;height:20px;left:0px", "position:absolute;aspect-ratio:2;height:20px;left:5px",
-         "an inset, an aspect ratio", false, NULL, NULL, NULL},
-        {"position:relative;left:0px", "position:relative;left:3px", "an inset, an inline's pieces", false, "span", NULL, NULL},
+         "an inset, an aspect ratio", false, NULL, NULL, NULL, NULL, 0},
+        {"position:relative;left:0px", "position:relative;left:3px", "an inset, a relative inline", false, "span", NULL, NULL, NULL, 0},
+        {"position:relative;display:inline-block;left:0px", "position:relative;display:inline-block;left:3px",
+         "an inset, a relative inline", false, "span", NULL, NULL, NULL, 0},
+        {"position:relative;display:table-row;left:0px", "position:relative;display:table-row;left:3px",
+         "an inset, laid out unpositioned", false, "div", NULL, NULL, NULL, 0},
         {"", "on", "an inset, a pseudo-element", false, "div",
-         "#m::before{content:'x';position:relative;left:0} #m.on::before{left:4px}", "class"},
-        {"position:relative;left:0px", "position:relative;left:9px", NULL, true, NULL, NULL, NULL},
-        {"display:none;position:relative;left:0px", "display:none;position:relative;left:9px", "an inset, no box", false, NULL, NULL, NULL},
-        {"display:contents;position:relative;left:0px", "display:contents;position:relative;left:9px", "an inset, no box", false, NULL, NULL, NULL},
+         "#m::before{content:'x';position:relative;left:0} #m.on::before{left:4px}", "class", NULL, 0},
+        {"position:relative;left:0px", "position:relative;left:9px", NULL, true, NULL, NULL, NULL, NULL, 0},
+        {"display:none;position:relative;left:0px", "display:none;position:relative;left:9px", NULL, false, NULL, NULL, NULL, NULL, 0},
+        {"display:contents;position:relative;left:0px", "display:contents;position:relative;left:9px", NULL, false, NULL, NULL, NULL, NULL, 0},
+        // The kinds of positioned block-level box a move takes, each held to
+        // a whole layout: a table (its rows and cells), a flex and a grid
+        // container (their items), a list item (its marker), a replaced
+        // element and a form control laid out as blocks, and an absolute
+        // box holding a float.
+        {"position:relative;left:0px", "position:relative;left:3.5px", NULL, false, "table", NULL, NULL,
+         "<tr><td>a</td><td>b</td></tr><tr><td colspan=2>c</td></tr>", 1},
+        {"position:relative;display:flex;left:0px", "position:relative;display:flex;left:5.25px", NULL, false, NULL, NULL, NULL,
+         "<span>one</span><div style='flex:1'>two</div>", 1},
+        {"position:relative;display:grid;grid-template-columns:20px 1fr;left:0px",
+         "position:relative;display:grid;grid-template-columns:20px 1fr;left:7.75px", NULL, false, NULL, NULL, NULL,
+         "<div>a</div><div>b</div><div>c</div>", 1},
+        {"position:relative;left:0px", "position:relative;left:2.5px", NULL, false, "li", NULL, NULL, "item", 1},
+        {"display:block;position:absolute;width:20px;height:10px;left:0px", "display:block;position:absolute;width:20px;height:10px;left:9.5px",
+         NULL, false, "img", NULL, NULL, "", 1},
+        {"display:block;position:absolute;width:60px;left:0px", "display:block;position:absolute;width:60px;left:4.125px",
+         NULL, false, "input", NULL, NULL, "", 1},
+        {"position:absolute;width:120px;left:0px", "position:absolute;width:120px;left:6.6px", NULL, false, NULL, NULL, NULL,
+         "<div style='float:left;width:30px;height:12px'>f</div>beside the float, and under it", 1},
+        // What is in it moves with it: lines, an inline's pieces, a nested
+        // absolute box, an inline-block's content; and what it cannot carry.
+        {"position:absolute;width:120px;left:0px", "position:absolute;width:120px;left:11.6px", NULL, false, NULL, NULL, NULL,
+         "one <b>two</b> three<div style='position:absolute;left:3px;top:4px;width:9px'>n</div>"
+         "<span style='display:inline-block;width:12px'>i</span>", 1},
+        {"position:absolute;width:120px;left:0px", "position:absolute;width:120px;left:4px", "an inset, a clip inside", false, NULL, NULL, NULL,
+         "<div style='overflow:clip;height:5px'>x</div>", 0},
+        {"position:absolute;width:120px;left:0px;overflow:clip", "position:absolute;width:120px;left:4px;overflow:clip",
+         "an inset, a clip", false, NULL, NULL, NULL, NULL, 0},
+        {"position:absolute;width:120px;left:0px;overflow:hidden", "position:absolute;width:120px;left:4px;overflow:hidden",
+         "an inset, a scroll container", false, NULL, NULL, NULL, NULL, 0},
+        {"position:absolute;width:120px;left:0px", "position:absolute;width:120px;left:4px", "an inset, a scroll container inside", false, NULL, NULL, NULL,
+         "<div style='overflow:auto;height:5px'>x<br>y</div>", 0},
+        {"position:absolute;width:120px;left:0px", "position:absolute;width:120px;left:4px", "an inset, a fixed box inside", false, NULL, NULL, NULL,
+         "<div style='position:fixed;top:0;width:5px'>f</div>", 0},
+        {"position:absolute;width:120px;left:0px", "position:absolute;width:120px;left:4px", "an inset, a transform inside", false, NULL, NULL, NULL,
+         "<div style='transform:rotate(3deg)'>t</div>", 0},
+        {"position:absolute;width:120px;left:0px", "position:absolute;width:120px;left:4px", "an inset, a sticky box inside", false, NULL, NULL, NULL,
+         "<div style='position:sticky;top:0'>s</div>", 0},
     };
     for (size_t i = 0; i < sizeof(kRows) / sizeof(kRows[0]); i++) {
         const char *tag = kRows[i].tag != NULL ? kRows[i].tag : "div";
         const char *attr = kRows[i].attr != NULL ? kRows[i].attr : "style";
-        char html[768];
+        char html[1024];
         snprintf(html, sizeof(html), "<!doctype html><style>%s</style><div style='position:relative;width:400px;height:100px'%s>"
-                 "<%s id=m %s='%s'>m</%s></div><p id=c>c</p>", kRows[i].sheet != NULL ? kRows[i].sheet : "",
-                 kRows[i].hidden ? " hidden" : "", tag, attr, kRows[i].before, tag);
+                 "<%s id=m %s='%s'>%s</%s></div><p id=c>c</p>", kRows[i].sheet != NULL ? kRows[i].sheet : "",
+                 kRows[i].hidden ? " hidden" : "", tag, attr, kRows[i].before,
+                 kRows[i].inside != NULL ? kRows[i].inside : "m", tag);
         Sheeted p;
         sheeted_open(&p, html, 800, 600);
         flow_tree_t *old = graft_layout(&p, NULL, NULL, NULL);
@@ -423,21 +473,315 @@ static void restyle_offset_cases(void)
         flow_restyle_t kept = restyle_keep(&p, old);
         char name[200];
         snprintf(name, sizeof(name), "restyle: an inset-only write, %s (%s)",
-                 kRows[i].said != NULL ? kRows[i].said : "under a display: none ancestor, no style comes out different",
-                 kRows[i].after);
-        expect(name, old != NULL && changed &&
-                         (kRows[i].said == NULL ? kept.kind == FLOW_RESTYLE_NOTHING
-                                                : kept.kind == FLOW_RESTYLE_DECLINED && kept.why == FLOW_RESTYLE_GEOMETRY &&
-                                                      strcmp(kept.detail, kRows[i].said) == 0),
-               kept.detail);
+                 kRows[i].hidden ? "under a display: none ancestor, no style comes out different"
+                 : kRows[i].said != NULL ? kRows[i].said : "taken", kRows[i].after);
+        bool ok = old != NULL && changed;
+        if (kRows[i].hidden)
+            ok = ok && kept.kind == FLOW_RESTYLE_NOTHING;
+        else if (kRows[i].said != NULL)
+            ok = ok && kept.kind == FLOW_RESTYLE_DECLINED && kept.why == FLOW_RESTYLE_GEOMETRY &&
+                 strcmp(kept.detail, kRows[i].said) == 0;
+        else {
+            // Taken: the kept tree is a whole layout of the changed page.
+            flow_tree_t *whole = graft_layout(&p, NULL, NULL, NULL);
+            const os64_html_node_t *at = NULL;
+            const char *what = NULL;
+            ok = ok && kept.kind == FLOW_RESTYLE_PAINT && kept.moved == kRows[i].moved && whole != NULL &&
+                 flow_restyle_check(old, whole, &at, &what);
+            if (what != NULL)
+                printf("  restyle row %zu: %s\n", i, what);
+            flow_free(whole);
+            graft_oracle(&p, old);
+        }
+        expect(name, ok, kept.detail);
         flow_free(old);
         sheeted_close(&p);
     }
 }
 
+// MOVES IN A ROW (N4): each write's move adds to what the box moved since
+// the layout, a box moved inside a moved box is where both put it, a box
+// moved back is where it began, its own transform follows it, and a
+// layout that grafts from a tree holding moves places what moved afresh;
+// after each, the kept tree is an independent whole layout of the page
+// (graft_oracle: the dump, every public box, the painter's walk) and the
+// kept-tree check agrees.
+static void restyle_move_sequences(void)
+{
+    // Paragraphs enough that the cascade's retained budget (its initial
+    // state's bytes) outlasts the row of updates, which then stay updates.
+    static char html[16384];
+    size_t len = (size_t)snprintf(html, sizeof(html), "<!doctype html><style>p{color:red;padding:2px}</style>"
+                     "<div style='position:relative;width:400px;height:300px'>"
+                     "<div id=a style='position:absolute;width:200px;left:0px;top:0px;transform:scaleX(0.9)'>alpha <b>beta</b>"
+                     "<div id=b style='position:absolute;width:50px;left:10px;top:5px'>inner <i>x</i></div>"
+                     "<span style='display:inline-block;width:20px'>ib</span></div></div><p id=c>tail text</p>");
+    for (int i = 0; i < 400 && len < sizeof(html) - 64; i++)
+        len += (size_t)snprintf(html + len, sizeof(html) - len, "<p>%d</p>", i);
+    Sheeted p;
+    sheeted_open(&p, html, 800, 600);
+    flow_tree_t *old = graft_layout(&p, NULL, NULL, NULL);
+    static const struct {
+        const char *id, *style;
+        uint64_t moved;
+    } kSteps[] = {
+        {"a", "position:absolute;width:200px;left:3.3px;top:0px;transform:scaleX(0.9)", 1},
+        {"a", "position:absolute;width:200px;left:7.9px;top:0.6px;transform:scaleX(0.9)", 1},
+        {"b", "position:absolute;width:50px;left:12.25px;top:5px", 1},
+        {"a", "position:absolute;width:200px;left:0.4px;top:0px;transform:scaleX(0.75)", 1},
+        {"b", "position:absolute;width:50px;left:10px;top:5px", 1},
+        {"a", "position:absolute;width:200px;left:0px;top:0px;transform:scaleX(0.9)", 1},
+        {"a", "position:absolute;width:200px;left:631.269px;top:2px;transform:scaleX(0.31)", 1},
+    };
+    for (size_t i = 0; i < sizeof(kSteps) / sizeof(kSteps[0]) && old != NULL; i++) {
+        os64_html_set_attr(p.doc, graft_node(&p, kSteps[i].id), "style", kSteps[i].style, strlen(kSteps[i].style));
+        graft_update(&p);
+        flow_restyle_t kept = restyle_keep(&p, old);
+        flow_tree_t *whole = graft_layout(&p, NULL, NULL, NULL);
+        const os64_html_node_t *at = NULL;
+        const char *what = NULL;
+        char name[160];
+        snprintf(name, sizeof(name), "restyle: moves in a row, step %zu (%s %s)", i + 1, kSteps[i].id, kSteps[i].style);
+        expect(name, kept.kind == FLOW_RESTYLE_PAINT && kept.moved == kSteps[i].moved && whole != NULL &&
+                         flow_restyle_check(old, whole, &at, &what), what != NULL ? what : kept.detail);
+        graft_oracle(&p, old);
+        flow_free(whole);
+    }
+    // A change placement reads, laid out grafting from the tree that holds
+    // the moves: the moved boxes are placed afresh, where they stand.
+    os64_html_set_attr(p.doc, graft_node(&p, "c"), "style", "padding-top:9px", 15);
+    graft_update(&p);
+    flow_restyle_t kept = restyle_keep(&p, old);
+    expect("restyle: moves in a row, then a padding is declined", kept.kind == FLOW_RESTYLE_DECLINED, NULL);
+    flow_tree_t *next = graft_layout(&p, old, NULL, NULL);
+    flow_free(old);
+    graft_oracle(&p, next);
+    flow_free(next);
+    sheeted_close(&p);
+}
+
+// THE MOVES' WALK (N4): a seeded walk of inset writes over positioned
+// boxes of the table's rows (absolute with a length or percentage width,
+// relative blocks, one inside another, one transformed, text, an inline
+// and an inline-block inside), some of them writes a move does not take
+// (a percentage, the other side, a width that follows). After every kept
+// restyle the tree is a whole layout of the page (flow_restyle_check, and
+// graft_oracle every fifth); after a declined one the page is laid out
+// grafting from the tree that held the moves, and that too is held to a
+// whole layout.
+static void restyle_move_walk(void)
+{
+    static char html[16384];
+    size_t len = (size_t)snprintf(html, sizeof(html), "<!doctype html><style>p{color:red;padding:2px}</style>"
+        "<div style='position:relative;width:500px;height:400px'>"
+        "<div id=w0 style='position:absolute;width:40%%;left:0px;top:0px'>w0 <b>bold</b> text"
+        "<div id=w1 style='position:absolute;width:60px;left:5px;top:7px'>w1 <i>in</i></div></div>"
+        "<div id=w2 style='position:relative;left:0px;top:0px'>w2 <span style='display:inline-block;width:9px'>i</span></div>"
+        "<div id=w3 style='position:absolute;width:80px;top:0px;right:0px;transform:rotate(4deg)'>w3</div>"
+        "<div id=w4 style='position:absolute;width:30px;height:20px;bottom:0px;left:0px'>w4</div></div>");
+    for (int i = 0; i < 400 && len < sizeof(html) - 64; i++)
+        len += (size_t)snprintf(html + len, sizeof(html) - len, "<p>%d</p>", i);
+    static const char *const kBase[5] = {
+        "position:absolute;width:40%%;left:%s;top:%s", "position:absolute;width:60px;left:%s;top:%s",
+        "position:relative;left:%s;top:%s", "position:absolute;width:80px;top:%s;right:%s;transform:rotate(4deg)",
+        "position:absolute;width:30px;height:20px;bottom:%s;left:%s"};
+    static const char *const kValues[] = {"0px", "1px", "0.3px", "2.75px", "-4.5px", "13.125px", "40px", "7%",
+                                          "auto", "631.269px", "0.016px"};
+    Sheeted p;
+    sheeted_open(&p, html, 800, 600);
+    flow_tree_t *old = graft_layout(&p, NULL, NULL, NULL);
+    uint32_t seed = 0x4e34u;
+    unsigned taken = 0, declined = 0, wrong = 0, renewed = 0;
+    for (int step = 0; step < 240 && old != NULL; step++) {
+        seed = seed * 1103515245u + 12345u;
+        int box = (int)((seed >> 16) % 5);
+        seed = seed * 1103515245u + 12345u;
+        const char *v0 = kValues[(seed >> 16) % (sizeof(kValues) / sizeof(kValues[0]))];
+        seed = seed * 1103515245u + 12345u;
+        const char *v1 = (seed >> 16) % 3 == 0 ? kValues[(seed >> 20) % (sizeof(kValues) / sizeof(kValues[0]))] : "0px";
+        char style[160], id[4];
+        snprintf(style, sizeof(style), kBase[box], v0, v1);
+        snprintf(id, sizeof(id), "w%d", box);
+        os64_html_set_attr(p.doc, graft_node(&p, id), "style", style, strlen(style));
+        // A cascade past its retained budget is renewed, as a host renews
+        // it, and the walk goes on from a fresh layout under the new one.
+        if (!garb_cascade_update(p.cascade)) {
+            garb_sheet_in_t in[16];
+            for (int32_t j = 0; j < p.n; j++)
+                in[j] = (garb_sheet_in_t){.sheet = &p.sheets[j]};
+            garb_cascade_t *fresh = garb_cascade(in, p.n, p.doc, garb_cascade_env(p.cascade));
+            flow_free(old);
+            garb_cascade_free(p.cascade);
+            p.cascade = fresh;
+            p.env.cascade = fresh;
+            old = graft_layout(&p, NULL, NULL, NULL);
+            renewed++;
+            continue;
+        }
+        flow_restyle_t kept = restyle_keep(&p, old);
+        if (kept.kind == FLOW_RESTYLE_DECLINED) {
+            declined++;
+            flow_tree_t *next = graft_layout(&p, old, NULL, NULL);
+            flow_free(old);
+            old = next;
+            if (step % 5 == 0)
+                graft_oracle(&p, old);
+            continue;
+        }
+        taken += kept.moved > 0;
+        flow_tree_t *whole = graft_layout(&p, NULL, NULL, NULL);
+        const os64_html_node_t *at = NULL;
+        const char *what = NULL;
+        if (whole == NULL || !flow_restyle_check(old, whole, &at, &what)) {
+            if (wrong++ == 0)
+                printf("  move walk step %d (%s): %s\n", step, style, what != NULL ? what : "no whole layout");
+        }
+        if (step % 5 == 0)
+            graft_oracle(&p, old);
+        flow_free(whole);
+    }
+    printf("libflow move walk: %u kept moves, %u declined, %u cascades renewed\n", taken, declined, renewed);
+    expect("restyle: the moves' walk keeps moves and declines others, and every kept tree is a whole layout",
+           wrong == 0 && taken >= 40 && declined >= 20, NULL);
+    flow_free(old);
+    sheeted_close(&p);
+}
+
+// WHAT A MOVE PAINTS (N4): the marks a kept move hands over cover where the
+// box was and where it is now, with its text, and are the whole of it.
+typedef struct {
+    os64_gui_rect_t r[64];
+    int n;
+} MoveMarks;
+static void move_mark(void *ctx, const flow_box_t *box, os64_gui_rect_t r)
+{
+    (void)box;
+    MoveMarks *m = ctx;
+    if (m->n < 64)
+        m->r[m->n++] = r;
+}
+static bool move_covered(const MoveMarks *m, os64_gui_rect_t want)
+{
+    for (int i = 0; i < m->n; i++)
+        if (m->r[i].x <= want.x && m->r[i].y <= want.y && m->r[i].x + m->r[i].w >= want.x + want.w &&
+            m->r[i].y + m->r[i].h >= want.y + want.h)
+            return true;
+    return false;
+}
+static void restyle_move_marks(void)
+{
+    static char html[16384];
+    size_t len = (size_t)snprintf(html, sizeof(html), "<!doctype html><style>p{color:red;padding:2px}</style>"
+        "<div style='position:relative;width:400px;height:100px'><div id=m style='position:absolute;width:50px;left:0px;top:0px'>"
+        "moved <div id=in style='opacity:.5'>text</div></div></div>");
+    for (int i = 0; i < 400 && len < sizeof(html) - 64; i++)
+        len += (size_t)snprintf(html + len, sizeof(html) - len, "<p>%d</p>", i);
+    Sheeted p;
+    sheeted_open(&p, html, 800, 600);
+    flow_tree_t *old = graft_layout(&p, NULL, NULL, NULL);
+    os64_html_node_t *m = graft_node(&p, "m");
+    os64_gui_rect_t before = old != NULL && flow_box_for(old, m) != NULL ? flow_box_for(old, m)->overflow
+                                                                          : (os64_gui_rect_t){0};
+    // A box inside the moved one draws somewhere else too: its drawn stamp
+    // moves, so a kept drawing of it (yonder's keep.h) is not reused.
+    const flow_box_t *inner = old != NULL ? flow_box_for(old, graft_node(&p, "in")) : NULL;
+    uint64_t inner_drawn = inner != NULL ? inner->drawn : 0;
+    static const char moved[] = "position:absolute;width:50px;left:200.5px;top:30px";
+    os64_html_set_attr(p.doc, m, "style", moved, sizeof(moved) - 1);
+    graft_update(&p);
+    flow_reuse_inputs_t inputs = {.resource_owner = p.doc};
+    os64_page_t *model = os64_page_rebuild(p.page);
+    MoveMarks marks = {0};
+    flow_restyle_marks_t hand = {{0, 0}, move_mark, &marks};
+    flow_restyle_t kept = old != NULL ? flow_restyle_in_place(old, p.doc, model, &p.env, &inputs, 800, &hand)
+                                      : (flow_restyle_t){0};
+    os64_page_free(model);
+    os64_gui_rect_t after = old != NULL && flow_box_for(old, m) != NULL ? flow_box_for(old, m)->overflow
+                                                                         : (os64_gui_rect_t){0};
+    expect("restyle: a kept move marks where the box was and where it is, and that is all of it",
+           kept.kind == FLOW_RESTYLE_PAINT && kept.moved == 1 && kept.parts == FLOW_PARTS_MARKED &&
+               before.w > 0 && after.x != before.x && move_covered(&marks, before) && move_covered(&marks, after),
+           NULL);
+    expect("restyle: and every box inside the moved one is stamped as drawn anew",
+           inner != NULL && inner->drawn != inner_drawn, NULL);
+    flow_free(old);
+    sheeted_close(&p);
+}
+
+// A MOVE ANOTHER ELEMENT'S CHANGE MADE (N4): a class on an ancestor moves a
+// positioned box through a selector, so the change log names the ancestor
+// and not the box. The box is kept moved; a later change elsewhere is laid
+// out grafting from the kept tree, and the box must not be copied back to
+// where its records put it (move_box marks it changed in the snapshot).
+static void restyle_move_by_a_class(void)
+{
+    static char html[16384];
+    size_t len = (size_t)snprintf(html, sizeof(html), "<!doctype html><style>p{color:red;padding:2px}"
+        ".menu{position:absolute;width:200px;left:-900px;top:0px}.nav.open .menu{left:40.5px}</style>"
+        "<div class=nav id=nav><div style='position:relative;width:300px'>"
+        "<div class=menu id=menu>menu <b>items</b></div>"
+        "<span>r</span></div></div><p id=c>tail</p>");
+    for (int i = 0; i < 400 && len < sizeof(html) - 64; i++)
+        len += (size_t)snprintf(html + len, sizeof(html) - len, "<p>%d</p>", i);
+    Sheeted p;
+    sheeted_open(&p, html, 800, 600);
+    flow_tree_t *old = graft_layout(&p, NULL, NULL, NULL);
+    os64_html_set_attr(p.doc, graft_node(&p, "nav"), "class", "nav open", 8);
+    graft_update(&p);
+    flow_restyle_t kept = old != NULL ? restyle_keep(&p, old) : (flow_restyle_t){0};
+    char said[96];
+    snprintf(said, sizeof(said), "kind %d why %d moved %llu written %llu %s", (int)kept.kind, (int)kept.why,
+             (unsigned long long)kept.moved, (unsigned long long)kept.written, kept.detail);
+    expect("restyle: a class on an ancestor that moves a box is kept as a move", kept.kind == FLOW_RESTYLE_PAINT &&
+           kept.moved == 1, said);
+    if (old != NULL)
+        graft_oracle(&p, old);
+    os64_html_set_attr(p.doc, graft_node(&p, "c"), "style", "padding-top:3px", 15);
+    graft_update(&p);
+    flow_tree_t *next = graft_layout(&p, old, NULL, NULL);
+    flow_free(old);
+    graft_oracle(&p, next);
+    flow_free(next);
+    sheeted_close(&p);
+}
+
+// A MOVE UNDER A CLIP (N4): what a box inside the moved one draws past its
+// box (a text shadow) is cut by a clip outside it, which did not move; the
+// moved boxes' ink is reached again, so the newly uncut shadow is in it.
+static void restyle_move_ink(void)
+{
+    static char html[16384];
+    size_t len = (size_t)snprintf(html, sizeof(html), "<!doctype html><style>p{color:red;padding:2px}</style>"
+        "<div style='position:relative;width:400px;height:100px;overflow:clip'>"
+        "<div id=m style='position:absolute;width:50px;left:0px;top:0px'>"
+        "<span style='text-shadow:-30px 0 red'>text</span></div></div>");
+    for (int i = 0; i < 400 && len < sizeof(html) - 64; i++)
+        len += (size_t)snprintf(html + len, sizeof(html) - len, "<p>%d</p>", i);
+    Sheeted p;
+    sheeted_open(&p, html, 800, 600);
+    flow_tree_t *old = graft_layout(&p, NULL, NULL, NULL);
+    static const char moved[] = "position:absolute;width:50px;left:100.25px;top:0px";
+    os64_html_set_attr(p.doc, graft_node(&p, "m"), "style", moved, sizeof(moved) - 1);
+    graft_update(&p);
+    flow_restyle_t kept = old != NULL ? restyle_keep(&p, old) : (flow_restyle_t){0};
+    flow_tree_t *whole = graft_layout(&p, NULL, NULL, NULL);
+    const os64_html_node_t *at = NULL;
+    const char *what = NULL;
+    expect("restyle: a move under a clip reaches its shadow's ink again", kept.kind == FLOW_RESTYLE_PAINT &&
+           kept.moved == 1 && whole != NULL && flow_restyle_check(old, whole, &at, &what), what);
+    flow_free(whole);
+    flow_free(old);
+    sheeted_close(&p);
+}
+
 static void restyle_in_place_cases(void)
 {
     restyle_offset_cases();
+    restyle_move_ink();
+    restyle_move_by_a_class();
+    restyle_move_marks();
+    restyle_move_sequences();
+    restyle_move_walk();
     Sheeted p;sheeted_open(&p,"<!doctype html><style>p{margin:4px}</style><p id=a>first <b>bold</b></p>"
         "<div style='height:60px'><p id=q>second</p></div><p>tail</p>",800,600);
     os64_html_node_t *q=graft_node(&p,"q");

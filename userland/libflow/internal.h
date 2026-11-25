@@ -1322,6 +1322,9 @@ typedef struct {
     os64_text_run_t **runs;
     size_t nruns, cap_runs;
     int64_t width, height;          // the page's, 26.6
+    // The page's extent from the flow alone, before the positioned boxes
+    // reached past it (page_extent): what f_layout_extent starts from.
+    int64_t flow_width, flow_height;
     // How many times an inline formatting context was measured: the cost
     // the harness holds to a linear bound (LAYOUT.md § Bounds).
     uint64_t measures, reused;
@@ -1368,6 +1371,18 @@ FLayout *f_layout_reusing(FBoxes *boxes, const os64_html_document_t *doc, const 
                           const flow_env_t *env, int32_t width, FReuseMatch *match,
                           flow_reuse_stats_t *stats);
 void f_layout_free(FLayout *layout);
+// What a box a kept restyle moved has moved since the layout, in 26.6
+// (flow.c's move, restyle.inc's keep_move).
+typedef struct {
+    int64_t dx, dy;
+} FMoved;
+// The page's extent worked out again from the layout's records with the
+// moved boxes where they moved to: the flow's extent, and each positioned
+// box's reach at its offset and its positioned ancestors' (`moved` answers
+// a node's, NULL for one that did not move). Written to the layout's
+// width and height. A moved box clips nothing and holds no clip, so the
+// clips that cut a positioned box's reach did not move.
+void f_layout_extent(FLayout *layout, const FMoved *(*moved)(void *ctx, const os64_html_node_t *node), void *ctx);
 
 // The most frames one sticky box's push may be worked from, itself, the
 // ones outside it and their scrollports' included. A sticky box past it is
