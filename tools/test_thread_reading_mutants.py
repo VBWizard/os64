@@ -176,6 +176,8 @@ mutants = [
     ('the-first-profile-reading-unmarked', YONDER, CASES_YONDER_ALL,
      '    if (k.since < s_cost.from_cycles)\n        dt_put(&u, "since the page\'s script began: ");',
      '    if (0)\n        dt_put(&u, "since the page\'s script began: ");'),
+    ('forgetting-a-key-takes-the-lines-it-begins', 'userland/apps/yonder/diag.c', CASES_YONDER_ALL,
+     '    forget_lines(d, key, true);', '    forget_lines(d, key, false);'),
     ('no-turn-is-slow', YONDER, CASES_YONDER,
      '    yonder_tr_slow(&s_tr, TR_SLOW_TURN_MS * s_tr_per_ms, TR_SLOW_TURN_MS);', '    (void)0;'),
     ('tasks-not-told-their-turn', YONDER, CASES_YONDER,

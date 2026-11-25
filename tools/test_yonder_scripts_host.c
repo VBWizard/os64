@@ -7949,6 +7949,19 @@ static void diag_lost_distinct_case(void) {
           "diag: a line given room after all is no longer counted as not kept");
     yonder_diag_free(d);
 }
+/* Forgetting one key exactly leaves the lines whose keys begin with it:
+ * the page's script profile goes, its readings stay. */
+static void diag_forget_key_case(void) {
+    yonder_diag_t *d=yonder_diag_new("http://fixture.test/",1,0);
+    static char text[16384];
+    yonder_diag_fact(d,"script profile","now");
+    yonder_diag_reading_fact(d,"script profile reading 1","then");
+    yonder_diag_forget_key(d,"script profile");
+    yonder_diag_render(d,text,sizeof(text));
+    check(strstr(text,"\nscript profile: now\n")==NULL && strstr(text,"\nscript profile reading 1: then\n")!=NULL,
+          "diag: forgetting a key exactly keeps the lines that begin with it");
+    yonder_diag_free(d);
+}
 /* Past the lines the record can tell apart, it says there are more and
  * never counts one twice. */
 static void diag_lost_overflow_case(void) {
@@ -12029,6 +12042,7 @@ static void diag_cases(void) {
     diag_css_unasked_case();
     diag_style_case();
     diag_lost_distinct_case();
+    diag_forget_key_case();
     picture_tick_cases();
     picture_text_cases();
     round_picture_glass_cases();

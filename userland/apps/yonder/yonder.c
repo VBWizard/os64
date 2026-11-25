@@ -10380,7 +10380,7 @@ static void ledger_rows(Page *p, const os64_js_runtime_t *rt, uint64_t per_ms)
     if (profile_text(rt, per_ms, &u))
         yonder_diag_fact(p->diag, "script profile", dt_text(&u));
     else
-        yonder_diag_forget(p->diag, "script profile");
+        yonder_diag_forget_key(p->diag, "script profile");   // never the readings, which begin the same
     os64_free(u.s);
 }
 
