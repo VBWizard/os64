@@ -1453,8 +1453,9 @@ static bool page_rebuild_owed(const Page *p)
 
 // Counts the trees any Page has been given, so a reader can tell a new
 // layout from the old one even where the new tree has the old one's
-// address; and the animation ticks that moved boxes in the shown one
-// (tick_page). What intersections_turn reads for "something moved".
+// address; and the times boxes moved in the shown one with no new tree:
+// an animation's tick (tick_page), or a box that only moved, kept in it
+// (restyle_kept_shown). What intersections_turn reads for "something moved".
 static uint64_t s_trees_given, s_ticks_moved;
 
 // The tree a Page holds from now on, and with it the animations its layout
@@ -2145,6 +2146,7 @@ static void restyle_counted(const Page *p, flow_restyle_t kept)
         return;
     yonder_layout_stats_t sample = {.restyle_reason_names = names};
     if (kept.kind == FLOW_RESTYLE_NOTHING) sample.kept_nothing = 1;
+    else if (kept.kind == FLOW_RESTYLE_PAINT && kept.moved > 0) sample.kept_moved = 1, sample.kept_moved_boxes = kept.moved;
     else if (kept.kind == FLOW_RESTYLE_PAINT) sample.kept_paint = 1;
     else if ((unsigned)kept.why < YONDER_LAYOUT_RESTYLE_REASONS) sample.kept_declined[kept.why] = 1;
     layout_profile_add(p, &sample);
@@ -4731,6 +4733,10 @@ static flow_tree_t *restyle_kept_shown(Page *p, Page *reclaim, int32_t width, in
     restyle_counted(p, kept);
     if (kept.kind == FLOW_RESTYLE_DECLINED)
         return NULL;
+    // A box that only moved moved what an observation reads, as a tick that
+    // moves boxes does (intersections_turn).
+    if (kept.moved > 0)
+        s_ticks_moved++;
     // `--geometry-check`: every Nth kept tree is laid out whole beside
     // itself and the two compared; the record says how many were and the
     // first that differed, with the element and what differed.

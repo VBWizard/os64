@@ -8054,14 +8054,27 @@ static const FBox *clip_parent(const FBox *b)
 // it contains included: they reach where they are drawn, which flow.c
 // works out from their frames — all but the root's, which moves the whole
 // page.
-static void page_extent(const FBox *b, int64_t *width, int64_t *height)
+// `ox`, `oy`: what the boxes round `b` moved since the layout, which a
+// moved box adds its own move to (f_layout_extent); a layout's own walk
+// has none.
+typedef struct {
+    const FMoved *(*moved)(void *ctx, const os64_html_node_t *node);
+    void *ctx;
+} ExtentMoves;
+static void page_extent_at(const FBox *b, int64_t *width, int64_t *height, int64_t ox, int64_t oy,
+                           const ExtentMoves *moves)
 {
     if (!b->placed ||
         (b->out_of_flow && b->style->position == FLOW_POSITION_FIXED && (b->pos == NULL || b->pos->cb == NULL)) ||
         (b->transformed && b->parent != NULL))
         return;
+    const FMoved *m = moves != NULL && b->positioned ? moves->moved(moves->ctx, b->node) : NULL;
+    if (m != NULL) {
+        ox += m->dx;
+        oy += m->dy;
+    }
     if (b->positioned) {
-        int64_t r = right_edge(b), bottom = bottom_edge(b);
+        int64_t r = right_edge(b) + ox, bottom = bottom_edge(b) + oy;
         for (const FBox *c = clip_parent(b); c != NULL; c = clip_parent(c)) {
             r = legacy_far_edge(c,true,r);
             bottom = legacy_far_edge(c,false,bottom);
@@ -8076,9 +8089,24 @@ static void page_extent(const FBox *b, int64_t *width, int64_t *height)
     for (const FLine *ln = b->lines; ln != NULL; ln = ln->next)
         for (const FFrag *fr = ln->frags; fr != NULL; fr = fr->next)
             if (fr->kind == FF_ATOMIC && fr->item->content != NULL)
-                page_extent(fr->item->content, width, height);
+                page_extent_at(fr->item->content, width, height, ox, oy, moves);
     for (const FBox *c = b->first; c != NULL; c = c->next)
-        page_extent(c, width, height);
+        page_extent_at(c, width, height, ox, oy, moves);
+}
+
+static void page_extent(const FBox *b, int64_t *width, int64_t *height)
+{
+    page_extent_at(b, width, height, 0, 0, NULL);
+}
+
+void f_layout_extent(FLayout *layout, const FMoved *(*moved)(void *ctx, const os64_html_node_t *node), void *ctx)
+{
+    if (layout == NULL || layout->boxes == NULL || layout->boxes->root == NULL)
+        return;
+    ExtentMoves moves = {moved, ctx};
+    layout->width = layout->flow_width;
+    layout->height = layout->flow_height;
+    page_extent_at(layout->boxes->root, &layout->width, &layout->height, 0, 0, &moves);
 }
 
 FLayout *f_layout(FBoxes *boxes, const os64_html_document_t *doc, const os64_page_t *model,
@@ -8132,6 +8160,8 @@ FLayout *f_layout_reusing(FBoxes *boxes, const os64_html_document_t *doc, const 
             absolutes(&l, boxes->styles, boxes->icb_first, (Rect){0, 0, w, vh}, boxes->root);
         }
         out->width = max64(w, right_edge(boxes->root));
+        out->flow_width = out->width;
+        out->flow_height = out->height;
         page_extent(boxes->root, &out->width, &out->height);
     }
     return out;
