@@ -84,6 +84,7 @@ bool test_vma_partial_page_bss_zero_filled(void);
 bool test_handle_table_grows(void);
 bool test_handle_table_ceiling(void);
 bool test_handle_table_no_grow_in_teardown(void);
+bool test_task_va_reserve(void);
 bool test_pty_publication_hold(void);
 bool test_pty_resize_modes(void);
 bool test_pty_history(void);
@@ -6427,6 +6428,7 @@ static void register_builtin_tests(void)
     test_register("handle_table_grows", test_handle_table_grows, TEST_PHASE_POSTBOOT);
     test_register("handle_table_ceiling", test_handle_table_ceiling, TEST_PHASE_POSTBOOT);
     test_register("handle_table_no_grow_in_teardown", test_handle_table_no_grow_in_teardown, TEST_PHASE_POSTBOOT);
+    test_register("task_va_reserve", test_task_va_reserve, TEST_PHASE_POSTBOOT);
     test_register("pty_publication_hold", test_pty_publication_hold, TEST_PHASE_POSTBOOT);
     test_register("pty_history", test_pty_history, TEST_PHASE_POSTBOOT);
     test_register("pty_resize_modes", test_pty_resize_modes, TEST_PHASE_POSTBOOT);
