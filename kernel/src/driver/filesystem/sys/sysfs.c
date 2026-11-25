@@ -1769,8 +1769,9 @@ static void sys_gen_gui_frame_clock(synth_text_t *t, const gui_composite_count_t
 // A window's planes (gui/plane.h, VIDEO_PLANE.md § 3.9): the machine's
 // pairs of stores, the refusals by reason, then one line a plane. `composed`
 // is what the compositor drew of it: picture pixels copied, content pixels
-// read and blended over it, content read as opaque where the picture did not
-// reach, and the time all of that took, so a reader can price each kind.
+// in an overlay read and put over it (`blended`, whatever their top byte),
+// content read as opaque where the picture did not reach, and the time all
+// of that took, so a reader can price each kind.
 static void sys_gen_gui_planes(synth_text_t *t)
 {
 	enum { ROWS = 8 };

@@ -279,6 +279,26 @@ bool test_planes(void)
 	      kept1 + 1 == kept0, "a kept pair reused", rc);
 	check(c > 0 && (uint32_t)c != pa, "a new name for the slot", c);
 
+	// A kept pair of a larger class serves a smaller plane: a 1280x720-class
+	// plane made and destroyed, then a small one takes its pair.
+	if (c > 0)
+		gui_plane_destroy(handle, (uint32_t)c);
+	c = 0;
+	gui_plane_release_kept_for_test(task);
+	int64_t big = gui_plane_create(handle, 1000, 600);
+	os64_gui_plane_surface_t big_surf = {0};
+	rc = big > 0 ? gui_plane_surface(handle, (uint32_t)big, &big_surf) : big;
+	check(rc == 0 && big_surf.cap_w == 1280 && big_surf.cap_h == 720, "the 1280x720 class", rc);
+	if (big > 0)
+		gui_plane_destroy(handle, (uint32_t)big);
+	int64_t small = gui_plane_create(handle, 100, 100);
+	os64_gui_plane_surface_t small_surf = {0};
+	rc = small > 0 ? gui_plane_surface(handle, (uint32_t)small, &small_surf) : small;
+	check(rc == 0 && small_surf.pixels == big_surf.pixels && small_surf.cap_w == 1280,
+	      "a kept larger pair serves a smaller plane", rc);
+	if (small > 0)
+		gui_plane_destroy(handle, (uint32_t)small);
+
 	// The budget: set below the next pair, refused; put back.
 	if (c > 0)
 		gui_plane_destroy(handle, (uint32_t)c);

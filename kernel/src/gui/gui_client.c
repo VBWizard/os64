@@ -1024,6 +1024,4 @@ void gui_task_destroy_windows(struct task *t)
 		wm_destroy(win);   // damages the vacated area itself, its planes with it
 	}
 	gui_unlock(irqflags);
-	// The planes' pairs, in use a moment ago or kept, after the lock.
-	gui_task_planes_release(t);
 }

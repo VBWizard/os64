@@ -82,14 +82,15 @@ today (review, finding 1). So this design never puts the question:
 
 - `plane_destroy`, and the replacement of a plane, hand its two stores to the
   task's **kept stores**, still mapped, still the task's pages. The next
-  `plane_create` of the same capacity class takes them. A thread that kept
+  `plane_create` of the same capacity class, or a smaller one, takes them. A thread that kept
   the old pointer can spoil pixels in a later plane of its own task and
   nothing else.
-- The pages go back to the allocator at task death, where the sibling threads
-  are already stopped when `gui_task_destroy_windows` runs (task.c's order),
-  through `gui_canvas_pages_release` like any canvas, after kGuiLock (the
-  owner's signalLock, which is what keeps signal delivery from writing a page
-  as it is released).
+- The pages go back to the allocator at the task's burial (`task_destroy`),
+  when every thread of it is retired, not at its exit, where a sibling told
+  to die may still be making a pair or drawing in a canvas. They go through
+  `gui_canvas_pages_release` like any canvas, after kGuiLock (the owner's
+  signalLock, which is what keeps signal delivery from writing a page as it
+  is released).
 - Capacity classes (§ 3.8) are what bound this: a task keeps at most what it
   once used at the same time in each class.
 
@@ -301,7 +302,8 @@ of § 3.5's rules.
 - **P1c**: the calls (syscalls 71 to 75: create, surface, publish, destroy,
   and `window_publish_edits`), `kernel/src/gui/plane.c`, the ABI in
   `os64/gui.h` § Planes. A pair of stores and its record are made outside
-  kGuiLock and stay on the task's list (`task->planeStores`) until its death;
+  kGuiLock and stay on the task's list (`task->planeStores`) until its
+  burial, a kept pair serving the next plane of its class or a smaller one;
   the creator's exit is taken at the top of `syscall_thread_exit`, which a
   thread's returning entry reaches through libos64's exit stub; every other
   way a thread ends ends its task. The compositor draws the content around
@@ -315,7 +317,10 @@ of § 3.5's rules.
   the machine's pairs (in use and kept) and bytes, not each task's; a plane's
   publish starts the window's publish-to-glass instrument, not one kept apart
   for planes; `window_bytes` does not count planes; the shown test, frames
-  and their counts are P1d's.
+  and their counts are P1d's. Open: kept pairs of smaller classes can fill
+  a task's budget for its life, so a larger plane is refused until it dies
+  (beside one 4K pair in use, two kept 1080p pairs leave no room in 128 MiB
+  for a second 4K one, which would fit without them).
 
 ## 4. libmedia
 

@@ -5,12 +5,16 @@
 //
 //   - the picture thread creates the plane and is its creator: the window's
 //     thread is refused its surface, its publish and its destroy;
-//   - a place before any picture, damage short of the hole, and an overlay
-//     outside its clip are refused, and change nothing;
+//   - damage short of the hole, an overlay outside its clip and an unknown
+//     name are refused (that a refusal changes nothing is the kernel's own
+//     test, kernel/test/test_planes.c, which can see the plane's state);
 //   - placed, the plane is drawn: the compositor's counts rise;
-//   - placed, the plane cannot be destroyed, nor its window;
+//   - placed, the plane cannot be destroyed, even by its creator, nor can
+//     its window;
 //   - the picture thread ends with its plane placed, and the plane goes
-//     with it: the window can then be destroyed.
+//     with it: the window can then be destroyed;
+//   - a program that dies with a plane placed gives its pair of stores
+//     back when it is buried: /sys/gui's count of pairs comes back down.
 //
 // And it prices the compositor's part (/sys/gui's plane line: what was
 // drawn, and in how long), in three phases a second each: no overlay (every
@@ -49,6 +53,8 @@ static volatile uint32_t s_plane;      // the picture thread's plane, once made
 static volatile int s_pictured;        // its first picture is published
 static volatile int s_stop;            // the window's thread says: end
 static volatile uint64_t s_published;
+static volatile int s_try_destroy;     // the window's thread asks the creator to try
+static volatile int64_t s_destroy_rc;  // and what it was told
 
 static int64_t picture_thread(void *arg)
 {
@@ -77,6 +83,10 @@ static int64_t picture_thread(void *arg)
         if (os64_gui_plane_publish(s_win, (uint32_t)name, PIC_W, PIC_H) == 0)
             s_published++;
         s_pictured = 1;
+        if (s_try_destroy == 1) {
+            s_destroy_rc = os64_gui_plane_destroy(s_win, (uint32_t)name);
+            s_try_destroy = 2;
+        }
         os64_sleep(16);
     }
     // Ending with the plane placed: the kernel takes it out.
@@ -198,14 +208,54 @@ static bool phase(os64_draw_ctx_t *ctx, uint32_t plane, int strip, composed_t *r
     return true;
 }
 
+// /sys/gui's count of the machine's pairs of stores.
+static bool read_pairs(uint64_t *pairs)
+{
+    int64_t h = os64_open("/sys/gui", "r");
+    if (h < 0)
+        return false;
+    int64_t n = 0, got;
+    while (n < (int64_t)sizeof(s_text) - 1 && (got = os64_read((int32_t)h, s_text + n, sizeof(s_text) - 1 - (size_t)n)) > 0)
+        n += got;
+    os64_close((int32_t)h);
+    s_text[n] = 0;
+    const char *at;
+    if (!find(s_text, "pairs of stores", &at))
+        return false;
+    *pairs = number(&at);
+    return true;
+}
+
+// The orphan: a window and a placed plane, and an exit that cleans up
+// nothing. 0 when it got as far as the exit with its plane placed.
+static int orphan(void)
+{
+    s_win = os64_gui_window_create("planetest orphan", 80, 80, 320, 200, OS64_GUI_CREATE_CONTENT_SIZE);
+    if (s_win <= 0)
+        return 1;
+    int64_t name = os64_gui_plane_create(s_win, 64, 48);
+    os64_gui_plane_surface_t s;
+    if (name <= 0 || os64_gui_plane_surface(s_win, (uint32_t)name, &s) != 0 ||
+        os64_gui_plane_publish(s_win, (uint32_t)name, 64, 48) != 0)
+        return 2;
+    os64_gui_plane_edit_t e = {0};
+    e.plane = (uint32_t)name;
+    e.origin = (os64_gui_rect_t){10, 10, 64, 48};
+    e.clip = e.origin;
+    return os64_gui_window_publish_edits(s_win, NULL, &e, 1) == 0 ? 0 : 3;
+}
+
 // Picoseconds a pixel, printed as nanoseconds with two places.
 static void print_ps(const char *what, uint64_t ps)
 {
     os64_printf("planetest: %s %lu.%02lu ns a pixel\n", what, ps / 1000, (ps % 1000) / 10);
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
+    if (argc == 2 && os64_streq(argv[1], "--orphan"))
+        return orphan();
+
     s_win = os64_gui_window_create("planetest", 60, 60, CONTENT_W, CONTENT_H, OS64_GUI_CREATE_CONTENT_SIZE);
     if (s_win == OS64_GUI_ERR_NOT_RUNNING) {
         os64_printf("planetest: SKIP (requires GUI)\n");
@@ -259,8 +309,13 @@ int main(void)
     composed_t copy = {0}, blend = {0}, read = {0};
     bool priced = phase(&ctx, plane, STRIP_NONE, &copy);
     CHECK(priced && copy.copied > 0);
-    // While placed: neither the window nor the plane may go.
+    // While placed: neither the window nor the plane may go, the plane not
+    // even at its creator's asking.
     CHECK(os64_gui_window_destroy(s_win) == OS64_GUI_ERR_BUSY);
+    s_try_destroy = 1;
+    for (int i = 0; i < 200 && s_try_destroy != 2; i++)
+        os64_sleep(5);
+    CHECK(s_try_destroy == 2 && s_destroy_rc == OS64_GUI_ERR_BUSY);
     priced = priced && phase(&ctx, plane, STRIP_TRANSLUCENT, &blend);
     CHECK(priced && blend.blended > 0);
     priced = priced && phase(&ctx, plane, STRIP_OPAQUE_OR_CLEAR, &read);
@@ -288,6 +343,26 @@ int main(void)
     }
 
     CHECK(os64_gui_window_destroy(s_win) == 0);
+
+    // A program dying with a plane placed: its pair goes back at burial,
+    // which comes a kworker pass or two after its exit.
+    uint64_t before = 0, after = 0;
+    CHECK(read_pairs(&before));
+    char *args[] = { "/tests/planetest", "--orphan", NULL };
+    int64_t child = os64_spawn(args[0], args);
+    int32_t code = -1;
+    CHECK(child > 0);
+    if (child > 0)
+        CHECK(os64_wait(child, &code) == child && code == 0);
+    bool back = false;
+    for (int i = 0; i < 100 && !back; i++) {
+        back = read_pairs(&after) && after == before;
+        if (!back)
+            os64_sleep(20);
+    }
+    CHECK(back);
+    if (!back)
+        os64_printf("planetest: pairs %lu before the orphan, %lu after\n", before, after);
     if (failures) {
         os64_printf("planetest: %d check(s) failed\n", failures);
         return PLANE_FAIL;

@@ -706,7 +706,7 @@ static inline int64_t os64_gui_popup_create(const char *title, int64_t owner,
 #define OS64_GUI_ERR_NO_PLANE       (-13) // no such plane, or a name from before it was destroyed
 #define OS64_GUI_ERR_OVER_BUDGET    (-14) // the task's planes would hold more than the kernel allows
 #define OS64_GUI_ERR_PLANE_DAMAGE   (-15) // a publish's damage does not cover what its edits change
-#define OS64_GUI_ERR_PLANE_OVERLAP  (-16) // clips meet, a clip leaves the content, an overlay its clip, or the overlays are over budget
+#define OS64_GUI_ERR_PLANE_OVERLAP  (-16) // clips meet, a clip leaves the content, an overlay its clip, the overlays are over budget, or a rectangle has a negative size or a far edge past INT32_MAX
 #define OS64_GUI_ERR_PLANE_PICTURE  (-17) // a place with no picture of its origin's size, or a resize while placed
 
 typedef struct os64_gui_plane_surface

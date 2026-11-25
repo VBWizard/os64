@@ -27,9 +27,9 @@ extern uint64_t kCPUCyclesPerSecond;
 
 // A pair of stores and its record. The record is made first, outside
 // kGuiLock, and joins its task's list (task->planeStores) before its pair is
-// made, also outside the lock; it stays there until the task dies, in use or
-// kept, unless its pair could not be made, when it leaves the list and is
-// freed. `ready` is false while the pair is being made: its bytes count
+// made, also outside the lock; it stays there until the task is buried, in
+// use or kept, unless its pair could not be made, when it leaves the list and
+// is freed. `ready` is false while the pair is being made: its bytes count
 // against the budget from the moment the record joins the list, so two
 // creators cannot both slip under it.
 typedef struct plane_store {
@@ -75,9 +75,9 @@ static int64_t refuse(gui_plane_refusal_t why, int64_t code)
 	return code;
 }
 
-static uint64_t plane_budget(void)
+static uint64_t plane_budget(const task_t *t)
 {
-	return s_budget_for_test ? s_budget_for_test : GUI_PLANE_BYTES;
+	return t->kernelTask && s_budget_for_test ? s_budget_for_test : GUI_PLANE_BYTES;
 }
 
 static uint64_t page_round(uint64_t bytes)
@@ -104,10 +104,12 @@ static bool plane_class(uint32_t w, uint32_t h, uint32_t *cap_w, uint32_t *cap_h
 }
 
 // A plane's name: its slot (1-based) in the low byte, its generation in the
-// next. Never 0.
-static uint32_t plane_name(unsigned slot, uint8_t generation)
+// 24 bits above. Never 0. A slot's generation moves at every create, so an
+// old name meets a new plane only after 2^24 of them in that slot.
+#define PLANE_GENERATION_MASK 0xFFFFFFu
+static uint32_t plane_name(unsigned slot, uint32_t generation)
 {
-	return ((uint32_t)generation << 8) | (slot + 1);
+	return ((generation & PLANE_GENERATION_MASK) << 8) | (slot + 1);
 }
 
 static pc_rect_t to_pc(rect_t r) { return (pc_rect_t){r.x, r.y, r.w, r.h}; }
@@ -147,8 +149,8 @@ static pc_rect_t content_bounds(const window_t *w)
 static gui_plane_t *plane_lookup(window_t *win, uint32_t name, int64_t *err)
 {
 	unsigned slot = (name & 0xFF) - 1;
-	if ((name >> 16) != 0 || (name & 0xFF) == 0 || slot >= GUI_WINDOW_PLANES ||
-	    win->planes[slot].state == GUI_PLANE_FREE || win->planes[slot].generation != (uint8_t)(name >> 8)) {
+	if ((name & 0xFF) == 0 || slot >= GUI_WINDOW_PLANES || win->planes[slot].state == GUI_PLANE_FREE ||
+	    win->planes[slot].generation != (name >> 8)) {
 		*err = refuse(GUI_PLANE_REFUSED_NO_PLANE, OS64_GUI_ERR_NO_PLANE);
 		return NULL;
 	}
@@ -205,7 +207,7 @@ static void plane_free_locked(gui_plane_t *p)
 		p->store->in_use = false;
 		s_pairs_kept++;
 	}
-	uint8_t generation = p->generation;
+	uint32_t generation = p->generation;
 	memset(p, 0, sizeof(*p));
 	p->generation = generation;
 	p->state = GUI_PLANE_FREE;
@@ -237,12 +239,17 @@ static uint64_t task_pair_bytes_locked(const task_t *t)
 	return bytes;
 }
 
+// The smallest kept pair that holds the class asked for: a larger one serves
+// a smaller plane, so a task whose kept pairs fill its budget is not refused
+// a plane they can hold.
 static plane_store_t *kept_pair_locked(task_t *t, uint32_t cap_w, uint32_t cap_h)
 {
+	plane_store_t *best = NULL;
 	for (plane_store_t *s = t->planeStores; s != NULL; s = s->next)
-		if (s->ready && !s->in_use && s->cap_w == cap_w && s->cap_h == cap_h)
-			return s;
-	return NULL;
+		if (s->ready && !s->in_use && s->cap_w >= cap_w && s->cap_h >= cap_h &&
+		    (best == NULL || (uint64_t)s->cap_w * s->cap_h < (uint64_t)best->cap_w * best->cap_h))
+			best = s;
+	return best;
 }
 
 static void unlink_store_locked(task_t *t, plane_store_t *s)
@@ -404,7 +411,7 @@ int64_t gui_plane_create(int64_t handle, uint32_t width, uint32_t height)
 		store->in_use = true;
 		s_pairs_kept--;
 	} else {
-		if (task_pair_bytes_locked(task) + pair_bytes(cap_w, cap_h) > plane_budget()) {
+		if (task_pair_bytes_locked(task) + pair_bytes(cap_w, cap_h) > plane_budget(task)) {
 			gui_unlock(flags);
 			kfree(fresh);
 			return refuse(GUI_PLANE_REFUSED_BUDGET, OS64_GUI_ERR_OVER_BUDGET);
@@ -449,15 +456,15 @@ int64_t gui_plane_create(int64_t handle, uint32_t width, uint32_t height)
 		return win == NULL ? err : refuse(GUI_PLANE_REFUSED_NO_SLOT, GUI_ERR_NO_RESOURCES);
 	}
 	gui_plane_t *p = &win->planes[slot];
-	uint8_t generation = (uint8_t)(p->generation + 1);
+	uint32_t generation = (p->generation + 1) & PLANE_GENERATION_MASK;
 	memset(p, 0, sizeof(*p));
 	p->generation = generation;
 	p->state = GUI_PLANE_CREATED;
 	p->creator = self;
 	p->store = store;
 	p->front = store->front;
-	p->cap_w = cap_w;
-	p->cap_h = cap_h;
+	p->cap_w = store->cap_w;   // a kept larger pair may serve
+	p->cap_h = store->cap_h;
 	gui_unlock(flags);
 	return (int64_t)plane_name((unsigned)slot, generation);
 }

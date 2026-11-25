@@ -50,8 +50,10 @@ typedef struct {
 } pc_image_t;
 
 // What a composition did, for /sys/gui: picture pixels copied, content
-// pixels read and blended over the picture, and content pixels inside the
-// clip read as opaque because the picture did not reach them.
+// pixels inside an overlay read and put over the picture (whatever their
+// top byte: 0 and 255 take plane_blend's shortcuts, and are counted here
+// too), and content pixels inside the clip read as opaque because the
+// picture did not reach them.
 typedef struct {
 	uint64_t copied, blended, opaque;
 } pc_counts_t;
