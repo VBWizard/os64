@@ -147,9 +147,10 @@ static void turn_end(yonder_tr_t *t, int64_t now)
     t->slow[at] = t->turn;
 }
 
-void yonder_tr_slow(yonder_tr_t *t, uint64_t ticks)
+void yonder_tr_slow(yonder_tr_t *t, uint64_t ticks, uint64_t ms)
 {
     t->slow_ticks = ticks;
+    t->slow_ms = ms;
 }
 
 void yonder_tr_call(yonder_tr_t *t, yonder_tr_call_t call, int64_t now)
@@ -566,12 +567,16 @@ void yonder_tr_slow_line(const yonder_tr_t *t, uint64_t per_ms, char *out, size_
     if (cap == 0)
         return;
     out[0] = '\0';
+    if (t->slow_ticks == 0) {
+        put(&o, "not judged: the counter's rate was not known when the reading began");
+        return;
+    }
     if (t->slow_n == 0) {
         put(&o, "none of the ");
         put_u(&o, t->turns_ended);
         put(&o, t->turns_ended == 1 ? " turn" : " turns");
         put(&o, " took ");
-        put_ms(&o, t->slow_ticks, per_ms);
+        put_u(&o, t->slow_ms);
         put(&o, " ms or more");
         return;
     }
@@ -579,7 +584,7 @@ void yonder_tr_slow_line(const yonder_tr_t *t, uint64_t per_ms, char *out, size_
     put(&o, " of ");
     put_u(&o, t->turns_ended);
     put(&o, " turns took ");
-    put_ms(&o, t->slow_ticks, per_ms);
+    put_u(&o, t->slow_ms);
     put(&o, " ms or more, ");
     put_ms(&o, t->slow_all, per_ms);
     put(&o, " ms in all; they began at");

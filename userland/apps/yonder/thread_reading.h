@@ -13,12 +13,16 @@
 //   - inside each step, what ran in it wherever the call: script tasks,
 //     layouts, model rebuilds, what the tasks said afterwards (the status
 //     line, the record, the audit) and drawing, each with a count;
+//   - the loop's slow TURNS (a turn: from the dispatcher's call to the next
+//     call of the dispatcher or the wait), each whole: its calls, what ran
+//     inside it, its longest task;
 //   - the timer tasks by the site that set them (the dom's
 //     os64_dom_timer_sites), the costliest first;
 //   - the script runtime's collector over the reading, from two readings
 //     of its counts (os64_js_collector) the caller hands over.
 // A reading is the span between two resets: the caller resets after it
-// writes the lines, and the call under way goes on from the reset.
+// writes the lines, and the call and the loop's turn under way go on from
+// the reset.
 //
 // Pure: no clock (every time is the caller's, in ticks of one counter, and
 // the lines turn ticks into time with the rate the caller says), no
@@ -109,7 +113,8 @@ typedef struct {
 
 #define YONDER_TR_SLOW_KEPT 6
 #define YONDER_TR_SLOW_STARTS 48
-#define YONDER_TR_TASK_TEXT 160
+// Room for "a timer set by " and a site as the timers line keeps it.
+#define YONDER_TR_TASK_TEXT (YONDER_TR_SITE_TEXT + 24)
 
 // ONE TURN OF THE LOOP: from the dispatcher's call to the next call of the
 // dispatcher or the wait, so its time is the loop's work and never its
@@ -161,7 +166,7 @@ typedef struct {
     // time; when the first YONDER_TR_SLOW_STARTS began, in order, so a beat
     // shows as evenly spaced starts; and the YONDER_TR_SLOW_KEPT longest,
     // whole. The turn under way is `turn` while `turn_open`.
-    uint64_t slow_ticks;
+    uint64_t slow_ticks, slow_ms;
     uint64_t turns_ended, slow_n, slow_all;
     int64_t slow_starts[YONDER_TR_SLOW_STARTS];
     uint32_t nstarts, nslow;
@@ -184,8 +189,11 @@ void yonder_tr_off(yonder_tr_t *t);
 // wait and the dispatcher's call end the loop's turn under way; the
 // dispatcher's begins the next.
 void yonder_tr_call(yonder_tr_t *t, yonder_tr_call_t call, int64_t now);
-// A loop's turn of `ticks` or more is slow, until the next reset (0: none).
-void yonder_tr_slow(yonder_tr_t *t, uint64_t ticks);
+// A loop's turn of `ticks` or more is slow, until the next reset; `ms` is
+// that threshold as the line says it, so the line never turns it back
+// through a rate measured later. 0 ticks: no turn is judged (the caller
+// had no rate to turn `ms` into ticks with), and the line says so.
+void yonder_tr_slow(yonder_tr_t *t, uint64_t ticks, uint64_t ms);
 // A task of any kind ended after `ticks`, forcing `layouts` in
 // `layout_ticks`: `what` names it (copied, cut to fit), and the longest of
 // a turn is the one its slow-turn entry names.

@@ -4586,7 +4586,7 @@ static void tr_restart(void)
     s_tr_checked_seen = yonder_scripts_checks_visited(g.page.scripts);
     s_tr_per_ms = counter_per_ms();
     yonder_tr_reset(&s_tr, (int64_t)cycles(), &c, &l);
-    yonder_tr_slow(&s_tr, TR_SLOW_TURN_MS * s_tr_per_ms);
+    yonder_tr_slow(&s_tr, TR_SLOW_TURN_MS * s_tr_per_ms, TR_SLOW_TURN_MS);
 }
 
 // The records the page's every-turn checks visited this turn, told the
@@ -14817,7 +14817,7 @@ static void task_said(yonder_scripts_t *host, bool was_alive, const char *what,
         // names it, the rest by kind and script as the timeline does.
         char named[YONDER_TR_TASK_TEXT];
         if (site != NULL)
-            os64_snprintf(named, sizeof(named), "a timer set at %s", site);
+            os64_snprintf(named, sizeof(named), "a timer set by %s", site);
         else
             os64_snprintf(named, sizeof(named), "%s%s%s", what, out->source_name[0] ? " " : "", out->source_name);
         yonder_tr_task(&s_tr, named, spent, forced.layouts, forced_ticks);
