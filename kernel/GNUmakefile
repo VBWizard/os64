@@ -187,6 +187,12 @@ override HEADER_DEPS := $(patsubst src/%,obj/%,$(SRC_CFILES:.c=.c.d) $(ASFILES:.
 
 # Ported code lives in ports/, outside the find above, with rules and flags of
 # its own: each port's .mk says how and why.
+# The plane composer (gui/plane_compose.h) runs under kGuiLock at every
+# picture a plane shows, over rows the size of a video: -O2, while the rest
+# of the kernel keeps -O0. Pure and integer only, so nothing else about it
+# changes; tools/test_plane_compose_host.sh proves it at its own flags.
+obj/gui/plane_compose.c.o: override CFLAGS += -O2
+
 include ports/sbc/sbc.mk
 override OBJ += $(SBC_OBJ)
 override HEADER_DEPS += $(SBC_OBJ:.o=.d)
