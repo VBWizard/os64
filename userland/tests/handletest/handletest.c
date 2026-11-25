@@ -144,9 +144,13 @@ static int64_t reader(void *arg)
     return (int64_t)rounds;
 }
 
+// The thread step 6 asks for at the ceiling. It must never be made; if it
+// is, it stays alive to be counted, and the task's exit ends it.
 static int64_t never_runs(void *arg)
 {
     (void)arg;
+    for (;;)
+        os64_sleep(1000);
     return 0;
 }
 
