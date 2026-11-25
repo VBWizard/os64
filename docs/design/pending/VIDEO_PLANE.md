@@ -234,6 +234,12 @@ No new lock. Every plane call takes kGuiLock once, at a new counted site
   glass, and display frames missed, with the plane on and off, with an
   overlay at the budget, and with several planes publishing. Time a plane is
   deliberately not shown is kept out of the missed count.
+- **The P5's figure for a publish's copy** (planetest, 2026-11-25): the
+  plane site's worst hold of kGuiLock was 0.14 ms for a 640x360 picture,
+  0.32 ms for 1280x720, 0.64 ms for 1920x1080, 1.5 ms for 2560x1440 and
+  3.4 ms for 3840x2160. The copy is affordable through the 1080p class and
+  not above it, which is the measured case for flipping the stores instead
+  of copying when the larger classes are used.
 
 ### 3.8 Memory
 
@@ -293,7 +299,7 @@ of § 3.5's rules.
   `/dev/glass`; and the same under the frame clock's tearing count.
 - `make run-sparse` as well, since a second thread publishes.
 
-### 3.11 As built (P1a to P1d)
+### 3.11 As built (P1a to P2a)
 
 - **P1a**: `task_va_reserve` (task.c) is the one door; `map` and a window's
   canvas take their ranges through it, and so does a plane's canvas.
@@ -338,6 +344,17 @@ of § 3.5's rules.
   window's publish-to-glass instrument, not one kept apart for planes;
   `window_bytes` does not count planes; a caught signal ending a wait is in
   the code (`signal_park_must_end`, as every park) but no case makes one.
+- **P2a**: libmedia's show thread (`media_player.c`), the pace's one owner
+  while a plane is on, with the pass of P2's design state; its decisions are
+  `media_show.c`, pure (`tools/test_media_show_host.sh`, 15 mutants): a
+  publish owed, stale and ready, a recreate past the class, closing and its
+  bound. `os64_media_player_plane` waits for the create's verdict (a tripwire
+  bound only); `shown` pins a frame (two at most); a refused recreate hands
+  the pace back to `frame`; the decoding thread joins the show thread before
+  `finished`. Proof: `/tests/playertest` step 8 (the plane made and `frame`
+  refused, published hidden then placed, `shown` pinned while the pace moves,
+  a new size stale then ready on a new plane, closed placed and finished
+  after the bound with the plane taken out, refused with no slot).
 - **Open**: kept pairs of smaller classes can fill
   a task's budget for its life, so a larger plane is refused until it dies
   (beside one 4K pair in use, two kept 1080p pairs leave no room in 128 MiB
