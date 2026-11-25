@@ -15,8 +15,17 @@ P.2.4,Serve catalogs and manifests and stream full or selective archives,P.2.3,d
 P.2.5,Run host and Os64 archive compatibility and failure tests,P.2.4,done,#734,GNU and Os64 archive proofs passed including 64 MiB media and corrupt or truncated inputs. Windows loopback passed.
 P.2.6,Resolve the intermittent Windows archive interruption,P.2.4,done,#734,ADDED 2026-11-24: the native server refused an unchanged object. Path and handle stats now compare timestamps within each API.
 
-P.3,Preview installs from the Porter CLI,P.2,todo,,Distinguish known downgrades from local edits and check resolved destination collisions.
+P.3,Preview installs from the Porter CLI,P.2,code,,Distinguish known downgrades from local edits and check resolved destination collisions.
+P.3.1,Read the Porter catalog and verify selected target manifests,P.2,doing,,Implement bounded guest wire and schema readers.
+P.3.2,Resolve effective configuration and volume-relative destination paths,P.3.1,doing,,Check mount availability and protected paths and FAT aliases and other destination collisions.
+P.3.3,Build a reusable read-only three-way planner,P.3.2,doing,,Cover adoption and receipt drift and scoped retirements and downgrade and unmanaged entries.
+P.3.4,Expose a preview CLI with kernel compatibility and byte estimates,P.3.3,doing,,Show the selected and installed identities and any reasons the plan cannot proceed.
+P.3.5,Prove safety and preview scenarios on QEMU ext2 and FAT,P.3.4,doing,,Check that destination bytes and history remain untouched.
+P.3.6,Prepare a frozen P5 preview cohort and workstation instructions,P.3.5,doing,,Provide exact Windows and guest commands with a sample baseline and SHA-256 manifest.
+
 P.4,Implement checked storage barriers and ext2 install and undo,P.3,todo,,Verify interrupted transactions and offline recovery with a disposable disk.
 P.5,Update FAT and kernel files and prove bootable rescue,P.4,todo,,Boot the known-good rescue runtime and exercise failure and reboot boundaries.
 P.6,Unwind multiple receipts in order,P.4,todo,,Preflight older backups and resume interrupted undo while preserving independent media.
 P.7,Deliver the desktop front end and complete hardware acceptance,P.5 P.6,todo,,Compare CLI and GUI behavior and run the accepted rehearsal on hardware.
+P.3.7,Expose the exact booted kernel identity for system preview,P.3.4,doing,,ADDED 2026-11-24: the staged boot file can differ from the ELF the machine actually booted.
+P.3.8,Keep a runnable guest preview regression,P.3.5,doing,,ADDED 2026-11-24: the P.4 writer will consume the tested preview decisions.
