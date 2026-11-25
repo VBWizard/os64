@@ -31,10 +31,9 @@
 // The most pixels a place's overlay rectangles may cover together: about a
 // player's control strip across a 1080p picture. The compositor blends
 // each of them under kGuiLock at every picture, so this is a time bound
-// (VIDEO_PLANE.md § 3.3) for a hold of about a millisecond. PROVISIONAL:
-// the P5 priced the first composer at 19.77 ns a blended pixel (1.9 ms at
-// this number); the number is set again from the P5's price for the
-// composer as it now is (planetest prints it).
+// (VIDEO_PLANE.md § 3.3) for a hold of about a millisecond: the P5 priced
+// a blended pixel at 6.6 to 7.0 ns on 2026-11-25 (planetest, the composer
+// with its channels in 64-bit lanes), so this many take about 0.7 ms.
 #define GUI_PLANE_OVERLAY_PIXELS 98304u
 
 typedef enum {
@@ -59,6 +58,23 @@ typedef struct gui_plane {
 	uint64_t publishes;
 	pc_counts_t composed;     // what the compositor drew of it
 	uint64_t compose_cycles;  // and how long that took, in TSC cycles
+	uint64_t place_changes;   // the window publishes that changed the place
+
+	// The frame wait (VIDEO_PLANE.md § 3.6). `frame_wanted` and
+	// `frame_epoch` are the wait's request, made at its entry; `waiter` is
+	// the creator while it is parked, set and voided by the creator alone;
+	// `answered` and the answer's three fields are written by the
+	// compositor's answer pass, which clears `frame_wanted`; `poke_owed` is
+	// set by a poke and taken by a wait. Every way a wait ends clears its
+	// request, the answer and any wake owed it, so nothing reaches the next
+	// wait. `shown` is the pass's verdict for a plane with a request
+	// (gui_planes_frame_waiters_locked), which its answer uses.
+	bool frame_wanted, answered, poke_owed, shown;
+	uint64_t frame_epoch;
+	struct s_thread *waiter;
+	uint64_t answer_number, answer_blank_us;
+	uint32_t answer_period_ns;
+	uint64_t frames_asked, frames_answered, waits_poked, waits_patience, waits_interrupted;
 } gui_plane_t;
 
 // Why a plane call or a commit was refused, for /sys/gui.
@@ -88,6 +104,18 @@ int64_t gui_plane_publish(int64_t handle, uint32_t plane, uint32_t width, uint32
 int64_t gui_plane_destroy(int64_t handle, uint32_t plane);
 int64_t gui_window_publish_edits(int64_t handle, const os64_gui_rect_t *damage,
                                  const os64_gui_plane_edit_t *edits, uint32_t count);
+int64_t gui_plane_frame_wait(int64_t handle, uint32_t plane, uint32_t patience_ms, os64_gui_plane_frame_t *out);
+int64_t gui_plane_poke(int64_t handle, uint32_t plane);
+
+// The compositor's frame pass, under kGuiLock. The waiters: each plane with
+// a request judged shown or not (its verdict kept for the answer), the
+// shown counted in *shown and the rest in *hidden. The answer: each shown
+// plane whose request came before `before` is given the frame and its
+// waiter woken, kGuiLock then the scheduler's queue lock, as a window's
+// event wake; the count answered, and *held_back the requests not shown.
+void gui_planes_frame_waiters_locked(uint32_t *shown, uint32_t *hidden);
+uint32_t gui_planes_frame_answer_locked(uint64_t number, uint64_t blank_us, uint32_t period_ns, uint64_t before,
+                                        uint32_t *held_back);
 
 // A thread leaving by its exit call takes the planes it created out with
 // it: hidden (their clips damaged), then destroyed, their pairs kept. From
@@ -118,6 +146,8 @@ typedef struct {
 	uint32_t noverlays;
 	uint64_t overlay_area, publishes, compose_ns;
 	pc_counts_t composed;
+	bool shown, waiting;
+	uint64_t frames_asked, frames_answered, waits_poked, waits_patience, waits_interrupted;
 } gui_plane_status_t;
 // The live planes, at most `cap` of them, and the refusals by reason; the
 // count of planes there were. Takes kGuiLock.

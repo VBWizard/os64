@@ -7,6 +7,7 @@
 #include "printd.h"
 #include "CONFIG.h"
 #include "memory/kmalloc.h"
+#include "micros.h"
 
 // A window's planes through the calls a syscall reaches (VIDEO_PLANE.md
 // § 3.10): the commit is the lock hold, the copy and the edits together, so
@@ -252,6 +253,37 @@ bool test_planes(void)
 	os64_gui_plane_edit_t both[2] = {place_edit(pa, 200, 100, 0), meets};
 	rc = gui_window_publish_edits(handle, NULL, both, 2);
 	check(rc == 0 && plane_state(handle, pb) == GUI_PLANE_PLACED, "two edits in one commit", rc);
+
+	// The frame wait (§ 3.6), on a window off the screen: a placed plane
+	// there is never shown, so it is never answered.
+	os64_gui_plane_frame_t fr;
+	gui_plane_poke(handle, pb);
+	gui_plane_poke(handle, pb);   // one poke is owed at most
+	rc = gui_plane_frame_wait(handle, pb, 1000, &fr);
+	check(rc == 0 && fr.why == OS64_GUI_PLANE_POKED && fr.placed && fr.place_changes == 1,
+	      "a poke owed before the wait ends it at once, with the committed state", rc);
+	uint64_t t0 = micros_now();
+	rc = gui_plane_frame_wait(handle, pb, 60, &fr);
+	uint64_t waited = micros_now() - t0;
+	check(rc == 0 && fr.why == OS64_GUI_PLANE_PATIENCE && fr.number == 0 && waited >= 60000,
+	      "not shown: no frame, the patience ends the wait (and the second poke was not owed)", rc);
+	rc = gui_plane_frame_wait(handle, pb, 0, &fr);
+	check(rc == 0 && fr.why == OS64_GUI_PLANE_PATIENCE, "patience 0 asks and answers at once", rc);
+	irq = gui_lock(GUI_LOCK_OTHER);
+	w = window_of(handle);
+	gui_plane_t *pw = w ? &w->planes[(pb & 0xFF) - 1] : NULL;
+	bool clear = pw && !pw->frame_wanted && !pw->answered && pw->waiter == NULL && !pw->poke_owed &&
+	             pw->frames_asked == 2 && pw->waits_poked == 1 && pw->waits_patience == 2;
+	if (pw)
+		pw->creator = NULL;
+	gui_unlock(irq);
+	check(clear, "every end of a wait leaves nothing set for the next", 0);
+	rc = gui_plane_frame_wait(handle, pb, 0, &fr);
+	check(rc == OS64_GUI_ERR_NOT_CREATOR, "another thread's wait refused", rc);
+	irq = gui_lock(GUI_LOCK_OTHER);
+	if (pw)
+		pw->creator = self;
+	gui_unlock(irq);
 
 	// A window made smaller after the commit: the clip is cut to the content
 	// as it stands, and nothing past it is read or drawn.

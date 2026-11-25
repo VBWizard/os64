@@ -1,20 +1,29 @@
 // planetest — a window's plane from ring 3 (docs/design/pending/
-// VIDEO_PLANE.md § 3): a picture thread publishing a moving pattern on a
-// timer (bars moving left, a band moving up), under a see-through hole the
-// window's thread places with its own publish.
+// VIDEO_PLANE.md § 3): a picture thread publishing a moving pattern (bars
+// moving left, a band moving up) under a see-through hole the window's
+// thread places with its own publish.
 //
 //   - the picture thread creates the plane and is its creator: the window's
-//     thread is refused its surface, its publish and its destroy;
+//     thread is refused its surface, its publish, its destroy and its wait;
 //   - damage short of the hole, an overlay outside its clip and an unknown
 //     name are refused (that a refusal changes nothing is the kernel's own
 //     test, kernel/test/test_planes.c, which can see the plane's state);
 //   - placed, the plane is drawn: the compositor's counts rise;
-//   - WHAT IS ON THE GLASS is the rule (§ 3.3): at the end of each phase the
+//   - WHAT IS ON THE GLASS is the rule (§ 3.3): at the end of a phase the
 //     picture thread holds still on a known frame and every pixel of the
-//     hole is read back through /dev/glass and compared with the picture,
+//     clip is read back through /dev/glass and compared with the picture,
 //     the content, and the blend worked out again here, channel by channel.
 //     The pointer is part of the glass, so mismatches confined to a box the
-//     pointer's size are let pass and counted;
+//     pointer's size are let pass and counted. The phases checked: no
+//     overlay, a translucent strip, a strip opaque or clear, then a picture
+//     scrolled partly out of its clip under two overlapping overlays, one of
+//     them moved and the other removed with damage on the new one alone,
+//     then none;
+//   - FRAMES (§ 3.6): paced by its plane's frames, the picture thread is
+//     answered and the numbers only rise (no answer reaches the next wait);
+//     a plane whose hole another window covers is answered nothing, and is
+//     answered again once uncovered; a poke during a wait (on a hidden
+//     plane) and one owed before a wait each end it at once;
 //   - placed, the plane cannot be destroyed, even by its creator, nor can
 //     its window;
 //   - the picture thread ends with its plane placed, and the plane goes
@@ -22,18 +31,16 @@
 //   - a program that dies with a plane placed gives its pair of stores
 //     back when it is buried: /sys/gui's count of pairs comes back down.
 //
-// And it prices the compositor's part (/sys/gui's plane line: what was
-// drawn, and in how long) in three phases: no overlay (every pixel a picture
-// pixel copied), an overlay strip whose content pixels are translucent (each
-// one blended), and the same strip with content pixels that are wholly
-// opaque or wholly see-through (each one read and found to need no blend,
-// which is what a scrim mostly is). Before them, with the plane hidden, the
-// window repaints the same hole itself at the same rate, so a plane's
-// copied pixel can be set beside the content pixel it replaces: both are
-// priced the same way, the compositor's hold over the pixels it drew.
-// Each phase also prints the worst hold of
-// kGuiLock by the plane, publish and composite sites: /sys/gui's worst holds
-// start again at every read, and this fixture's own reads bracket a phase.
+// And it prices: the compositor's part (/sys/gui's plane line: what was
+// drawn, and in how long) in the first three phases (copied; blended;
+// read and found opaque or clear, which is what a scrim mostly is); before
+// them, with the plane hidden, the window repaints the same hole itself at
+// the same rate, so a plane's copied pixel can be set beside the content
+// pixel it replaces (both priced by the compositor's hold over the pixels
+// it drew); and a plane's publish at each capacity class, by the plane
+// site's worst hold of kGuiLock. Each phase prints the worst holds of the
+// plane, publish and composite sites: /sys/gui's worst holds start again at
+// every read, and this fixture's own reads bracket a phase.
 //
 // `planetest --watch` is the same for a person's eye: a larger picture, five
 // seconds a phase, squares of 32 pixels and a strip of 96 rows, and each
@@ -78,6 +85,18 @@ static volatile int s_hold;            // the window's thread says: hold still
 static volatile int s_held;            // the picture thread is holding still
 static volatile uint32_t s_frame;      // the frame on the plane's front
 
+// Paced by frames: the picture thread waits for its plane's frame between
+// pictures instead of sleeping, counting the answers and any number that
+// did not rise.
+static volatile int s_paced;
+static volatile uint64_t s_frames, s_frame_falls, s_last_number;
+
+// A wait the window's thread asks the creator to make, and what it got.
+static volatile int s_wait_asked, s_wait_done;
+static volatile uint32_t s_wait_patience;
+static volatile int64_t s_wait_rc;
+static os64_gui_plane_frame_t s_wait_frame;
+
 // The picture: bars moving left, a band moving up, so a misplaced or stale
 // row shows on the glass.
 static uint32_t picture_px(uint32_t x, uint32_t y, uint32_t frame)
@@ -102,6 +121,12 @@ static int64_t picture_thread(void *arg)
     }
     s_plane = (uint32_t)name;
     for (uint32_t frame = 0; !s_stop;) {
+        if (s_wait_asked) {
+            s_wait_rc = os64_gui_plane_frame_wait(s_win, (uint32_t)name, s_wait_patience, &s_wait_frame);
+            s_wait_asked = 0;
+            s_wait_done = 1;
+            continue;
+        }
         if (s_hold) {
             s_held = 1;
             os64_sleep(5);
@@ -122,56 +147,115 @@ static int64_t picture_thread(void *arg)
             s_destroy_rc = os64_gui_plane_destroy(s_win, (uint32_t)name);
             s_try_destroy = 2;
         }
-        os64_sleep(16);
+        if (s_paced) {
+            os64_gui_plane_frame_t f;
+            if (os64_gui_plane_frame_wait(s_win, (uint32_t)name, 200, &f) == 0 && f.why == OS64_GUI_PLANE_FRAME) {
+                if (f.number <= s_last_number)
+                    s_frame_falls++;
+                s_last_number = f.number;
+                s_frames++;
+            }
+        } else {
+            os64_sleep(16);
+        }
     }
     // Ending with the plane placed: the kernel takes it out.
     return 0;
 }
 
-// The window's content: opaque everywhere but the hole, which is wholly
-// see-through but for the strip along its foot, painted by `strip`.
-enum { STRIP_NONE, STRIP_TRANSLUCENT, STRIP_OPAQUE_OR_CLEAR };
-
-static bool in_hole(uint32_t x, uint32_t y)
+// The creator's wait, made on the window thread's asking: its result, or
+// -1000 when the creator did not come back from it in time.
+static int64_t creator_wait(uint32_t patience_ms, os64_gui_plane_frame_t *out, int64_t *took_ms)
 {
-    return x >= L->hole_x && x < L->hole_x + L->pic_w && y >= L->hole_y && y < L->hole_y + L->pic_h;
+    int64_t t0 = os64_micros();
+    s_wait_done = 0;
+    s_wait_patience = patience_ms;
+    s_wait_asked = 1;
+    int64_t until = t0 + ((int64_t)patience_ms + 3000) * 1000;
+    while (!s_wait_done && os64_micros() < until)
+        os64_sleep(2);
+    *took_ms = (os64_micros() - t0) / 1000;
+    if (!s_wait_done)
+        return -1000;
+    *out = s_wait_frame;
+    return s_wait_rc;
 }
 
-static bool in_strip(uint32_t x, uint32_t y)
+// ── The scene: the plane's place and the window's content ───────────────────
+
+enum { STRIP_NONE, STRIP_TRANSLUCENT, STRIP_OPAQUE_OR_CLEAR, SCROLLED };
+
+typedef struct {
+    os64_gui_rect_t origin, clip;
+    os64_gui_rect_t overlay[2];
+    uint32_t noverlays;
+    int kind;                 // STRIP_* or SCROLLED
+    os64_gui_rect_t paint;    // SCROLLED: where the content is translucent
+} scene_t;
+
+static scene_t s_scene;
+
+static bool in_rect(os64_gui_rect_t r, uint32_t x, uint32_t y)
 {
-    return in_hole(x, y) && y >= L->hole_y + L->pic_h - L->strip_h;
+    return (int64_t)x >= r.x && (int64_t)x < (int64_t)r.x + r.w && (int64_t)y >= r.y && (int64_t)y < (int64_t)r.y + r.h;
 }
 
-static uint32_t content_px(uint32_t x, uint32_t y, int strip)
+static os64_gui_rect_t hole(void)
 {
-    if (in_strip(x, y) && strip == STRIP_TRANSLUCENT)
+    return (os64_gui_rect_t){(int32_t)L->hole_x, (int32_t)L->hole_y, (int32_t)L->pic_w, (int32_t)L->pic_h};
+}
+
+static os64_gui_rect_t strip(void)
+{
+    return (os64_gui_rect_t){(int32_t)L->hole_x, (int32_t)(L->hole_y + L->pic_h - L->strip_h), (int32_t)L->pic_w,
+                             (int32_t)L->strip_h};
+}
+
+// The window's content: opaque everywhere but the clip, which is wholly
+// see-through but for what the scene paints there.
+static uint32_t content_px(const scene_t *sc, uint32_t x, uint32_t y)
+{
+    if (!in_rect(sc->clip, x, y))
+        return 0xFF283038u;
+    if (sc->kind == SCROLLED)
+        return in_rect(sc->paint, x, y) ? 0x80202020u : 0;
+    if (in_rect(strip(), x, y) && sc->kind == STRIP_TRANSLUCENT)
         return 0x80202020u;   // half covering, premultiplied
-    if (in_strip(x, y) && strip == STRIP_OPAQUE_OR_CLEAR)
+    if (in_rect(strip(), x, y) && sc->kind == STRIP_OPAQUE_OR_CLEAR)
         return ((x / L->square + y / L->square) & 1) ? 0xFFE0E0E0u : 0x00000000u;
-    return in_hole(x, y) ? 0 : 0xFF283038u;
+    return 0;
 }
 
-static void paint_content(os64_draw_ctx_t *ctx, int strip)
+static void paint_content(os64_draw_ctx_t *ctx, const scene_t *sc)
 {
     os64_gui_surface_t *c = &ctx->surf;
     for (uint32_t y = 0; y < c->height; y++) {
         uint32_t *row = c->pixels + (size_t)y * c->pitch_px;
         for (uint32_t x = 0; x < c->width; x++)
-            row[x] = content_px(x, y, strip);
+            row[x] = content_px(sc, x, y);
     }
 }
 
-static os64_gui_plane_edit_t place(uint32_t plane, int strip)
+// A strip phase's scene: the picture fills the hole, the strip its overlay.
+static scene_t strip_scene(int kind)
+{
+    scene_t sc = {.origin = hole(), .clip = hole(), .kind = kind};
+    if (kind != STRIP_NONE) {
+        sc.noverlays = 1;
+        sc.overlay[0] = strip();
+    }
+    return sc;
+}
+
+static os64_gui_plane_edit_t scene_edit(uint32_t plane, const scene_t *sc)
 {
     os64_gui_plane_edit_t e = {0};
     e.plane = plane;
-    e.origin = (os64_gui_rect_t){(int32_t)L->hole_x, (int32_t)L->hole_y, (int32_t)L->pic_w, (int32_t)L->pic_h};
-    e.clip = e.origin;
-    if (strip != STRIP_NONE) {
-        e.noverlays = 1;
-        e.overlay[0] = (os64_gui_rect_t){(int32_t)L->hole_x, (int32_t)(L->hole_y + L->pic_h - L->strip_h),
-                                         (int32_t)L->pic_w, (int32_t)L->strip_h};
-    }
+    e.origin = sc->origin;
+    e.clip = sc->clip;
+    e.noverlays = sc->noverlays;
+    for (uint32_t i = 0; i < sc->noverlays; i++)
+        e.overlay[i] = sc->overlay[i];
     return e;
 }
 
@@ -194,13 +278,19 @@ static uint32_t rule_blend(uint32_t c, uint32_t p)
     return out;
 }
 
-// A content pixel in the hole, on the glass: the picture where the content
-// is see-through, the rule inside the strip's overlay.
-static uint32_t expected(uint32_t x, uint32_t y, int strip, uint32_t frame)
+// A content pixel inside the clip, on the glass: the picture where the
+// content is see-through and the picture reaches, the rule inside an
+// overlay, the content (read as opaque) where the picture does not reach.
+static uint32_t expected(const scene_t *sc, uint32_t x, uint32_t y, uint32_t frame)
 {
-    uint32_t p = picture_px(x - L->hole_x, y - L->hole_y, frame);
-    if (strip != STRIP_NONE && in_strip(x, y))
-        return rule_blend(content_px(x, y, strip), p);
+    int64_t px = (int64_t)x - sc->origin.x, py = (int64_t)y - sc->origin.y;
+    uint32_t c = content_px(sc, x, y);
+    if (px < 0 || py < 0 || px >= (int64_t)L->pic_w || py >= (int64_t)L->pic_h)
+        return c;
+    uint32_t p = picture_px((uint32_t)px, (uint32_t)py, frame);
+    for (uint32_t i = 0; i < sc->noverlays; i++)
+        if (in_rect(sc->overlay[i], x, y))
+            return rule_blend(c, p);
     return p;
 }
 
@@ -242,15 +332,15 @@ static uint32_t on_glass(int32_t sx, int32_t sy)
     return s_screen[(size_t)sy * s_screen_w + (uint32_t)sx] & 0x00FFFFFFu;
 }
 
-static void sample(const char *what, os64_gui_rect_t cr, uint32_t x, uint32_t y, int strip, uint32_t frame)
+static void sample(const char *what, os64_gui_rect_t cr, uint32_t x, uint32_t y, uint32_t frame)
 {
     os64_printf("planetest:   %s (%u,%u): glass %06x, the rule %06x\n", what, x, y,
-                on_glass(cr.x + (int32_t)x, cr.y + (int32_t)y), expected(x, y, strip, frame) & 0x00FFFFFFu);
+                on_glass(cr.x + (int32_t)x, cr.y + (int32_t)y), expected(&s_scene, x, y, frame) & 0x00FFFFFFu);
 }
 
-// With the picture held still: every pixel of the hole on the glass against
-// the rule. False on mismatches the pointer cannot explain.
-static bool glass_check(int strip, const char *phase_name)
+// With the picture held still: every pixel of the scene's clip on the glass
+// against the rule. False on mismatches the pointer cannot explain.
+static bool glass_check(const char *phase_name)
 {
     s_held = 0;
     s_hold = 1;
@@ -258,18 +348,19 @@ static bool glass_check(int strip, const char *phase_name)
         os64_sleep(5);
     bool ok = s_held != 0;
     uint32_t frame = s_frame;
+    const scene_t *sc = &s_scene;
     os64_gui_rect_t cr;
     ok = ok && os64_gui_window_get_content_rect(s_win, &cr) == 0 && glass_catch_up();
     uint64_t bad = 0, checked = 0;
     int32_t bx0 = INT32_MAX, by0 = INT32_MAX, bx1 = -1, by1 = -1;
     uint32_t fx = 0, fy = 0;
-    for (uint32_t y = L->hole_y; ok && y < L->hole_y + L->pic_h; y++) {
-        for (uint32_t x = L->hole_x; x < L->hole_x + L->pic_w; x++) {
+    for (uint32_t y = (uint32_t)sc->clip.y; ok && y < (uint32_t)(sc->clip.y + sc->clip.h); y++) {
+        for (uint32_t x = (uint32_t)sc->clip.x; x < (uint32_t)(sc->clip.x + sc->clip.w); x++) {
             int32_t sx = cr.x + (int32_t)x, sy = cr.y + (int32_t)y;
             if (sx < 0 || sy < 0 || (uint32_t)sx >= s_screen_w || (uint32_t)sy >= s_screen_h)
                 continue;
             checked++;
-            if (on_glass(sx, sy) == (expected(x, y, strip, frame) & 0x00FFFFFFu))
+            if (on_glass(sx, sy) == (expected(sc, x, y, frame) & 0x00FFFFFFu))
                 continue;
             if (bad++ == 0) {
                 fx = x;
@@ -285,14 +376,15 @@ static bool glass_check(int strip, const char *phase_name)
     os64_printf("planetest: %s on the glass at frame %u: %lu pixels checked, %lu differ%s\n", phase_name, frame,
                 checked, bad, bad == 0 ? "" : pointer ? " (inside one pointer-sized box: taken as the pointer)" : "");
     if (ok) {
-        uint32_t mid_x = L->hole_x + L->pic_w / 2, strip_y = L->hole_y + L->pic_h - L->strip_h / 2;
-        sample("the hole", cr, mid_x, L->hole_y + 10, strip, frame);
-        if (strip != STRIP_NONE) {
-            sample("the strip", cr, mid_x, strip_y, strip, frame);
-            sample("the strip", cr, mid_x + L->square, strip_y, strip, frame);
-        }
+        uint32_t mid_x = (uint32_t)(sc->clip.x + sc->clip.w / 2);
+        sample("the clip", cr, mid_x, (uint32_t)sc->clip.y + 10, frame);
+        for (uint32_t i = 0; i < sc->noverlays; i++)
+            sample("an overlay", cr, (uint32_t)(sc->overlay[i].x + sc->overlay[i].w / 2),
+                   (uint32_t)(sc->overlay[i].y + sc->overlay[i].h / 2), frame);
+        if (sc->kind == STRIP_OPAQUE_OR_CLEAR)
+            sample("the strip", cr, mid_x + L->square, (uint32_t)(strip().y + strip().h / 2), frame);
         if (bad > 0 && !pointer)
-            sample("the first that differs", cr, fx, fy, strip, frame);
+            sample("the first that differs", cr, fx, fy, frame);
     }
     s_held = 0;
     s_hold = 0;
@@ -373,7 +465,7 @@ static bool composed(uint32_t plane, composed_t *out)
     if (!find(at, "blended", &at))
         return false;
     out->opaque = number(&at);
-    if (!find(at, "in", &at))
+    if (!find(at, "opaque in", &at))
         return false;
     out->ns = number(&at);
     return true;
@@ -414,23 +506,29 @@ static bool read_pairs(uint64_t *pairs)
 
 // ── The phases ──────────────────────────────────────────────────────────────
 
-static const char *const kPhaseNames[] = {"no overlay", "a translucent strip", "a strip opaque or clear"};
-static const char *const kPhaseSights[] = {
-    "the whole hole is the picture: bars moving left, a band moving up",
-    "a strip along the hole's foot darkens the picture, which moves on through it",
-    "the strip is light squares and clear ones, the picture moving behind the clear ones",
-};
-
-// One phase: placed with `strip`, its time of pictures, the counts' rise
-// and the worst holds, then the glass checked.
-static compositor_t s_comp_a, s_comp_b;   // the last phase's two readings
-
-static bool phase(os64_draw_ctx_t *ctx, uint32_t plane, int strip, composed_t *rise)
+static void say(const char *what)
 {
     if (L == &kWatch)
-        os64_printf("planetest: phase %d, %s: %s\n", strip + 1, kPhaseNames[strip], kPhaseSights[strip]);
-    paint_content(ctx, strip);
-    os64_gui_plane_edit_t e = place(plane, strip);
+        os64_printf("planetest: %s\n", what);
+}
+
+static const char *const kPhaseNames[] = {"no overlay", "a translucent strip", "a strip opaque or clear"};
+static const char *const kPhaseSights[] = {
+    "phase 2, no overlay: the plane is placed; the whole hole is the picture: bars moving left, a band moving up",
+    "phase 3, a translucent strip: a strip along the hole's foot darkens the picture, which moves on through it",
+    "phase 4, a strip opaque or clear: light squares and clear ones, the picture moving behind the clear ones",
+};
+
+static compositor_t s_comp_a, s_comp_b;   // the last phase's two readings
+
+// One strip phase: placed, its time of pictures, the counts' rise and the
+// worst holds, then the glass checked.
+static bool phase(os64_draw_ctx_t *ctx, uint32_t plane, int kind, composed_t *rise)
+{
+    say(kPhaseSights[kind]);
+    s_scene = strip_scene(kind);
+    paint_content(ctx, &s_scene);
+    os64_gui_plane_edit_t e = scene_edit(plane, &s_scene);
     int64_t rc = os64_gui_window_publish_edits(s_win, NULL, &e, 1);
     CHECK(rc == 0);
     composed_t a, b;
@@ -441,8 +539,8 @@ static bool phase(os64_draw_ctx_t *ctx, uint32_t plane, int strip, composed_t *r
         return false;
     *rise = (composed_t){b.copied - a.copied, b.blended - a.blended, b.opaque - a.opaque, b.ns - a.ns};
     os64_printf("planetest: %s: worst holds of kGuiLock: plane %lu us, publish %lu us, composite %lu us\n",
-                kPhaseNames[strip], worst_hold("plane"), worst_hold("publish"), worst_hold("composite"));
-    bool seen = glass_check(strip, kPhaseNames[strip]);
+                kPhaseNames[kind], worst_hold("plane"), worst_hold("publish"), worst_hold("composite"));
+    bool seen = glass_check(kPhaseNames[kind]);
     CHECK(seen);
     return true;
 }
@@ -452,8 +550,10 @@ static bool phase(os64_draw_ctx_t *ctx, uint32_t plane, int strip, composed_t *r
 // compositor's ordinary blit.
 static bool content_phase(os64_draw_ctx_t *ctx, uint64_t *ps)
 {
+    say("phase 1, the window's own content: no plane yet; the window itself repaints the hole with the same "
+        "moving bars, to price an ordinary pixel (it looks like the next phase)");
     compositor_t a, b;
-    os64_gui_rect_t hole = {(int32_t)L->hole_x, (int32_t)L->hole_y, (int32_t)L->pic_w, (int32_t)L->pic_h};
+    os64_gui_rect_t h = hole();
     if (!read_gui() || !compositor(&a))
         return false;
     int64_t until = os64_micros() + (int64_t)L->phase_ms * 1000;
@@ -464,13 +564,147 @@ static bool content_phase(os64_draw_ctx_t *ctx, uint64_t *ps)
             for (uint32_t x = 0; x < L->pic_w; x++)
                 row[x] = 0xFF000000u | picture_px(x, y, frame);
         }
-        os64_gui_window_publish(s_win, &hole);
+        os64_gui_window_publish(s_win, &h);
         os64_sleep(16);
     }
     if (!read_gui() || !compositor(&b))
         return false;
     *ps = compositor_ps(&a, &b);
     return true;
+}
+
+// The picture scrolled partly out of its clip (the origin above it, so the
+// clip's foot is past the picture and shows the content as opaque), under
+// two overlapping translucent overlays; then one moved and the other
+// removed, with damage on the moved one alone (§ 3.5 rule 2: a change to the
+// overlays alone needs the new ones covered); then none. The content's
+// translucent paint stays where it was: outside the overlays it must not
+// be read.
+static void scrolled_phases(os64_draw_ctx_t *ctx, uint32_t plane)
+{
+    int32_t y0 = (int32_t)L->hole_y + 60, x0 = (int32_t)L->hole_x;
+    s_scene = (scene_t){
+        .origin = {x0, (int32_t)L->hole_y - 40, (int32_t)L->pic_w, (int32_t)L->pic_h},
+        .clip = hole(),
+        .overlay = {{x0 + 20, y0, 200, 40}, {x0 + 120, y0 + 20, 200, 40}},
+        .noverlays = 2,
+        .kind = SCROLLED,
+        .paint = {x0 + 10, y0 - 10, 420, 80},
+    };
+    say("phase 5, scrolled: the picture moved up 40 rows (a dark band at the hole's foot), two overlapping "
+        "darkened boxes over it");
+    paint_content(ctx, &s_scene);
+    os64_gui_plane_edit_t e = scene_edit(plane, &s_scene);
+    CHECK(os64_gui_window_publish_edits(s_win, NULL, &e, 1) == 0);
+    os64_sleep(L->phase_ms / 2);
+    CHECK(glass_check("scrolled, two overlapping overlays"));
+
+    say("phase 6: one box moved right, the other gone");
+    s_scene.overlay[0] = (os64_gui_rect_t){x0 + 260, y0, 150, 40};
+    s_scene.noverlays = 1;
+    e = scene_edit(plane, &s_scene);
+    os64_gui_rect_t damage = s_scene.overlay[0];
+    CHECK(os64_gui_window_publish_edits(s_win, &damage, &e, 1) == 0);
+    os64_sleep(L->phase_ms / 2);
+    CHECK(glass_check("scrolled, one overlay moved and one removed"));
+
+    say("phase 7: no boxes");
+    s_scene.noverlays = 0;
+    e = scene_edit(plane, &s_scene);
+    damage = (os64_gui_rect_t){0, 0, 1, 1};
+    CHECK(os64_gui_window_publish_edits(s_win, &damage, &e, 1) == 0);
+    os64_sleep(L->phase_ms / 2);
+    CHECK(glass_check("scrolled, no overlays"));
+}
+
+// Frames: the picture thread paced by them, a cover over the hole, and the
+// pokes.
+static void frame_phases(os64_draw_ctx_t *ctx, uint32_t plane)
+{
+    say("phase 8, frames: the picture moves at the display's pace");
+    s_scene = strip_scene(STRIP_NONE);
+    paint_content(ctx, &s_scene);
+    os64_gui_plane_edit_t e = scene_edit(plane, &s_scene);
+    CHECK(os64_gui_window_publish_edits(s_win, NULL, &e, 1) == 0);
+    s_frames = s_frame_falls = 0;
+    s_paced = 1;
+    os64_sleep(L->phase_ms);
+    s_paced = 0;
+    os64_printf("planetest: paced by frames: %lu answers in %u ms, %lu numbers that did not rise\n", s_frames,
+                L->phase_ms, s_frame_falls);
+    CHECK(s_frames >= L->phase_ms / 100 && s_frame_falls == 0);
+
+    os64_gui_plane_frame_t f;
+    int64_t took = 0, rc;
+    os64_gui_rect_t cr;
+    CHECK(os64_gui_window_get_content_rect(s_win, &cr) == 0);
+    int64_t cover = os64_gui_window_create("planetest cover", cr.x + (int32_t)L->hole_x - 20,
+                                           cr.y + (int32_t)L->hole_y - 40, L->pic_w + 40, L->pic_h + 60,
+                                           OS64_GUI_CREATE_CONTENT_SIZE);
+    CHECK(cover > 0);
+    if (cover > 0) {
+        say("phase 9: a window over the hole; the plane, covered, is answered nothing");
+        os64_draw_ctx_t cc;
+        if (os64_draw_ctx_init(&cc, cover) == 0) {
+            os64_draw_fill_rect(&cc.surf, (os64_gui_rect_t){0, 0, (int32_t)cc.surf.width, (int32_t)cc.surf.height},
+                                0xFF606870u);
+            os64_draw_publish(&cc, NULL);
+        }
+        os64_sleep(150);   // the cover sweep
+        rc = creator_wait(400, &f, &took);
+        CHECK(rc == 0 && f.why == OS64_GUI_PLANE_PATIENCE);
+        os64_printf("planetest: covered: the wait ended by %s after %ld ms\n",
+                    f.why == OS64_GUI_PLANE_PATIENCE ? "its patience" : f.why == OS64_GUI_PLANE_FRAME ? "a frame" : "?",
+                    took);
+        os64_gui_window_destroy(cover);
+        os64_sleep(50);
+        rc = creator_wait(1000, &f, &took);
+        CHECK(rc == 0 && f.why == OS64_GUI_PLANE_FRAME && f.placed);
+        os64_printf("planetest: uncovered: the wait ended by %s after %ld ms\n",
+                    f.why == OS64_GUI_PLANE_FRAME ? "a frame" : "something else", took);
+    }
+
+    // Hidden, so no frame can answer first: a poke during the wait, then one
+    // owed before it.
+    say("phase 10: the plane hidden, and poked");
+    os64_gui_plane_edit_t hide = {.plane = plane, .hide = 1};
+    CHECK(os64_gui_window_publish_edits(s_win, NULL, &hide, 1) == 0);
+    s_wait_done = 0;
+    s_wait_patience = 5000;
+    s_wait_asked = 1;
+    os64_sleep(100);
+    int64_t t0 = os64_micros();
+    CHECK(os64_gui_plane_poke(s_win, plane) == 0);
+    while (!s_wait_done && os64_micros() - t0 < 2000000)
+        os64_sleep(2);
+    CHECK(s_wait_done && s_wait_rc == 0 && s_wait_frame.why == OS64_GUI_PLANE_POKED && !s_wait_frame.placed);
+    os64_printf("planetest: a poke during the wait ended it after %ld ms\n", (os64_micros() - t0) / 1000);
+    CHECK(os64_gui_plane_poke(s_win, plane) == 0);
+    rc = creator_wait(5000, &f, &took);
+    CHECK(rc == 0 && f.why == OS64_GUI_PLANE_POKED && took < 1000);
+    os64_gui_plane_frame_t mine;
+    CHECK(os64_gui_plane_frame_wait(s_win, plane, 0, &mine) == OS64_GUI_ERR_NOT_CREATOR);
+}
+
+// A plane's publish copies under kGuiLock: its worst hold at each capacity
+// class, from planes this thread makes and publishes hidden.
+static void class_holds(void)
+{
+    static const uint32_t classes[][2] = {{640, 360}, {1280, 720}, {1920, 1080}, {2560, 1440}, {3840, 2160}};
+    for (unsigned i = 0; i < sizeof(classes) / sizeof(classes[0]); i++) {
+        int64_t p = os64_gui_plane_create(s_win, classes[i][0], classes[i][1]);
+        if (p <= 0) {
+            os64_printf("planetest: a %ux%u plane: create answered %ld\n", classes[i][0], classes[i][1], p);
+            continue;
+        }
+        read_gui();
+        for (int k = 0; k < 4; k++)
+            os64_gui_plane_publish(s_win, (uint32_t)p, classes[i][0], classes[i][1]);
+        read_gui();
+        os64_printf("planetest: publishing a %ux%u picture: worst hold of kGuiLock %lu us\n", classes[i][0],
+                    classes[i][1], worst_hold("plane"));
+        CHECK(os64_gui_plane_destroy(s_win, (uint32_t)p) == 0);
+    }
 }
 
 // The orphan: a window and a placed plane, and an exit that cleans up
@@ -515,7 +749,8 @@ int main(int argc, char **argv)
         return PLANE_FAIL;
     os64_draw_ctx_t ctx;
     CHECK(os64_draw_ctx_init(&ctx, s_win) == 0);
-    paint_content(&ctx, STRIP_NONE);
+    s_scene = strip_scene(STRIP_NONE);
+    paint_content(&ctx, &s_scene);
     os64_gui_window_publish(s_win, NULL);
     os64_sleep(100);   // the cover sweep's verdict on the new window
     os64_gui_window_state_t st;
@@ -555,12 +790,15 @@ int main(int argc, char **argv)
 
     // Refused commits.
     os64_gui_rect_t short_damage = {0, 0, 40, 40};
-    os64_gui_plane_edit_t e = place(plane, STRIP_NONE);
+    scene_t sc = strip_scene(STRIP_NONE);
+    os64_gui_plane_edit_t e = scene_edit(plane, &sc);
     CHECK(os64_gui_window_publish_edits(s_win, &short_damage, &e, 1) == OS64_GUI_ERR_PLANE_DAMAGE);
-    os64_gui_plane_edit_t out = place(plane, STRIP_TRANSLUCENT);
+    sc = strip_scene(STRIP_TRANSLUCENT);
+    os64_gui_plane_edit_t out = scene_edit(plane, &sc);
     out.overlay[0].x = 0;
     CHECK(os64_gui_window_publish_edits(s_win, NULL, &out, 1) == OS64_GUI_ERR_PLANE_OVERLAP);
-    os64_gui_plane_edit_t bogus = place(plane + 1, STRIP_NONE);
+    sc = strip_scene(STRIP_NONE);
+    os64_gui_plane_edit_t bogus = scene_edit(plane + 1, &sc);
     CHECK(os64_gui_window_publish_edits(s_win, NULL, &bogus, 1) == OS64_GUI_ERR_NO_PLANE);
 
     uint64_t content_ps = 0;
@@ -582,7 +820,16 @@ int main(int argc, char **argv)
     priced = priced && phase(&ctx, plane, STRIP_OPAQUE_OR_CLEAR, &read);
     CHECK(priced && read.blended > 0);
 
-    // The picture thread ends with its plane placed: the plane goes with it.
+    scrolled_phases(&ctx, plane);
+    frame_phases(&ctx, plane);
+    class_holds();
+
+    // The plane placed again, and the picture thread ends: the plane goes
+    // with it.
+    s_scene = strip_scene(STRIP_NONE);
+    paint_content(&ctx, &s_scene);
+    e = scene_edit(plane, &s_scene);
+    CHECK(os64_gui_window_publish_edits(s_win, NULL, &e, 1) == 0);
     s_stop = 1;
     os64_thread_join((int32_t)th, NULL);
     CHECK(os64_gui_plane_publish(s_win, plane, L->pic_w, L->pic_h) == OS64_GUI_ERR_NO_PLANE);
