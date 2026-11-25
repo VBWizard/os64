@@ -1009,6 +1009,21 @@ void os64_dom_free(os64_dom_t *dom);
  * of C-retained engine values; it becomes zero on drain. NULL answers zero. */
 size_t os64_dom_bytes(const os64_dom_t *dom);
 size_t os64_dom_registry_count(const os64_dom_t *dom);
+/* WHAT THE WRAPPERS OF NODES HOLD, for a census of who holds the detached
+ * (yonder's record): of the node wrappers on this binding's own registry
+ * (in a cluster, another member's wrappers are on that member's),
+ * those whose node is in the document's tree, a shadow tree included
+ * (`connected`), and the rest (`elsewhere`: detached, a template's
+ * contents, another document's), and of the rest how many only the
+ * registry references (`elsewhere_only_ours`: the object's reference
+ * count is 1, so no script and no other engine value holds it). The
+ * nodes of the rest go to `out`, up to `cap` of them; the answer is how
+ * many there were. Each wrapper holds its node (os64_html_hold) for as
+ * long as it is on the registry. */
+typedef struct {
+    size_t wrappers, connected, elsewhere, elsewhere_only_ours;
+} os64_dom_wrappers_t;
+size_t os64_dom_wrappers(const os64_dom_t *dom, const os64_html_node_t **out, size_t cap, os64_dom_wrappers_t *counts);
 /* WHAT os64_dom_bytes HOLDS, by kind (MEMORY_CENSUS.md § 4): every block
  * the binding charges carries the kind of thing it was made for, and these
  * are the live bytes, live blocks and blocks ever made of each. The kinds

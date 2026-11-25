@@ -439,6 +439,11 @@ size_t yonder_scripts_memory_bytes(const yonder_scripts_t *scripts);
 size_t yonder_scripts_heap_peak(const yonder_scripts_t *scripts);
 // What that heap holds now, in bytes: the live runtime's; 0 with none.
 size_t yonder_scripts_heap_bytes(const yonder_scripts_t *scripts);
+// What the binding's node wrappers hold (os64_dom_wrappers): their counts,
+// and the nodes not in the document into `out` (up to `cap`), how many
+// there were answered; all 0 with no binding.
+size_t yonder_scripts_wrappers(const yonder_scripts_t *scripts, const os64_html_node_t **out, size_t cap,
+                               os64_dom_wrappers_t *counts);
 // The script side of a memory census (MEMORY_CENSUS.md § 3): its owners —
 // the binding's records (`dom`), canvas bitmaps, the bodies kept outside
 // the heap, and the heap itself (`script`) — added to `sheet`; with

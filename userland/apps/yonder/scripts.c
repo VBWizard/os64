@@ -2224,6 +2224,13 @@ size_t yonder_scripts_heap_bytes(const yonder_scripts_t *s)
     return s != NULL && s->runtime != NULL ? os64_js_heap_bytes(s->runtime) : 0;
 }
 
+size_t yonder_scripts_wrappers(const yonder_scripts_t *s, const os64_html_node_t **out, size_t cap,
+                               os64_dom_wrappers_t *counts)
+{
+    *counts = (os64_dom_wrappers_t){0};
+    return s != NULL && s->dom != NULL ? os64_dom_wrappers(s->dom, out, cap, counts) : 0;
+}
+
 void yonder_scripts_census(yonder_scripts_t *s, yonder_census_sheet_t *sheet, bool detail)
 {
     if (s == NULL || sheet == NULL || s->runtime == NULL || s->dom == NULL) return;
