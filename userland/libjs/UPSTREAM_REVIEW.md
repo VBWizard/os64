@@ -222,3 +222,30 @@ of it, summed with the longest. `JS_GetCollectorCounts` reads them at any
 moment, so what a page's collector costs is known without the ledger's
 per-call brackets. The runtime sets its ledger clock (the TSC) when it makes
 the engine. Covered by the runtime host suite's collector case.
+
+Patch 0048 holds the collector's next threshold below the memory limit.
+Upstream sets it to half again the heap a run left, so with the live part
+past two thirds of the limit the next run waits for a heap the limit
+refuses, and a page making garbage there fails with the collector never
+asked. The threshold is now set after every run (`gc_schedule`, also after
+a `JS_RunGC` from the host, unless the host turned automatic runs off with
+a threshold of -1, which stays): half again what the run left, then
+lowered to the limit less a sixteenth (the margin); where that lowered it,
+raised to a sixty-fourth of the limit above what the run left, so a heap
+whose live part is inside the margin is walked again only after that much
+growth; then lowered to the limit less a 256th, so the last stretch still
+has a run, which can leave it below the heap. A run the limit scheduled
+also waits until the heap has grown by that 256th from its least since the
+last run (`js_trigger_gc`): a heap that is all live reaches the limit in at
+most eight runs once inside the margin, not a run at every object made,
+and a heap that shrank and filled again with garbage is still collected.
+The engine collects only where it always has, at an object's creation: a
+collection inside any other allocation could mark an object halfway
+through a change. A refusal ends the runtime (libjs makes any allocator
+refusal sticky, so the page's scripts stop): the collector's job is that
+none comes while there is garbage a run at an object's creation could have
+freed. One allocation of another kind larger than the room left can still
+be refused with the collector unasked (DEBTS.md). The counts gain the runs whose threshold the limit lowered and
+the limit itself; libjs's allocator counts each refusal. The public
+collector struct grew, so the ABI identifier is os64-js/6. Covered by the
+runtime host suite's limit case and `tools/test_collector_limit_mutants.py`.

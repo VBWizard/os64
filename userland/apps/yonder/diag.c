@@ -622,7 +622,9 @@ void yonder_diag_summary_fact(yonder_diag_t *d, const char *key, const char *val
     fact_set(d, key, value, ROOM_SUMMARY);
 }
 
-void yonder_diag_forget(yonder_diag_t *d, const char *prefix)
+// The plain lines whose keys begin `prefix` (or, when `whole`, are exactly
+// it) let go.
+static void forget_lines(yonder_diag_t *d, const char *prefix, bool whole)
 {
     if (d == NULL)
         return;
@@ -635,7 +637,8 @@ void yonder_diag_forget(yonder_diag_t *d, const char *prefix)
         uint32_t kept = 0;
         for (uint32_t i = 0; i < *counts[k]; i++) {
             Line *l = &lists[k][i];
-            if (os64_strlen(l->a) >= len && os64_memcmp(l->a, prefix, len) == 0) {
+            size_t have = os64_strlen(l->a);
+            if ((whole ? have == len : have >= len) && os64_memcmp(l->a, prefix, len) == 0) {
                 if (k == 0)
                     d->room_facts[l->room]--;
                 os64_free(l->a);
@@ -655,6 +658,16 @@ void yonder_diag_forget(yonder_diag_t *d, const char *prefix)
             indexes[k]->slots = NULL;
             indexes[k]->cap = 0;
         }
+}
+
+void yonder_diag_forget(yonder_diag_t *d, const char *prefix)
+{
+    forget_lines(d, prefix, false);
+}
+
+void yonder_diag_forget_key(yonder_diag_t *d, const char *key)
+{
+    forget_lines(d, key, true);
 }
 
 void yonder_diag_short(yonder_diag_t *d)
