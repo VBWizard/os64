@@ -241,9 +241,11 @@ most eight runs once inside the margin, not a run at every object made,
 and a heap that shrank and filled again with garbage is still collected.
 The engine collects only where it always has, at an object's creation: a
 collection inside any other allocation could mark an object halfway
-through a change. So an allocation of another kind the limit refuses still
-throws, and a later object made collects once the heap is past the
-threshold. The counts gain the runs whose threshold the limit lowered and
+through a change. A refusal ends the runtime (libjs makes any allocator
+refusal sticky, so the page's scripts stop): the collector's job is that
+none comes while there is garbage a run at an object's creation could have
+freed. One allocation of another kind larger than the room left can still
+be refused with the collector unasked (DEBTS.md). The counts gain the runs whose threshold the limit lowered and
 the limit itself; libjs's allocator counts each refusal. The public
 collector struct grew, so the ABI identifier is os64-js/6. Covered by the
 runtime host suite's limit case and `tools/test_collector_limit_mutants.py`.

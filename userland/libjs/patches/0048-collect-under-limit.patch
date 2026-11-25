@@ -5,8 +5,10 @@
 # limit less a 256th. A run the limit scheduled also waits for the heap to grow
 # by that 256th from its least since the last run, so an all-live heap reaches
 # the limit in a bounded count of runs (eight once inside the margin), and a
-# heap that shrank and filled with garbage is still collected. The counts gain
-# the limit-lowered runs and the limit.
+# heap that shrank and filled with garbage is still collected. Collections stay
+# at an object's creation, and libjs makes a refusal end the runtime, so the
+# schedule's job is that none comes while there is garbage such a run could
+# have freed. The counts gain the limit-lowered runs and the limit.
 --- a/quickjs.h
 +++ b/quickjs.h
 @@ -530,13 +530,18 @@
