@@ -23,7 +23,16 @@ P.3.4,Expose a preview CLI with kernel compatibility and byte estimates,P.3.3,do
 P.3.5,Prove safety and preview scenarios on QEMU ext2 and FAT,P.3.4,done,#736,"Eight disposable QEMU scenarios compared files and Porter state before and after preview, including FAT and ext2."
 P.3.6,Prepare a frozen P5 preview cohort and workstation instructions,P.3.5,done,#736,Frozen media and system publications and workstation instructions verified locally with a SHA-256 inventory.
 
-P.4,Implement checked storage barriers and ext2 install and undo,P.3,todo,,Verify interrupted transactions and offline recovery with a disposable disk.
+P.4,Implement checked storage barriers and ext2 install and undo,P.3,done,#741,Disposable QEMU acceptance and independent review complete.
+P.4.1,Write the ext2 transaction and storage ordering contract,P.3,done,#741,Reviewed write-order contract covers lease reuse and prepared versus armed authority and torn decisions.
+P.4.2,Add checked storage barriers and a task-owned writer lease,P.4.1,done,#741,Thread-owned lease serialized competing recovery. Checked VFS and NVMe barriers gated publication.
+P.4.3,Stream selective packages and build verified local backup archives,P.4.1,done,#741,Selected gzip and tar membership and original backups verified. Corrupt incoming data and backups were refused.
+P.4.4,Publish ext2 installs with immutable intents and receipts,P.4.2 P.4.3,done,#741,Baseline and direct audio-to-yonder switches passed. Repeated verified targets left history unchanged.
+P.4.5,Expose history and implement single undo and offline recovery,P.4.4,done,#741,Single undo and offline replay passed from normal ext2 and the UEFI FAT lifeboat.
+P.4.6,Proof ext2 transactions on disposable QEMU disks,P.4.5,done,#741,Twenty transaction scenarios and the preview regression passed. Mixed install and undo cuts had old and new bytes on disk.
+P.4.7,Propagate completed NVMe write failures to Porter,P.4.2,done,#741,ADDED 2026-11-25: completed NVMe writes could panic instead of signaling failure. QEMU injected real WRITE and Flush errors and offline rollback passed.
+P.4.8,Preserve independent ownership and edits during staging,P.4.4 P.4.5,done,#741,ADDED 2026-11-25: tested foreign directory adoption and an edit during staging. Recovery verified backups without staging before-images already present.
+P.4.9,Align standalone preview with ext2 transaction receipts,P.4.4,done,#741,ADDED 2026-11-25: matching FAT boot dependencies are outside the ext2 receipt. Standalone preview after a real baseline now agrees with install.
 P.5,Update FAT and kernel files and prove bootable rescue,P.4,todo,,Boot the known-good rescue runtime and exercise failure and reboot boundaries.
 P.6,Unwind multiple receipts in order,P.4,todo,,Preflight older backups and resume interrupted undo while preserving independent media.
 P.7,Deliver the desktop front end and complete hardware acceptance,P.5 P.6,todo,,Compare CLI and GUI behavior and run the accepted rehearsal on hardware.

@@ -1730,13 +1730,13 @@ static int ext2_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
 
 	spinlock_release_irqrestore(&e->write_lock, lock_flags);
 
-	if (done == 0)
-		return io_error ? -1 : 0;
-	return (int)done;
+	// A device or inode write failure must stay visible even when the
+	// payload was already copied. A later sync cannot undo that failure.
+	return io_error ? -1 : (int)done;
 }
 
 // WRITE-THROUGH makes sync a completed promise, not a pending one: by the
-// time any write returns, its data, metadata, and inode are already on the
+// time a successful write returns, its data, metadata, and inode are already on the
 // device. Contrast fat_sync, which exists precisely because FatFs defers
 // the length to sync/close. (DIVERGENCES.md records the difference.)
 static int ext2_sync(vfs_file_t *vfs_file)

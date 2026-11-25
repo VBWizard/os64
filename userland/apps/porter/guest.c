@@ -125,6 +125,8 @@ bool porter_load_volumes(porter_volumes_t *out)
         mount->fat = os64_streq(part[1], "fat");
         mount->disk = mount->fat || os64_streq(part[1], "ext2");
         mount->writable = os64_streq(part[6], "rw");
+        mount->persistent_ext2 = os64_streq(part[1], "ext2") && os64_strlen(part[2]) >= 5 &&
+                                os64_memcmp(part[2], "nvme", 4) == 0;
         for (char *p = part[5]; *p; p++)
             *p = lower(*p);
         if (!porter_component_path(part[0], true) || (mount->disk && !porter_guid(part[5]))) {

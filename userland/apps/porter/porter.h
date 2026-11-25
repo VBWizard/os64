@@ -31,7 +31,7 @@ typedef struct {
 } porter_entry_t;
 
 typedef struct {
-    const char *scope, *kernel, *previous, *target;
+    const char *scope, *kernel, *previous, *target, *operation;
     const char **lots;
     porter_entry_t *entries;
     size_t lot_count, entry_count;
@@ -52,7 +52,7 @@ typedef struct {
 
 typedef struct {
     char where[PORTER_PATH], guid[PORTER_GUID];
-    bool disk, writable, fat;
+    bool disk, writable, fat, persistent_ext2;
     uint64_t free_bytes, block_size;
     bool space_known;
 } porter_mount_t;
@@ -122,6 +122,7 @@ bool porter_identity_equal(const porter_identity_t *a, const porter_identity_t *
 
 bool porter_parse_inventory(porter_inventory_t *out, char *data, size_t count, bool receipt);
 void porter_release_inventory(porter_inventory_t *inventory);
+bool porter_read_receipt(porter_inventory_t *out, const char *id, const char *scope);
 const porter_entry_t *porter_find(const porter_inventory_t *inventory,
                                   const char *lot, const char *path);
 bool porter_has_lot(const porter_inventory_t *inventory, const char *lot);
@@ -150,6 +151,8 @@ bool porter_boot_digest(char hash[PORTER_DIGEST]);
 // and its per-volume stamps. The frontend owns rendering and approval.
 bool porter_preview(porter_plan_t *plan, const porter_inventory_t *target, bool baseline,
                     bool force_adopt, const porter_config_t *config, const porter_volumes_t *volumes);
+bool porter_preview_ext2(porter_plan_t *plan, const porter_inventory_t *target, bool baseline,
+                         bool force_adopt, const porter_config_t *config, const porter_volumes_t *volumes);
 void porter_release_plan(porter_plan_t *plan);
 
 #endif

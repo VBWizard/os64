@@ -27,7 +27,7 @@ typedef struct {
     const porter_volumes_t *volumes;
     porter_inventory_t current;
     paths_t paths;
-    bool old_valid;
+    bool old_valid, ext2_only;
     size_t scope_count;
 } planner_t;
 
@@ -149,7 +149,7 @@ static read_result_t read_id(const char *path, bool fat, char digest[PORTER_DIGE
     return ok ? READ_VALID : READ_INVALID;
 }
 
-static bool read_receipt(porter_inventory_t *out, const char *id, const char *scope)
+bool porter_read_receipt(porter_inventory_t *out, const char *id, const char *scope)
 {
     char path[PORTER_PATH];
     os64_snprintf(path, sizeof(path), PORTER_STATE "/receipts/%s.json", id);
@@ -237,7 +237,7 @@ static bool load_heads(planner_t *p, bool baseline, bool adopt)
     char path[PORTER_PATH], id[PORTER_DIGEST];
     os64_snprintf(path, sizeof(path), PORTER_STATE "/heads/%s", p->target->scope);
     read_result_t result = read_id(path, home->fat, id);
-    bool loaded = result == READ_VALID && read_receipt(&p->current, id, p->target->scope);
+    bool loaded = result == READ_VALID && porter_read_receipt(&p->current, id, p->target->scope);
     bool clean = check_stamps(p, loaded ? &p->current : NULL, p->target->scope);
     p->old_valid = loaded && clean;
     if (loaded) {
@@ -279,7 +279,7 @@ static bool load_heads(planner_t *p, bool baseline, bool adopt)
         }
         porter_inventory_t other = {0};
         os64_snprintf(path, sizeof(path), PORTER_STATE "/heads/%s", e.name);
-        ok = read_id(path, home->fat, id) == READ_VALID && read_receipt(&other, id, e.name) &&
+        ok = read_id(path, home->fat, id) == READ_VALID && porter_read_receipt(&other, id, e.name) &&
              index_receipt(p, &other, true);
         porter_release_inventory(&other);
         if (!ok)
@@ -454,6 +454,16 @@ static bool selected_entry(planner_t *p, const porter_entry_t *entry)
         conflict(item, "cannot verify actual destination bytes");
     if (item->action == PORTER_CONFLICT)
         return true;
+    bool ext2_receipt = p->old_valid && p->current.operation;
+    if ((p->ext2_only || ext2_receipt) && item->where.mount->fat && p->target->kernel &&
+        os64_streq(entry->lot, "boot") && !old && porter_identity_equal(&item->before, &item->after)) {
+        item->action = PORTER_UNCHANGED;
+        return true;
+    }
+    if (p->ext2_only && !item->where.mount->persistent_ext2) {
+        conflict(item, "this transaction requires persistent NVMe ext2 destinations");
+        return true;
+    }
     if (item->before.kind != PORTER_ABSENT && item->before.kind != item->after.kind) {
         conflict(item, "actual file and target directory or actual directory and target file");
     } else if (p->plan->adoption) {
@@ -586,7 +596,7 @@ static bool mark_downgrades(planner_t *p)
     os64_strcopy(id, sizeof(id), p->current.previous);
     for (size_t n = 0; *id && possible; n++) {
         porter_inventory_t prior = {0};
-        if (n == HISTORY_LIMIT || !read_receipt(&prior, id, p->target->scope))
+        if (n == HISTORY_LIMIT || !porter_read_receipt(&prior, id, p->target->scope))
             return false;
         for (size_t i = 0; i < p->plan->count; i++) {
             porter_plan_item_t *item = &p->plan->items[i];
@@ -852,12 +862,13 @@ static bool estimate(planner_t *p)
     return true;
 }
 
-bool porter_preview(porter_plan_t *plan, const porter_inventory_t *target, bool baseline,
-                    bool adopt, const porter_config_t *config, const porter_volumes_t *volumes)
+static bool preview_plan(porter_plan_t *plan, const porter_inventory_t *target, bool baseline,
+                         bool adopt, const porter_config_t *config, const porter_volumes_t *volumes,
+                         bool ext2_only)
 {
     *plan = (porter_plan_t){0};
     os64_strcopy(plan->target, sizeof(plan->target), target->digest);
-    planner_t p = {.plan = plan, .target = target, .config = config, .volumes = volumes};
+    planner_t p = {.plan = plan, .target = target, .config = config, .volumes = volumes, .ext2_only = ext2_only};
     bool ok = load_heads(&p, baseline, adopt);
     if (!ok)
         block(plan, "cannot verify local scope ownership");
@@ -886,6 +897,18 @@ bool porter_preview(porter_plan_t *plan, const porter_inventory_t *target, bool 
     if (!ok)
         block(plan, "preview could not build a complete plan");
     return ok;
+}
+
+bool porter_preview(porter_plan_t *plan, const porter_inventory_t *target, bool baseline,
+                    bool adopt, const porter_config_t *config, const porter_volumes_t *volumes)
+{
+    return preview_plan(plan, target, baseline, adopt, config, volumes, false);
+}
+
+bool porter_preview_ext2(porter_plan_t *plan, const porter_inventory_t *target, bool baseline,
+                         bool adopt, const porter_config_t *config, const porter_volumes_t *volumes)
+{
+    return preview_plan(plan, target, baseline, adopt, config, volumes, true);
 }
 
 void porter_release_plan(porter_plan_t *plan)

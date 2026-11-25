@@ -1,3 +1,4 @@
+#include "porter_writer.h"
 #include "task.h"
 #include "env.h"
 #include "CONFIG.h"
@@ -1494,8 +1495,8 @@ static void __attribute__((noinline)) task_exit_teardown(void)
 
 /// @brief Phase 2 of dying: the last breath, on the per-core interrupt stack.
 ///
-/// Runs with interrupts DISABLED, under the kernel CR3, and does exactly
-/// three non-blocking things: arm the one-way door (`exited` — the
+/// Runs with interrupts DISABLED, under the kernel CR3. This is
+/// non-blocking retirement: release the Porter writer lease, arm `exited` (the
 /// take-off-CPU branch in scheduler.c reads it and a zombie is never
 /// scheduled again), trigger the scheduler, and halt until it takes the
 /// corpse. NOTHING blockable is permitted on this stack — the stack belongs
@@ -1512,8 +1513,10 @@ static void __attribute__((noreturn, noinline)) task_exit_last_breath(void)
 	// death has been served by the teardown (siblings told, handles closed,
 	// task->exited published, corpse enqueued), so there is genuinely nothing
 	// left for this thread to run and the scheduler may file it under ZOMBIE.
-	if (thread)
+	if (thread) {
+		porter_writer_depart(thread);
 		thread->exited = true;
+	}
 
 	// Enter the scheduler via its normal APIC-IPI path; it sees the exited
 	// flag set above and moves this thread to the zombie queue.  A dead

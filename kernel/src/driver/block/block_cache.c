@@ -37,6 +37,7 @@ typedef struct {
 	block_device_info_t *dev;    // the pointer every caller passes as arg0
 	size_t (*orig_read)(void*, uint64_t, void*, uint64_t);
 	size_t (*orig_write)(void*, uint64_t, const void*, uint64_t);
+	uint64_t write_generation;   // sLock, fences fills that span a write
 	uint32_t line_sectors;       // BC_LINE_BYTES / dev->sectorSize
 	uint64_t total_sectors;      // device capacity, or UINT64_MAX when the
 	                             // driver never said (NVMe registration
@@ -216,6 +217,7 @@ static size_t bc_read_shim(void *dev, uint64_t sector, void *buffer, uint64_t se
 		{
 			// Miss: take a node under the lock, FILL OUTSIDE IT.
 			bc_line_t *mine = bc_take_node();
+			uint64_t generation = d->write_generation;
 			sStats.misses++;
 			spinlock_release(&sLock);
 
@@ -255,11 +257,8 @@ static size_t bc_read_shim(void *dev, uint64_t sector, void *buffer, uint64_t se
 				bc_line_t *racer = bc_lookup(d, lineNo);
 				if (racer != NULL)
 				{
-					// Someone filled it while we read. Their copy is as
-					// fresh as ours (no write can have landed between —
-					// writes invalidate under this same lock). Serve from
-					// theirs, recycle ours to the free pool via LRU tail
-					// position (owner NULL keeps it unfindable).
+					// Prefer the indexed line. A write that returned after
+					// we started filling has already updated or evicted it.
 					memcpy(out, racer->data + offInLine * ssz, take * ssz);
 					bc_lru_unlink(racer);
 					bc_lru_push_front(racer);
@@ -270,6 +269,17 @@ static size_t bc_read_shim(void *dev, uint64_t sector, void *buffer, uint64_t se
 					spinlock_release(&sLock);
 					kfree(mine->data);
 					kfree(mine);
+				}
+				else if (generation != d->write_generation)
+				{
+					// A completed or reported-failed write can leave this
+					// unindexed fill stale. Read the requested span again.
+					sStats.bytes_cached -= BC_LINE_BYTES;
+					spinlock_release(&sLock);
+					kfree(mine->data);
+					kfree(mine);
+					if (d->orig_read(dev, cur, out, take) != 0)
+						return (size_t)-1;
 				}
 				else
 				{
@@ -299,11 +309,10 @@ static size_t bc_write_shim(void *dev, uint64_t sector, const void *buffer, uint
 		return sDeviceCount > 0 ? sDevices[0].orig_write(dev, sector, buffer, sectorCount)
 		                        : (size_t)-1;
 
-	// Disk FIRST — write-through is the law of the land (and the stray-write
-	// tripwire inside the driver keeps its post). Only a write the disk
-	// accepted can make cached lines stale.
+	// Write through before updating the cache. A failed multi-command write
+	// may have modified a prefix, so evict the whole affected range on error.
 	size_t rc = d->orig_write(dev, sector, buffer, sectorCount);
-	if (rc != 0 || !sEnabled)
+	if (!sEnabled || !sectorCount)
 		return rc;
 
 	// UPDATE the lines the write touched, in place. This was born as
@@ -318,12 +327,22 @@ static size_t bc_write_shim(void *dev, uint64_t sector, const void *buffer, uint
 	uint64_t firstLine = sector / d->line_sectors;
 	uint64_t lastLine  = (sector + sectorCount - 1) / d->line_sectors;
 	uint32_t ssz = d->dev->sectorSize;
+	bc_line_t *discard = NULL;
 	spinlock_acquire(&sLock);
+	d->write_generation++;
 	for (uint64_t ln = firstLine; ln <= lastLine; ln++)
 	{
 		bc_line_t *l = bc_lookup(d, ln);
 		if (l != NULL)
 		{
+			if (rc != 0) {
+				bc_lru_unlink(l);
+				bc_hash_remove(l);
+				l->hashNext = discard;
+				discard = l;
+				sStats.bytes_cached -= BC_LINE_BYTES;
+				continue;
+			}
 			// Overlap of the write [sector, sector+count) with this line.
 			uint64_t lineStart = ln * d->line_sectors;
 			uint64_t from = sector > lineStart ? sector : lineStart;
@@ -338,6 +357,12 @@ static size_t bc_write_shim(void *dev, uint64_t sector, const void *buffer, uint
 		}
 	}
 	spinlock_release(&sLock);
+	while (discard) {
+		bc_line_t *next = discard->hashNext;
+		kfree(discard->data);
+		kfree(discard);
+		discard = next;
+	}
 	return rc;
 }
 

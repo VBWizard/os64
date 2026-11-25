@@ -1,5 +1,6 @@
 // The CLI presents the same read-only plan that a writer or UI can consume.
 #include "transcript.h"
+#include "transaction.h"
 #include "os64/os64.h"
 
 #define DEFAULT_PORT 6464
@@ -142,7 +143,12 @@ static void show_plan(porter_transcript_t *log, const porter_plan_t *plan, const
         emit(log, OS64_STDOUT, "Preview complete. Managed files and install history were left untouched.\n");
 }
 
-static int preview(porter_transcript_t *log, const char *host, uint16_t port, choice_t *choice, bool adopt, bool verbose)
+static void report_transaction(void *context, bool error, const char *message)
+{
+    emit(context, error ? OS64_STDERR : OS64_STDOUT, "%s%s\n", error ? "porter: " : "", message);
+}
+
+static int preview(porter_transcript_t *log, const char *host, uint16_t port, choice_t *choice, bool adopt, bool verbose, bool install, bool approved)
 {
     if (!porter_catalog(host, port, choose_publication, choice)) {
         emit(log, OS64_STDERR, "porter: %s\n", choice->duplicate
@@ -167,9 +173,22 @@ static int preview(porter_transcript_t *log, const char *host, uint16_t port, ch
         emit(log, OS64_STDERR, "porter: cannot read effective /etc/porter.conf and /home/porter.conf\n");
     else {
         porter_plan_t plan;
-        bool complete = porter_preview(&plan, &target, choice->baseline, adopt, &config, &volumes);
+        bool complete = install
+            ? porter_preview_ext2(&plan, &target, choice->baseline, adopt, &config, &volumes)
+            : porter_preview(&plan, &target, choice->baseline, adopt, &config, &volumes);
         show_plan(log, &plan, &target, verbose);
+        if (plan.blocker)
+            porter_tx_notice(report_transaction, log);
         rc = complete && !plan.blocker && !plan.conflicts ? 0 : 1;
+        if (!rc && install) {
+            if (!approved) {
+                emit(log, OS64_STDERR, "porter: use install --yes to approve the displayed plan\n");
+                rc = 1;
+            } else {
+                rc = porter_tx_install(host, port, &target, choice->baseline, adopt, &plan, &config,
+                                       report_transaction, log) ? 0 : 1;
+            }
+        }
         porter_release_plan(&plan);
     }
     os64_free(config.rules);
@@ -182,16 +201,39 @@ static int usage(porter_transcript_t *log)
 {
     emit(log, OS64_STDERR, "Usage: porter catalog HOST [--port N]\n"
                  "       porter preview HOST PUBLICATION [SCOPE] [--adopt] [--verbose] [--port N]\n"
+                 "       porter install HOST PUBLICATION [SCOPE] [--adopt] [--yes] [--port N]\n"
+                 "       porter history [SCOPE]\n"
+                 "       porter undo [SCOPE] [--yes]\n"
+                 "       porter recover\n"
                  "PUBLICATION is the full ID or a unique prefix of at least eight hex digits.\n");
     return 2;
 }
 
 static int run_cli(porter_transcript_t *log, int argc, char **argv)
 {
-    if (argc < 3)
+    if (argc < 2)
         return usage(log);
+    if (os64_streq(argv[1], "recover"))
+        return argc == 2 ? (porter_tx_recover(report_transaction, log) ? 0 : 1) : usage(log);
+    bool history = os64_streq(argv[1], "history"), undo = os64_streq(argv[1], "undo");
+    if (history || undo) {
+        const char *scope = "system";
+        int next = 2;
+        if (argc > next && argv[next][0] != '-') {
+            scope = argv[next++];
+            if (!porter_lot(scope))
+                return usage(log);
+        }
+        bool approved = undo && argc == next + 1 && os64_streq(argv[next], "--yes");
+        if (argc != next && !approved)
+            return usage(log);
+        bool ok = history ? porter_tx_history(scope, report_transaction, log)
+                          : porter_tx_undo(scope, approved, report_transaction, log);
+        return ok ? 0 : 1;
+    }
     bool catalog = os64_streq(argv[1], "catalog");
-    if (!catalog && !os64_streq(argv[1], "preview"))
+    bool install = os64_streq(argv[1], "install");
+    if (argc < 3 || (!catalog && !install && !os64_streq(argv[1], "preview")))
         return usage(log);
     const char *host = argv[2];
     choice_t choice = {.scope = "system"};
@@ -210,7 +252,7 @@ static int run_cli(porter_transcript_t *log, int argc, char **argv)
         }
     }
     uint64_t port = DEFAULT_PORT;
-    bool adopt = false, verbose = false;
+    bool adopt = false, verbose = false, approved = false;
     for (int i = first; i < argc; i++) {
         if (os64_streq(argv[i], "--port")) {
             if (++i == argc || !os64_parse_u64(argv[i], &port) || !port || port > 65535)
@@ -219,20 +261,30 @@ static int run_cli(porter_transcript_t *log, int argc, char **argv)
             adopt = true;
         } else if (!catalog && os64_streq(argv[i], "--verbose")) {
             verbose = true;
+        } else if (install && os64_streq(argv[i], "--yes")) {
+            approved = true;
         } else {
             return usage(log);
         }
     }
     if (!catalog)
-        return preview(log, host, (uint16_t)port, &choice, adopt, verbose);
+        return preview(log, host, (uint16_t)port, &choice, adopt, verbose, install, approved);
     if (porter_catalog(host, (uint16_t)port, show_publication, log))
         return 0;
     emit(log, OS64_STDERR, "porter: cannot read or verify catalog\n");
     return 1;
 }
 
+static void progress_pipe_closed(int signal)
+{
+    (void)signal;
+}
+
 int main(int argc, char **argv)
 {
+    // A progress reader can disappear after a transaction has been armed.
+    // Its SIGPIPE must not interrupt the operation or its independent log.
+    os64_signal_set_handler(OS64_SIGPIPE, progress_pipe_closed);
     porter_transcript_t log;
     bool opened = porter_transcript_open(&log, argc, argv);
     if (opened)

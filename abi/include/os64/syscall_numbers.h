@@ -767,6 +767,11 @@ typedef enum os64_shutdown_mode
 // Never blocks, never touches any other event. See os64/gui.h.
 #define SYSCALL_GUI_FRAME_TAKE 70
 
+// Porter serializes writers for the owning thread's lifetime. The checked
+// storage barrier requires that lease and reports filesystem/device errors.
+#define SYSCALL_PORTER_LEASE            71
+#define SYSCALL_STORAGE_BARRIER         72
+
 // Owner-task notification: arg0 = window handle, arg1 = nonzero uint32 mask.
 // Bits coalesce outside the input ring; see os64/gui.h.
 #define SYSCALL_GUI_EVENT_RING 58
