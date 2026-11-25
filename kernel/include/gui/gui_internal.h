@@ -41,6 +41,7 @@ typedef enum {
 	GUI_LOCK_POLL,          // a client taking its events (gui_event_poll)
 	GUI_LOCK_WINDOW,        // a window made, unmade, asked about or changed
 	GUI_LOCK_GLASS,         // /dev/glass: a viewer's view, read or input
+	GUI_LOCK_PLANE,         // a window's planes: made, drawn, published, unmade (plane.c)
 	GUI_LOCK_OTHER,         // the appearance and decoration stores, the census
 	GUI_LOCK_SITES
 } gui_lock_site_t;
@@ -148,5 +149,23 @@ void gui_glass_publish_locked(const rect_t *pieces, size_t count);
 // out, makes the call, takes what the call added, and gives the first list
 // back through gui_damage_add_locked, which repaints at least as much.
 uint32_t gui_damage_take_locked(rect_t *out, uint32_t cap);
+
+// The handle table (gui_client.c): handle = index + 1, so 0 is never a valid
+// handle. Guarded by kGuiLock.
+#define GUI_MAX_WINDOWS 32
+struct window;
+struct task;
+// The window at index `i`, or NULL. Caller holds kGuiLock.
+struct window *gui_handle_at_locked(unsigned i);
+// The caller's own window for `handle`, or NULL with GUI_ERR_INVALID_HANDLE
+// or GUI_ERR_NOT_OWNER in *err. Caller holds kGuiLock.
+struct window *gui_handle_owned_locked(int64_t handle, int64_t *err);
+// A window's publish, its damage already cut to the content (`local`, not
+// empty): the canvas copied to the content and the visible pieces damaged,
+// the publish-to-glass wait started. Caller holds kGuiLock.
+void gui_window_snapshot_locked(struct window *win, rect_t local);
+// A task-backed canvas's pages unmapped from `owner` and freed, under the
+// owner's signalLock (gui_client.c says why). With or without kGuiLock held.
+void gui_canvas_pages_release(struct task *owner, uintptr_t va, uint64_t bytes, uintptr_t phys);
 
 #endif // GUI_INTERNAL_H

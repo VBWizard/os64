@@ -87,9 +87,9 @@ today (review, finding 1). So this design never puts the question:
   nothing else.
 - The pages go back to the allocator at task death, where the sibling threads
   are already stopped when `gui_task_destroy_windows` runs (task.c's order),
-  through `canvas_pages_release` like any canvas (kGuiLock, then the owner's
-  signalLock, the existing order, which is also what keeps signal delivery
-  from writing a page as it is released).
+  through `gui_canvas_pages_release` like any canvas, after kGuiLock (the
+  owner's signalLock, which is what keeps signal delivery from writing a page
+  as it is released).
 - Capacity classes (§ 3.8) are what bound this: a task keeps at most what it
   once used at the same time in each class.
 
@@ -291,6 +291,31 @@ of § 3.5's rules.
   an overlay moved and removed across a damage edge, checked through
   `/dev/glass`; and the same under the frame clock's tearing count.
 - `make run-sparse` as well, since a second thread publishes.
+
+### 3.11 As built (P1a to P1c)
+
+- **P1a**: `task_va_reserve` (task.c) is the one door; `map` and a window's
+  canvas take their ranges through it, and so does a plane's canvas.
+- **P1b**: `plane_compose.c` as § 3.3 and § 3.4 say, at `-O2`, host-tested
+  beside a model (`tools/test_plane_compose_host.sh`) with 17 mutants.
+- **P1c**: the calls (syscalls 71 to 75: create, surface, publish, destroy,
+  and `window_publish_edits`), `kernel/src/gui/plane.c`, the ABI in
+  `os64/gui.h` § Planes. A pair of stores and its record are made outside
+  kGuiLock and stay on the task's list (`task->planeStores`) until its death;
+  the creator's exit is taken at the top of `syscall_thread_exit`, which a
+  thread's returning entry reaches through libos64's exit stub; every other
+  way a thread ends ends its task. The compositor draws the content around
+  one clip in up to four bands and the clip's part through the composer, so
+  no pixel is drawn twice; with two or more clips in one damaged view it
+  blits the content and draws each clip over it. Proof:
+  `kernel/test/test_planes.c` (late phase) and `/tests/planetest`, which
+  prices the compositor's part in three phases (copied, blended, read and
+  found opaque or see-through) from `/sys/gui`'s plane line.
+- **Departures from § 3.8 and § 3.9, for P1d and after**: `/sys/gui` gives
+  the machine's pairs (in use and kept) and bytes, not each task's; a plane's
+  publish starts the window's publish-to-glass instrument, not one kept apart
+  for planes; `window_bytes` does not count planes; the shown test, frames
+  and their counts are P1d's.
 
 ## 4. libmedia
 

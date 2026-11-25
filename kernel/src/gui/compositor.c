@@ -75,7 +75,7 @@ static gui_lock_site_t s_lock_holder;
 static uint64_t s_lock_since;
 
 static const char *const kLockSiteNames[GUI_LOCK_SITES] = {
-	"publish", "composite", "damage", "ring", "wait", "poll", "window", "glass", "other",
+	"publish", "composite", "damage", "ring", "wait", "poll", "window", "glass", "plane", "other",
 };
 
 const char *gui_lock_site_name(gui_lock_site_t site)

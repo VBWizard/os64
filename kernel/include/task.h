@@ -226,6 +226,10 @@
         // hands out and only ever advances; task_va_reserve is the one door
         // that moves it, so two threads never claim one range.
         uint64_t heapStart, heapEnd;
+        // The task's planes' pairs of stores, in use or kept (gui/plane.c,
+        // the GUI's own type): written only by the GUI under kGuiLock, given
+        // back at the task's death with its windows.
+        struct plane_store *planeStores;
         // WHERE THIS TASK'S malloc PUBLISHES ITS REPORT (SYSCALL_HEAP_REPORT,
         // 2026-08-15). A USER virtual address, valid only under this task's own
         // page tables — the kernel stores it and touches it in exactly one

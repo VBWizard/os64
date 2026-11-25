@@ -196,6 +196,7 @@
 #include "doorbell.h"                   // /sys/net/knet — every bell in the registry
 #include "driver/net/ipv4.h"            // kNetIPv4Address/Gateway/Netmask
 #include "gui/glass.h"                 // glass_view_count — /sys/gui's viewer count
+#include "gui/plane.h"                 // gui_planes_status — /sys/gui's planes
 #include "driver/net/loopback.h"        // kNetLoopback — lo's queue in /sys/net/knet
 #include "driver/net/net_wire.h"        // NET_IPV4_OCTETS — the a.b.c.d splitter
 #include "driver/net/dhcp.h"            // kDhcpStats — the lease, and how it was got
@@ -1765,6 +1766,36 @@ static void sys_gen_gui_frame_clock(synth_text_t *t, const gui_composite_count_t
 	synth_text_addf(t, "frame clock beam reads failed: %lu\n", beam_read_failures());
 }
 
+// A window's planes (gui/plane.h, VIDEO_PLANE.md § 3.9): the machine's
+// pairs of stores, the refusals by reason, then one line a plane. `composed`
+// is what the compositor drew of it: picture pixels copied, content pixels
+// read and blended over it, content read as opaque where the picture did not
+// reach, and the time all of that took, so a reader can price each kind.
+static void sys_gen_gui_planes(synth_text_t *t)
+{
+	enum { ROWS = 8 };
+	static const char *const kStates[] = {"free", "created", "hidden", "placed"};
+	gui_plane_status_t rows[ROWS];
+	uint64_t refused[GUI_PLANE_REFUSALS], pairs, kept, bytes;
+	uint32_t n = gui_planes_status(rows, ROWS, refused, &pairs, &kept, &bytes);
+	synth_text_addf(t, "planes: %u, pairs of stores %lu (%lu kept), %lu bytes; refused:", n, pairs, kept, bytes);
+	for (unsigned i = 0; i < GUI_PLANE_REFUSALS; i++)
+		synth_text_addf(t, "%s %s %lu", i ? "," : "", gui_plane_refusal_name((gui_plane_refusal_t)i), refused[i]);
+	synth_text_addf(t, "\n");
+	for (uint32_t i = 0; i < n && i < ROWS; i++) {
+		const gui_plane_status_t *r = &rows[i];
+		synth_text_addf(t, "plane %u of window %u: %s, class %ux%u, picture %ux%u, origin %d,%d %dx%d, "
+		                "clip %d,%d %dx%d, overlays %u (%lu pixels), publishes %lu, composed %lu copied "
+		                "%lu blended %lu opaque in %lu ns\n",
+		                r->name, r->window, r->state < 4 ? kStates[r->state] : "?", r->cap_w, r->cap_h,
+		                r->pic_w, r->pic_h, r->origin.x, r->origin.y, r->origin.w, r->origin.h, r->clip.x,
+		                r->clip.y, r->clip.w, r->clip.h, r->noverlays, r->overlay_area, r->publishes,
+		                r->composed.copied, r->composed.blended, r->composed.opaque, r->compose_ns);
+	}
+	if (n > ROWS)
+		synth_text_addf(t, "plane lines past the first %u left out: %u\n", ROWS, n - ROWS);
+}
+
 static void sys_gen_gui(synth_text_t *t)
 {
 	synth_text_addf(t, "running: %s\n", kEnableGUI ? "yes" : "no");
@@ -1857,6 +1888,7 @@ static void sys_gen_gui(synth_text_t *t)
 	                comp.glass_buckets[0], comp.glass_buckets[1], comp.glass_buckets[2],
 	                comp.glass_buckets[3], comp.glass_buckets[4], comp.glass_buckets[5],
 	                comp.glass_buckets[6]);
+	sys_gen_gui_planes(t);
 	sys_gen_gui_frame_clock_state(t, &comp);
 	sys_gen_gui_frame_clock(t, &comp);
 }

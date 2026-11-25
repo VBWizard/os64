@@ -57,6 +57,7 @@
 extern bool test_window_minimum_clamp(void);
 extern bool test_window_opacity(void);
 extern bool test_window_title(void);
+extern bool test_planes(void);
 extern bool test_bell(void);
 extern bool test_window_maximized(void);
 extern bool test_surface_blit(void);
@@ -6449,6 +6450,7 @@ static void register_builtin_tests(void)
     test_register("bell", test_bell, TEST_PHASE_LATE);
     test_register("window_opacity", test_window_opacity, TEST_PHASE_LATE);
     test_register("window_title", test_window_title, TEST_PHASE_LATE);
+    test_register("planes", test_planes, TEST_PHASE_LATE);
     test_register("window_maximized", test_window_maximized, TEST_PHASE_LATE);
     test_register("ext2_real_partition", test_ext2_real_partition, TEST_PHASE_POSTBOOT);
     test_register("mount_table", test_mount_table, TEST_PHASE_POSTBOOT);

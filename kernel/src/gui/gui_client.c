@@ -69,9 +69,8 @@ _Static_assert(OS64_GUI_TITLEBAR_HEIGHT == GUI_TITLEBAR_HEIGHT,
 _Static_assert(OS64_GUI_MIN_CONTENT == GUI_MIN_CONTENT,
                "the GUI ABI's minimum content size drifted from the WM's");
 
-// Handle table: handle = index + 1, so 0 is never a valid handle. 32 windows
-// is plenty until real userland apps exist. Guarded by kGuiLock.
-#define GUI_MAX_WINDOWS 32
+// Handle table (gui_internal.h): 32 windows is plenty until real userland
+// apps exist. Guarded by kGuiLock.
 static window_t *s_handles[GUI_MAX_WINDOWS];
 _Static_assert(GUI_MAX_WINDOWS <= UINT16_MAX, "focus handle field capacity");
 _Static_assert(GUI_ERR_BUSY == OS64_GUI_ERR_BUSY, "GUI busy ABI");
@@ -121,10 +120,11 @@ static window_t *handle_lookup(int64_t handle)
 // must take that task's signalLock across the free, or delivery can be
 // standing in it.
 //
-// Lock order is kGuiLock -> signalLock (every caller here already holds
-// kGuiLock, and no signal path ever takes kGuiLock), so this nests without a
-// cycle. One free_memory for the whole extent, so the hold is bounded no
-// matter how large the canvas.
+// Lock order is kGuiLock -> signalLock where a caller holds kGuiLock (no
+// signal path ever takes kGuiLock), so this nests without a cycle; a caller
+// may also hold neither (a plane's pairs go back after kGuiLock). One
+// free_memory for the whole extent, so the hold is bounded no matter how
+// large the canvas.
 // THE ONE PLACE TASK-MAPPED CANVAS PAGES GO BACK. Every caller goes through
 // here so the signalLock rule above is enforced by CONSTRUCTION rather than by
 // each site remembering it — which matters because the site that forgot it was
@@ -134,8 +134,8 @@ static window_t *handle_lookup(int64_t handle)
 // exactly one owning address space by definition, and both the unmap and the
 // lock need it. Refusing beats freeing pages we cannot unmap, which would
 // leave the task a live mapping to memory the allocator has given away.
-static void canvas_pages_release(task_t *owner, uintptr_t va, uint64_t bytes,
-                                 uintptr_t phys)
+void gui_canvas_pages_release(task_t *owner, uintptr_t va, uint64_t bytes,
+                              uintptr_t phys)
 {
 	if (owner == NULL || phys == 0 || bytes == 0)
 		return;
@@ -151,7 +151,7 @@ static void canvas_release_locked(window_t *win, task_t *owner)
 	if (win->canvas_task_phys == 0)
 		return;
 
-	canvas_pages_release(owner, win->canvas_task_va,
+	gui_canvas_pages_release(owner, win->canvas_task_va,
 	                     (uint64_t)win->canvas_pages * PAGE_SIZE,
 	                     win->canvas_task_phys);
 	win->canvas.pixels = NULL;
@@ -177,6 +177,16 @@ static window_t *handle_lookup_owned(int64_t handle, int64_t *err)
 		return NULL;
 	}
 	return win;
+}
+
+window_t *gui_handle_at_locked(unsigned i)
+{
+	return i < GUI_MAX_WINDOWS ? s_handles[i] : NULL;
+}
+
+window_t *gui_handle_owned_locked(int64_t handle, int64_t *err)
+{
+	return handle_lookup_owned(handle, err);
 }
 
 // Future syscall: SYSCALL_GUI_WINDOW_CREATE (16), user_ptr_mask 0b000001
@@ -424,7 +434,7 @@ undo_pivot:
 	// since it only runs when window creation fails — but rd8's window was
 	// narrow too, and it was a kernel panic. Routed here rather than fixed in
 	// place so the next person to free a canvas cannot get it wrong.
-	canvas_pages_release(task, canvas_va, canvas_bytes, canvas_phys);
+	gui_canvas_pages_release(task, canvas_va, canvas_bytes, canvas_phys);
 	return failure;
 }
 
@@ -444,6 +454,11 @@ int64_t gui_window_destroy(int64_t handle)
             return GUI_ERR_BUSY;
         }
     }
+	// Planes are a window's children too: destroyed first (os64/gui.h § Planes).
+	if (gui_window_has_planes(win)) {
+		gui_unlock(irqflags);
+		return GUI_ERR_BUSY;
+	}
 	s_handles[handle - 1] = NULL;
 	// The owner check above means the CALLER's address space is where a
 	// task-backed canvas lives — release it through the caller's own pml4v
@@ -656,6 +671,13 @@ int64_t gui_window_publish(int64_t handle, const rect_t *damage)
 		local = content_bounds;
 	}
 
+	gui_window_snapshot_locked(win, local);
+	gui_unlock(irqflags);
+	return 0;
+}
+
+void gui_window_snapshot_locked(window_t *win, rect_t local)
+{
 	// Snapshot-on-publish (GRAPHICS.md "Atomic frames"): copy the damage rect
 	// canvas → content under kGuiLock. The compositor only ever composites
 	// content, so a frame on screen is always a frame the client FINISHED —
@@ -697,8 +719,6 @@ int64_t gui_window_publish(int64_t handle, const rect_t *damage)
 		gui_damage_add_locked(seen[i]);
 	// The publish-to-glass wait starts now, or never does (/sys/gui).
 	gui_glass_publish_locked(seen, n);
-	gui_unlock(irqflags);
-	return 0;
 }
 
 // Future syscall: SYSCALL_GUI_EVENT_POLL (20), user_ptr_mask 0b10 (out-event).
@@ -1001,7 +1021,9 @@ void gui_task_destroy_windows(struct task *t)
 		// makes the unmap legal; no TLB flush needed — the task never runs
 		// again, and free_memory's HHDM shootdown covers the alias side.
 		canvas_release_locked(win, t);
-		wm_destroy(win);   // damages the vacated area itself
+		wm_destroy(win);   // damages the vacated area itself, its planes with it
 	}
 	gui_unlock(irqflags);
+	// The planes' pairs, in use a moment ago or kept, after the lock.
+	gui_task_planes_release(t);
 }

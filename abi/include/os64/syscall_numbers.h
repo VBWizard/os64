@@ -766,6 +766,17 @@ typedef enum os64_shutdown_mode
 // Take the window's frame answer if one waits: arg0 handle, arg1 event out.
 // Never blocks, never touches any other event. See os64/gui.h.
 #define SYSCALL_GUI_FRAME_TAKE 70
+// A window's planes (os64/gui.h § Planes; VIDEO_PLANE.md § 3.1): make one
+// (arg0 handle, arg1 width, arg2 height; answers its name), its canvas
+// (arg0 handle, arg1 name, arg2 os64_gui_plane_surface_t out), publish a
+// picture from it (arg0 handle, arg1 name, arg2 width, arg3 height), take it
+// out of the window (arg0 handle, arg1 name), and a window publish carrying
+// plane edits (arg0 handle, arg1 damage or NULL, arg2 edits, arg3 count).
+#define SYSCALL_GUI_PLANE_CREATE 71
+#define SYSCALL_GUI_PLANE_SURFACE 72
+#define SYSCALL_GUI_PLANE_PUBLISH 73
+#define SYSCALL_GUI_PLANE_DESTROY 74
+#define SYSCALL_GUI_WINDOW_PUBLISH_EDITS 75
 
 // Owner-task notification: arg0 = window handle, arg1 = nonzero uint32 mask.
 // Bits coalesce outside the input ring; see os64/gui.h.
