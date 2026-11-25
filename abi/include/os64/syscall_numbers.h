@@ -770,13 +770,18 @@ typedef enum os64_shutdown_mode
 // (arg0 handle, arg1 width, arg2 height; answers its name), its canvas
 // (arg0 handle, arg1 name, arg2 os64_gui_plane_surface_t out), publish a
 // picture from it (arg0 handle, arg1 name, arg2 width, arg3 height), take it
-// out of the window (arg0 handle, arg1 name), and a window publish carrying
-// plane edits (arg0 handle, arg1 damage or NULL, arg2 edits, arg3 count).
+// out of the window (arg0 handle, arg1 name), a window publish carrying
+// plane edits (arg0 handle, arg1 damage or NULL, arg2 edits, arg3 count),
+// a plane's wait for its frame (arg0 handle, arg1 name, arg2 patience in
+// milliseconds, arg3 os64_gui_plane_frame_t out) and its poke (arg0
+// handle, arg1 name).
 #define SYSCALL_GUI_PLANE_CREATE 71
 #define SYSCALL_GUI_PLANE_SURFACE 72
 #define SYSCALL_GUI_PLANE_PUBLISH 73
 #define SYSCALL_GUI_PLANE_DESTROY 74
 #define SYSCALL_GUI_WINDOW_PUBLISH_EDITS 75
+#define SYSCALL_GUI_PLANE_FRAME_WAIT 76
+#define SYSCALL_GUI_PLANE_POKE 77
 
 // Owner-task notification: arg0 = window handle, arg1 = nonzero uint32 mask.
 // Bits coalesce outside the input ring; see os64/gui.h.

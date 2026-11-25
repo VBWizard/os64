@@ -245,6 +245,8 @@ static uint64_t syscall_gui_plane_surface(uint64_t, uint64_t, uint64_t, uint64_t
 static uint64_t syscall_gui_plane_publish(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 static uint64_t syscall_gui_plane_destroy(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 static uint64_t syscall_gui_window_publish_edits(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+static uint64_t syscall_gui_plane_frame_wait(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+static uint64_t syscall_gui_plane_poke(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 
 // NOTE: syscall.S marshals the syscall registers straight into
 // _syscall_dispatch()'s C arguments — there is deliberately no C-level entry
@@ -351,6 +353,8 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_GUI_PLANE_PUBLISH,      "gui_plane_publish",      syscall_gui_plane_publish,      false, 0x00),  // scalars: handle, plane, width, height
 	SYSCALL_DEFINE(SYSCALL_GUI_PLANE_DESTROY,      "gui_plane_destroy",      syscall_gui_plane_destroy,      false, 0x00),  // scalars: handle, plane
 	SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_PUBLISH_EDITS, "gui_window_publish_edits", syscall_gui_window_publish_edits, false, 0x00),  // arg1 damage OR NULL, arg2 edits (NULL when none): both copied by the handler
+	SYSCALL_DEFINE(SYSCALL_GUI_PLANE_FRAME_WAIT,   "gui_plane_frame_wait",   syscall_gui_plane_frame_wait,   false, 0x08),  // arg3 = os64_gui_plane_frame_t out; blocks, resolves no path
+	SYSCALL_DEFINE(SYSCALL_GUI_PLANE_POKE,         "gui_plane_poke",         syscall_gui_plane_poke,         false, 0x00),  // scalars: handle, plane
 	// arg1 is a CODE address the kernel will one day jump to, not a buffer it
 	// reads — so it stays OUT of the pointer mask (which validates readable
 	// user memory) and the handler range-checks it itself.
@@ -6132,6 +6136,35 @@ static uint64_t syscall_gui_plane_destroy(uint64_t arg0, uint64_t arg1, uint64_t
 	if (arg1 > UINT32_MAX)
 		return (uint64_t)OS64_GUI_ERR_NO_PLANE;
 	return (uint64_t)gui_plane_destroy((int64_t)arg0, (uint32_t)arg1);
+}
+
+// A plane's frame wait: the answer is filled in a kernel copy and copied
+// out only when the wait ended with one (0); an interrupted wait copies
+// nothing.
+static uint64_t syscall_gui_plane_frame_wait(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg4; (void)arg5;
+	if (arg1 > UINT32_MAX)
+		return (uint64_t)OS64_GUI_ERR_NO_PLANE;
+	if (arg2 > UINT32_MAX)
+		return (uint64_t)GUI_ERR_BAD_ARGS;
+	os64_gui_plane_frame_t out;
+	int64_t rc = gui_plane_frame_wait((int64_t)arg0, (uint32_t)arg1, (uint32_t)arg2, &out);
+	if (rc != 0)
+		return (uint64_t)rc;
+	if (!copy_to_user_buffer((void *)arg3, &out, sizeof(out)))
+		return (uint64_t)GUI_ERR_BAD_ARGS;
+	return 0;
+}
+
+static uint64_t syscall_gui_plane_poke(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg2; (void)arg3; (void)arg4; (void)arg5;
+	if (arg1 > UINT32_MAX)
+		return (uint64_t)OS64_GUI_ERR_NO_PLANE;
+	return (uint64_t)gui_plane_poke((int64_t)arg0, (uint32_t)arg1);
 }
 
 // The damage is nullable (the publish precedent) and the edits are absent

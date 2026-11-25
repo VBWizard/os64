@@ -17,6 +17,12 @@
 #include "memory/kmalloc.h"
 #include "memory/paging.h"
 #include "driver/system/x86_64.h"   // rdtsc — the compositor's part times itself
+#include "gui/compositor.h"   // the frame epoch and the request's nudge
+#include "scheduler.h"        // the wait's wake
+#include "signals.h"          // the wait's park and its exit
+#include "kernel.h"           // kTicksSinceStart — the park's deadline
+#include "micros.h"           // the patience
+#include "video.h"            // kFrameBuffer — "shown" ends at the screen's edge
 
 _Static_assert(GUI_WINDOW_PLANES == OS64_GUI_PLANES, "the plane ABI's slots drifted from the kernel's");
 _Static_assert(PLANE_OVERLAYS_MAX == OS64_GUI_PLANE_OVERLAYS, "the plane ABI's overlays drifted from the composer's");
@@ -730,8 +736,184 @@ int64_t gui_window_publish_edits(int64_t handle, const os64_gui_rect_t *damage,
 		damage_content_locked(win, p->place.clip, false);
 		p->place = next[s];
 		p->state = pc_empty(p->place.clip) ? GUI_PLANE_PICTURED : GUI_PLANE_PLACED;
+		p->place_changes++;
 		damage_content_locked(win, p->place.clip, false);
 	}
+	gui_unlock(flags);
+	return 0;
+}
+
+// ── Frames (VIDEO_PLANE.md § 3.6) ───────────────────────────────────────────
+
+// The one test of whether a plane is shown: its window not covered, its
+// place not empty, and its clip, as the content stands and cut to the
+// screen, meeting what of the window is visible (wm_visible_damage's walk,
+// which answers with the pieces' bounding box when it runs out of them, and
+// knows only the windows above, not the screen's edge). Under kGuiLock.
+static bool plane_shown_locked(window_t *win, const gui_plane_t *p)
+{
+	if (p->state != GUI_PLANE_PLACED || (win->flags & GUI_WINDOW_COVERED))
+		return false;
+	pc_rect_t clip = pc_cut(p->place.clip, content_bounds(win));
+	if (pc_empty(clip))
+		return false;
+	rect_t cs = wm_content_rect_on_screen(win);
+	pc_rect_t on_screen = pc_cut((pc_rect_t){cs.x + clip.x, cs.y + clip.y, clip.w, clip.h},
+	                             (pc_rect_t){0, 0, (int32_t)kFrameBuffer.width, (int32_t)kFrameBuffer.height});
+	if (pc_empty(on_screen))
+		return false;
+	rect_t seen[4];
+	return wm_visible_damage(win, to_rect(on_screen), seen, 4) > 0;
+}
+
+void gui_planes_frame_waiters_locked(uint32_t *shown, uint32_t *hidden)
+{
+	uint32_t s = 0, h = 0;
+	for (unsigned i = 0; i < GUI_MAX_WINDOWS; i++) {
+		window_t *win = gui_handle_at_locked(i);
+		if (win == NULL)
+			continue;
+		for (unsigned k = 0; k < GUI_WINDOW_PLANES; k++) {
+			gui_plane_t *p = &win->planes[k];
+			if (p->state == GUI_PLANE_FREE || !p->frame_wanted)
+				continue;
+			p->shown = plane_shown_locked(win, p);
+			if (p->shown)
+				s++;
+			else
+				h++;
+		}
+	}
+	*shown = s;
+	*hidden = h;
+}
+
+uint32_t gui_planes_frame_answer_locked(uint64_t number, uint64_t blank_us, uint32_t period_ns, uint64_t before,
+                                        uint32_t *held_back)
+{
+	uint32_t answered = 0, held = 0;
+	for (unsigned i = 0; i < GUI_MAX_WINDOWS; i++) {
+		window_t *win = gui_handle_at_locked(i);
+		if (win == NULL)
+			continue;
+		for (unsigned k = 0; k < GUI_WINDOW_PLANES; k++) {
+			gui_plane_t *p = &win->planes[k];
+			if (p->state == GUI_PLANE_FREE || !p->frame_wanted || p->frame_epoch >= before)
+				continue;
+			if (!p->shown) {
+				held++;
+				continue;
+			}
+			p->frame_wanted = false;
+			p->answered = true;
+			p->answer_number = number;
+			p->answer_blank_us = blank_us;
+			p->answer_period_ns = period_ns;
+			p->frames_answered++;
+			if (p->waiter != NULL)
+				scheduler_wake_or_owe(p->waiter);
+			answered++;
+		}
+	}
+	*held_back = held;
+	return answered;
+}
+
+// The park's backstop, as a window's event wait has: a wake missed costs at
+// most this, never a hang.
+#define PLANE_WAIT_BACKSTOP_TICKS (TICKS_PER_SECOND / 4)
+
+// The wait's lifetime is P1's design state (§ 5 there): its request is
+// made at entry; it parks as gui_event_wait does (register under the lock,
+// void the registration at the top of every pass, the backstop); it ends at
+// an answer, a poke, the patience's end or a caught signal, and every end
+// clears the request, the answer and any poke it took. The plane is looked
+// up again every pass, as a window is: it may be gone when the wait wakes.
+// Patience 0 makes no request (it could never be answered): it takes a
+// poke owed, or ends by its patience. A request starts a stopped frame
+// clock only if the plane is shown when it is made; one hidden then is
+// counted by the next pass that finds it shown.
+int64_t gui_plane_frame_wait(int64_t handle, uint32_t name, uint32_t patience_ms, os64_gui_plane_frame_t *out)
+{
+	thread_t *self = current_thread();
+	if (self == NULL || out == NULL)
+		return GUI_ERR_BAD_ARGS;
+	uint64_t deadline = patience_ms == OS64_GUI_PLANE_WAIT_FOREVER ? UINT64_MAX
+	                                                               : micros_now() + (uint64_t)patience_ms * 1000;
+	bool asked = false;
+	for (;;) {
+		int64_t err;
+		window_t *win;
+		uint64_t flags = gui_lock(GUI_LOCK_PLANE);
+		scheduler_forget_owed_wake(self);
+		gui_plane_t *p = creator_plane_locked(handle, name, &win, &err);
+		if (p == NULL) {
+			gui_unlock(flags);
+			return err;
+		}
+		if (p->waiter == self)
+			p->waiter = NULL;
+		if (!asked && !p->poke_owed && patience_ms != 0) {
+			p->frame_wanted = true;
+			p->answered = false;
+			p->frame_epoch = gui_frame_epoch_locked();
+			p->frames_asked++;
+			asked = true;
+			if (plane_shown_locked(win, p))
+				gui_frame_wait_arrived();   // a stopped clock starts for a shown waiter
+		}
+		uint32_t why = p->poke_owed ? OS64_GUI_PLANE_POKED
+		             : p->answered ? OS64_GUI_PLANE_FRAME
+		             : signal_park_must_end(self) ? 0
+		             : micros_now() >= deadline ? OS64_GUI_PLANE_PATIENCE
+		             : UINT32_MAX;
+		if (why != UINT32_MAX) {
+			*out = (os64_gui_plane_frame_t){
+				.why = why,
+				.period_ns = why == OS64_GUI_PLANE_FRAME ? p->answer_period_ns : 0,
+				.number = why == OS64_GUI_PLANE_FRAME ? p->answer_number : 0,
+				.blank_us = why == OS64_GUI_PLANE_FRAME ? p->answer_blank_us : 0,
+				.placed = p->state == GUI_PLANE_PLACED,
+				.place_changes = p->place_changes,
+			};
+			p->frame_wanted = false;
+			p->answered = false;
+			if (why == OS64_GUI_PLANE_POKED) {
+				p->poke_owed = false;
+				p->waits_poked++;
+			} else if (why == OS64_GUI_PLANE_PATIENCE) {
+				p->waits_patience++;
+			} else if (why == 0) {
+				p->waits_interrupted++;
+			}
+			gui_unlock(flags);
+			return why == 0 ? GUI_ERR_INTERRUPTED : 0;
+		}
+		p->waiter = self;
+		gui_unlock(flags);
+		uint64_t now = micros_now(), ticks = PLANE_WAIT_BACKSTOP_TICKS;
+		if (deadline != UINT64_MAX) {
+			// The deadline may have passed since the check above.
+			uint64_t left = now >= deadline ? 1 : (deadline - now) * TICKS_PER_SECOND / 1000000 + 1;
+			ticks = left < ticks ? left : ticks;
+		}
+		signal_raise(SIGSLEEP, kTicksSinceStart + ticks, self);
+	}
+}
+
+int64_t gui_plane_poke(int64_t handle, uint32_t name)
+{
+	int64_t err;
+	uint64_t flags = gui_lock(GUI_LOCK_PLANE);
+	window_t *win = gui_handle_owned_locked(handle, &err);
+	gui_plane_t *p = win ? plane_lookup(win, name, &err) : NULL;
+	if (p == NULL) {
+		gui_unlock(flags);
+		return err;
+	}
+	p->poke_owed = true;
+	if (p->waiter != NULL)
+		scheduler_wake_or_owe(p->waiter);
 	gui_unlock(flags);
 	return 0;
 }
@@ -835,6 +1017,13 @@ uint32_t gui_planes_status(gui_plane_status_t *out, uint32_t cap, uint64_t refus
 				r->overlay_area = plane_overlay_area(&p->place);
 				r->publishes = p->publishes;
 				r->composed = p->composed;
+				r->shown = plane_shown_locked(win, p);
+				r->waiting = p->waiter != NULL;
+				r->frames_asked = p->frames_asked;
+				r->frames_answered = p->frames_answered;
+				r->waits_poked = p->waits_poked;
+				r->waits_patience = p->waits_patience;
+				r->waits_interrupted = p->waits_interrupted;
 				r->compose_ns = kCPUCyclesPerSecond
 				    ? p->compose_cycles / kCPUCyclesPerSecond * 1000000000ull +
 				      p->compose_cycles % kCPUCyclesPerSecond * 1000000000ull / kCPUCyclesPerSecond

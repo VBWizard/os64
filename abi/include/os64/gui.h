@@ -698,6 +698,17 @@ static inline int64_t os64_gui_popup_create(const char *title, int64_t owner,
 //     planes cannot be destroyed. A creating thread that ends takes its
 //     planes out with it (hidden, then destroyed); the task's death takes
 //     every plane.
+//   - plane_frame_wait (the creator) parks until the display's next frame
+//     while the plane is SHOWN (its window not covered, its place not
+//     empty, its clip meeting what of the window is visible on the screen),
+//     a poke, or the patience's end. A plane that is not shown is answered
+//     nothing and the wait goes on. The answer is one wait's: its
+//     request, and anything owed it, end with it, so a frame never reaches
+//     the next wait. A caught signal ends it with INTERRUPTED. Shown
+//     waiters keep the display's frame clock running, as a window's frame
+//     request does.
+//   - plane_poke (any thread of the owner) ends the creator's wait, or its
+//     next one if none is under way. One poke is owed at most.
 #define OS64_GUI_PLANES 4
 #define OS64_GUI_PLANE_OVERLAYS 8
 #define OS64_GUI_PLANE_EDITS_MAX 4
@@ -732,11 +743,28 @@ typedef struct os64_gui_plane_edit
     os64_gui_rect_t overlay[OS64_GUI_PLANE_OVERLAYS];
 } os64_gui_plane_edit_t;
 
-// The kernel reads these two structs as they are, so their layout is pinned
+// What ended a plane's wait, and the plane's committed state then.
+#define OS64_GUI_PLANE_FRAME     1   // the display's frame, while the plane was shown
+#define OS64_GUI_PLANE_POKED     2   // a poke (owed, or arriving during the wait)
+#define OS64_GUI_PLANE_PATIENCE  3   // the patience ran out
+#define OS64_GUI_PLANE_WAIT_FOREVER 0xFFFFFFFFu   // patience that never runs out
+typedef struct os64_gui_plane_frame
+{
+    uint32_t why;            // OS64_GUI_PLANE_FRAME, _POKED or _PATIENCE
+    uint32_t period_ns;      // FRAME: the display's period
+    uint64_t number;         // FRAME: the frame's number (a count of refreshes, as a window's)
+    uint64_t blank_us;       // FRAME: when its blank began, micros()'s clock
+    uint32_t placed;         // the place is not empty
+    uint32_t _reserved;
+    uint64_t place_changes;  // the window publishes that have changed the place
+} os64_gui_plane_frame_t;
+
+// The kernel reads these structs as they are, so their layout is pinned
 // here alone.
 _Static_assert(sizeof(os64_gui_plane_surface_t) == 24, "gui plane surface ABI: 24 bytes");
 _Static_assert(sizeof(os64_gui_plane_edit_t) == 176, "gui plane edit ABI: 176 bytes");
 _Static_assert(__builtin_offsetof(os64_gui_plane_edit_t, overlay) == 48, "gui plane edit ABI: overlays at 48");
+_Static_assert(sizeof(os64_gui_plane_frame_t) == 40, "gui plane frame ABI: 40 bytes");
 
 // Answers the plane's name (> 0), or a negative OS64_GUI_ERR_*.
 static inline int64_t os64_gui_plane_create(int64_t handle, uint32_t width, uint32_t height)
@@ -754,6 +782,19 @@ static inline int64_t os64_gui_plane_publish(int64_t handle, uint32_t plane, uin
 static inline int64_t os64_gui_plane_destroy(int64_t handle, uint32_t plane)
 {
     return (int64_t)os64_syscall2(SYSCALL_GUI_PLANE_DESTROY, (uint64_t)handle, plane);
+}
+// 0 with *out filled, or a negative OS64_GUI_ERR_* (INTERRUPTED for a
+// caught signal, *out untouched). Patience 0 asks for no frame: it answers
+// a poke owed, or the patience, at once. A wait whose *out cannot be
+// written answers BAD_ARGS after it has ended, a poke it took taken.
+static inline int64_t os64_gui_plane_frame_wait(int64_t handle, uint32_t plane, uint32_t patience_ms,
+                                                os64_gui_plane_frame_t *out)
+{
+    return (int64_t)os64_syscall4(SYSCALL_GUI_PLANE_FRAME_WAIT, (uint64_t)handle, plane, patience_ms, (uint64_t)out);
+}
+static inline int64_t os64_gui_plane_poke(int64_t handle, uint32_t plane)
+{
+    return (int64_t)os64_syscall2(SYSCALL_GUI_PLANE_POKE, (uint64_t)handle, plane);
 }
 // The window's publish with up to OS64_GUI_PLANE_EDITS_MAX edits, accepted
 // whole or refused whole (nothing changes when refused).

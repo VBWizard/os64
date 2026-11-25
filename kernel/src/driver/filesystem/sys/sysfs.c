@@ -1771,7 +1771,10 @@ static void sys_gen_gui_frame_clock(synth_text_t *t, const gui_composite_count_t
 // is what the compositor drew of it: picture pixels copied, content pixels
 // in an overlay read and put over it (`blended`, whatever their top byte),
 // content read as opaque where the picture did not reach, and the time all
-// of that took, so a reader can price each kind.
+// of that took, so a reader can price each kind. Then its frames: whether
+// it is shown now (the frame wait's test) and its creator parked, frames
+// asked for and answered, and waits ended by a poke, the patience or a
+// caught signal.
 static void sys_gen_gui_planes(synth_text_t *t)
 {
 	enum { ROWS = 8 };
@@ -1787,11 +1790,14 @@ static void sys_gen_gui_planes(synth_text_t *t)
 		const gui_plane_status_t *r = &rows[i];
 		synth_text_addf(t, "plane %u of window %u: %s, class %ux%u, picture %ux%u, origin %d,%d %dx%d, "
 		                "clip %d,%d %dx%d, overlays %u (%lu pixels), publishes %lu, composed %lu copied "
-		                "%lu blended %lu opaque in %lu ns\n",
+		                "%lu blended %lu opaque in %lu ns; %s, %s; frames %lu asked, %lu answered; waits ended "
+		                "by a poke %lu, the patience %lu, a signal %lu\n",
 		                r->name, r->window, r->state < 4 ? kStates[r->state] : "?", r->cap_w, r->cap_h,
 		                r->pic_w, r->pic_h, r->origin.x, r->origin.y, r->origin.w, r->origin.h, r->clip.x,
 		                r->clip.y, r->clip.w, r->clip.h, r->noverlays, r->overlay_area, r->publishes,
-		                r->composed.copied, r->composed.blended, r->composed.opaque, r->compose_ns);
+		                r->composed.copied, r->composed.blended, r->composed.opaque, r->compose_ns,
+		                r->shown ? "shown" : "not shown", r->waiting ? "waiting" : "not waiting", r->frames_asked,
+		                r->frames_answered, r->waits_poked, r->waits_patience, r->waits_interrupted);
 	}
 	if (n > ROWS)
 		synth_text_addf(t, "plane lines past the first %u left out: %u\n", ROWS, n - ROWS);

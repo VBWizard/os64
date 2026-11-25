@@ -191,8 +191,8 @@ and the new are both damaged.
 
 **One test says whether a plane is shown**, and both the frame clock's count
 of shown waiters and the answers use it: the window is not covered, the
-committed clip is not empty, and the clip meets the window's visible pieces
-as the compositor's own occlusion walk gives them. The walk is bounded as the
+committed clip is not empty, and the clip, cut to the screen, meets the
+window's visible pieces as the compositor's own occlusion walk gives them. The walk is bounded as the
 visible-damage walk is; when it runs out of pieces it answers "shown". It is
 worked out once a pass for each plane with a waiter.
 
@@ -293,12 +293,16 @@ of § 3.5's rules.
   `/dev/glass`; and the same under the frame clock's tearing count.
 - `make run-sparse` as well, since a second thread publishes.
 
-### 3.11 As built (P1a to P1c)
+### 3.11 As built (P1a to P1d)
 
 - **P1a**: `task_va_reserve` (task.c) is the one door; `map` and a window's
   canvas take their ranges through it, and so does a plane's canvas.
 - **P1b**: `plane_compose.c` as § 3.3 and § 3.4 say, at `-O2`, host-tested
-  beside a model (`tools/test_plane_compose_host.sh`) with 17 mutants.
+  beside a model (`tools/test_plane_compose_host.sh`, its blend cases every
+  byte against every byte) with 22 mutants. The blend works on all four
+  channels in 16-bit lanes of one 64-bit word; the P5 priced it at 6.6 to
+  7.0 ns a blended pixel and about 2 ns one read and found opaque or clear
+  (2026-11-25), which `GUI_PLANE_OVERLAY_PIXELS` rests on (about 0.7 ms).
 - **P1c**: the calls (syscalls 71 to 75: create, surface, publish, destroy,
   and `window_publish_edits`), `kernel/src/gui/plane.c`, the ABI in
   `os64/gui.h` § Planes. A pair of stores and its record are made outside
@@ -309,15 +313,32 @@ of § 3.5's rules.
   way a thread ends ends its task. The compositor draws the content around
   one clip in up to four bands and the clip's part through the composer, so
   no pixel is drawn twice; with two or more clips in one damaged view it
-  blits the content and draws each clip over it. Proof:
-  `kernel/test/test_planes.c` (late phase) and `/tests/planetest`, which
-  prices the compositor's part in three phases (copied, blended, read and
-  found opaque or see-through) from `/sys/gui`'s plane line.
-- **Departures from § 3.8 and § 3.9, for P1d and after**: `/sys/gui` gives
-  the machine's pairs (in use and kept) and bytes, not each task's; a plane's
-  publish starts the window's publish-to-glass instrument, not one kept apart
-  for planes; `window_bytes` does not count planes; the shown test, frames
-  and their counts are P1d's. Open: kept pairs of smaller classes can fill
+  blits the content and draws each clip over it.
+- **P1d**: frames (syscalls 76 and 77, `plane_frame_wait` and `plane_poke`).
+  § 3.6's one test of "shown" (`plane_shown_locked`) is judged in the
+  compositor's pass for each plane with a request, beside the windows'
+  requests, and the shown ones keep the frame clock running; the answer
+  pass serves them by the same epoch rule and wakes the creator, kGuiLock
+  then the scheduler's queue lock. The wait is P1's design-state table: its
+  request at entry, the event wait's park, and every end clearing the
+  request, the answer and the poke it took. Proof:
+  `kernel/test/test_planes.c` (late phase; the wait on a plane that cannot
+  be shown: a poke owed, one owed at most, the patience, nothing left set,
+  the creator rule) and `/tests/planetest`: every pixel of the clip checked
+  through `/dev/glass` after each phase (a picture scrolled partly out of
+  its clip under overlapping overlays, one moved and one removed with damage
+  on the moved one alone, among them); paced by frames with the numbers
+  only rising; covered and answered nothing, then answered once uncovered;
+  a poke during a wait and one before; prices (copied, blended, read and
+  found opaque or clear, and the content pixel a plane replaces) and the
+  plane site's worst hold for a publish at each class. Run under the frame
+  clock, with `NOFRAMECLOCK`, and on the sparse layout.
+- **Departures from § 3.8 to § 3.10**: `/sys/gui` gives the machine's pairs
+  (in use and kept) and bytes, not each task's; a plane's publish starts the
+  window's publish-to-glass instrument, not one kept apart for planes;
+  `window_bytes` does not count planes; a caught signal ending a wait is in
+  the code (`signal_park_must_end`, as every park) but no case makes one.
+- **Open**: kept pairs of smaller classes can fill
   a task's budget for its life, so a larger plane is refused until it dies
   (beside one 4K pair in use, two kept 1080p pairs leave no room in 128 MiB
   for a second 4K one, which would fit without them).

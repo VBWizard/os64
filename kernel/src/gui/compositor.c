@@ -13,6 +13,7 @@
 // region rebuilds whatever it covered.
 
 #include "gui/compositor.h"
+#include "gui/plane.h"   // planes' frame waits, beside windows' requests
 #include "gui/surface.h"
 #include "gui/input.h"
 #include "gui/window.h"
@@ -647,6 +648,11 @@ void gui_frame_nudge(void)
 void gui_frame_request_arrived(void)
 {
 	s_fr_counts.requests++;
+	gui_frame_wait_arrived();
+}
+
+void gui_frame_wait_arrived(void)
+{
 	__atomic_store_n(&s_fr_arrived, true, __ATOMIC_SEQ_CST);
 	gui_frame_nudge();
 }
@@ -700,9 +706,9 @@ static void fr_count(uint64_t blank_us)
 }
 
 // The answer: every shown window that asked before this frame's pass is
-// told its number, when its blank began and the period (os64/gui.h).
-// Under kGuiLock for the walk alone; the pushes wake waiters as every event
-// does.
+// told its number, when its blank began and the period (os64/gui.h), and
+// so is every shown plane whose wait asked before it (plane.c). Under
+// kGuiLock for the walk alone; the pushes wake waiters as every event does.
 static void fr_answer(uint64_t blank_us, uint64_t epoch)
 {
 	uint32_t period_ns = fr_period_ns();
@@ -719,8 +725,11 @@ static void fr_answer(uint64_t blank_us, uint64_t epoch)
 	// screen since (during the aim, the copy or a wait for the blank) covers
 	// every window, so nobody is answered and every request waits for the
 	// desktop's return.
-	if (gui_owns_glass())
+	if (gui_owns_glass()) {
 		s_fr_counts.answered += wm_frame_answer_locked(&ev, epoch, &held);
+		uint32_t planes_held = 0;
+		(void)gui_planes_frame_answer_locked(s_fr_number, blank_us, period_ns, epoch, &planes_held);
+	}
 	s_fr_counts.held_back += held;
 	gui_unlock(flags);
 }
@@ -2784,12 +2793,16 @@ bool guicomp_thread(bool daemon)
 		control_state_locked();
 		pointer_state_locked();
 		// The frame requests, judged by the sweep just run: the shown ones
-		// keep the clock running (frame_clock_pace). Lowering the arrival
+		// keep the clock running (frame_clock_pace), windows' requests and
+		// planes' waits alike (a plane's verdict is kept for this pass's
+		// answer). Lowering the arrival
 		// flag here, under the lock a request raises it under, means any
 		// request it hides is in this count. The epoch moves on here too:
 		// this pass's frame answers the requests stamped before it.
-		uint32_t fr_covered;
+		uint32_t fr_covered, fr_planes_shown, fr_planes_hidden;
 		wm_frame_waiters_locked(&s_fr_waiters, &fr_covered);
+		gui_planes_frame_waiters_locked(&fr_planes_shown, &fr_planes_hidden);
+		s_fr_waiters += fr_planes_shown;
 		s_fr_arrived = false;
 		s_fr_kind = FR_NONE;
 		uint64_t fr_epoch = ++s_fr_epoch;
