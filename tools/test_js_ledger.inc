@@ -187,7 +187,9 @@ static void collector_cases(void)
  * threshold would wait for a heap the limit refuses, and a page making
  * garbage there would fail with the collector never asked. Here:
  * - garbage made with the live part at seven tenths, then at most a 128th
- *   of the limit from it, is collected and nothing is refused;
+ *   of the limit from it, is collected and nothing is refused, and so is
+ *   garbage of strings too large for the last stretch, which the margin
+ *   leaves room for;
  * - a heap that is all live, from inside the margin (a sixteenth of the
  *   limit) to its refusal, is walked by at most 8 runs.
  * Each phase is a runtime of its own at the fixture's 16 MiB. */
@@ -222,6 +224,11 @@ static bool limit_fill(os64_js_runtime_t *runtime, uint64_t limit, unsigned shar
 
 static const char kLimitGarbage[] =
     "for(let i=0;i<40000;i++){const a={s:'y'.repeat(1000)+i},b={a};a.b=b}1";
+/* Each cycle's string is made after its objects, and is larger than the
+ * last stretch (a 256th of the limit) but well inside the margin: a run that
+ * waited for the last stretch would leave no room for it. */
+static const char kLimitLargeGarbage[] =
+    "for(let i=0;i<400;i++){const a={},b={a};a.b=b;a.s='w'.repeat(200000)+i}1";
 
 static void collector_limit_cases(void)
 {
@@ -242,6 +249,10 @@ static void collector_limit_cases(void)
     check(c.runs_by_limit >= 1 && c.refused_by_limit == 0,
           "limit: the runs there waited for a threshold the limit lowered");
     check(c.threshold < limit, "limit: the next threshold is below the limit");
+    check(execute_fixture(runtime, kLimitLargeGarbage, &outcome) == OS64_JS_OK,
+          "limit: garbage of strings larger than the last stretch is collected with room left for each");
+    os64_js_collector(runtime, &c);
+    check(c.refused_by_limit == 0, "limit: nothing refused for them");
     os64_js_destroy(runtime);
 
     runtime = limit_runtime();
