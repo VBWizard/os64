@@ -10300,6 +10300,41 @@ static const char *ledger_file(const char *file)
 #define LEDGER_CALLEES_SHOWN 10
 #define LEDGER_SAMPLES_SHOWN 20
 
+// The profile's functions that cost most since the ledger began or was
+// last reset (a reading resets it), each where it is defined and the
+// function it was called from, into `u`: the line `script profile` and
+// each `script profile reading N` say. False, with nothing written, when
+// the ledger is off or there is no memory to sort its rows.
+static bool profile_text(const os64_js_runtime_t *rt, uint64_t per_ms, DiagText *u)
+{
+    os64_js_ledger_totals_t k;
+    if (!os64_js_ledger_totals(rt, &k))
+        return false;
+    os64_js_ledger_sample_t *samples = os64_malloc(sizeof(*samples) * 512);
+    if (samples == NULL)
+        return false;
+    size_t n = 0, cursor = 0;
+    while (n < 512 && os64_js_ledger_sample(rt, &cursor, &samples[n]))
+        n++;
+    ledger_samples_top(samples, n, LEDGER_SAMPLES_SHOWN);
+    dt_put(u, "%lu samples", (unsigned long)k.samples);
+    for (size_t i = 0; i < n && i < LEDGER_SAMPLES_SHOWN; i++) {
+        const os64_js_ledger_sample_t *s = &samples[i];
+        if (s->at.function != NULL)
+            dt_put(u, "; %s at %s:%d:%d", s->at.name, ledger_file(s->at.file), s->at.line, s->at.column);
+        else
+            dt_put(u, "; %s", s->at.name);
+        if (s->caller.function != NULL)
+            dt_put(u, " from %s at %s:%d:%d", s->caller.name, ledger_file(s->caller.file), s->caller.line,
+                   s->caller.column);
+        else if (s->caller.name[0] != '\0')
+            dt_put(u, " from %s", s->caller.name);
+        dt_put(u, ": %lu.%lu ms, %lu samples", LEDGER_MS(ledger_tenths(s->ticks, per_ms)), (unsigned long)s->samples);
+    }
+    os64_free(samples);
+    return true;
+}
+
 // The libdom calls that cost most, their own time and the layouts they
 // forced, and the profile's functions that cost most, each where it is
 // defined and the function it was called from. Each line is rewritten at
@@ -10340,41 +10375,13 @@ static void ledger_rows(Page *p, const os64_js_runtime_t *rt, uint64_t per_ms)
     }
     os64_free(callees);
     os64_free(t.s);
-    os64_js_ledger_totals_t k;
-    if (s_ledger != YONDER_LEDGER_PROFILE || !os64_js_ledger_totals(rt, &k))
-        return;
-    os64_js_ledger_sample_t *samples = os64_malloc(sizeof(*samples) * 512);
-    n = 0;
-    cursor = 0;
-    if (samples != NULL)
-        while (n < 512 && os64_js_ledger_sample(rt, &cursor, &samples[n]))
-            n++;
     DiagText u = {0};
-    if (samples == NULL)
-        yonder_diag_forget(p->diag, "script profile");
-    else if (n == 0) {
-        dt_put(&u, "%lu samples", (unsigned long)k.samples);
+    if (s_ledger != YONDER_LEDGER_PROFILE)
+        return;
+    if (profile_text(rt, per_ms, &u))
         yonder_diag_fact(p->diag, "script profile", dt_text(&u));
-    } else {
-        ledger_samples_top(samples, n, LEDGER_SAMPLES_SHOWN);
-        dt_put(&u, "%lu samples", (unsigned long)k.samples);
-        for (size_t i = 0; i < n && i < LEDGER_SAMPLES_SHOWN; i++) {
-            const os64_js_ledger_sample_t *s = &samples[i];
-            if (s->at.function != NULL)
-                dt_put(&u, "; %s at %s:%d:%d", s->at.name, ledger_file(s->at.file), s->at.line, s->at.column);
-            else
-                dt_put(&u, "; %s", s->at.name);
-            if (s->caller.function != NULL)
-                dt_put(&u, " from %s at %s:%d:%d", s->caller.name, ledger_file(s->caller.file), s->caller.line,
-                       s->caller.column);
-            else if (s->caller.name[0] != '\0')
-                dt_put(&u, " from %s", s->caller.name);
-            dt_put(&u, ": %lu.%lu ms, %lu samples", LEDGER_MS(ledger_tenths(s->ticks, per_ms)),
-                   (unsigned long)s->samples);
-        }
-        yonder_diag_fact(p->diag, "script profile", dt_text(&u));
-    }
-    os64_free(samples);
+    else
+        yonder_diag_forget_key(p->diag, "script profile");   // never the readings, which begin the same
     os64_free(u.s);
 }
 
@@ -10452,6 +10459,32 @@ static void diag_ledger_reading(Page *p, uint32_t n)
            LEDGER_MS(ledger_tenths(span >= accounted ? span - accounted : accounted - span, per_ms)));
     yonder_diag_reading_fact(p->diag, key, dt_text(&t));
     os64_free(t.s);
+}
+
+// A reading's profile (`ledger = profile`): the functions that cost most in
+// the span the reading's ledger line splits, so a quiet minute is not
+// drowned by the page's load; the first reading's ledger counts from the
+// page's script's start and says so. Read before the ledger is reset.
+static void diag_profile_reading(Page *p, uint32_t n)
+{
+    const os64_js_runtime_t *rt = yonder_scripts_ledger(page_scripts(p));
+    os64_js_ledger_totals_t k;
+    if (s_ledger != YONDER_LEDGER_PROFILE || rt == NULL || !os64_js_ledger_totals(rt, &k))
+        return;
+    DiagText u = {0};
+    if (k.since < s_cost.from_cycles)
+        dt_put(&u, "since the page's script began: ");
+    char key[40];
+    os64_snprintf(key, sizeof(key), "script profile reading %u", (unsigned)n);
+    if (profile_text(rt, ledger_sample_ticks(), &u)) {
+        yonder_diag_reading_fact(p->diag, key, dt_text(&u));
+    } else {
+        // The reading resets the ledger after this, so its samples are gone
+        // either way: the record says so rather than looking whole.
+        yonder_diag_reading_fact(p->diag, key, "not written: no memory to sort its samples");
+        yonder_diag_short(p->diag);
+    }
+    os64_free(u.s);
 }
 
 // `paint effects`: the costliest first, each as what it was, how many
@@ -10579,6 +10612,7 @@ static void diag_paint_reading(Page *p, uint32_t n)
     }
     os64_free(e.s);
     diag_ledger_reading(p, n);
+    diag_profile_reading(p, n);
     diag_thread_reading(p, n);
     if (s_layout_profile) {
         char needed[768], nkey[40];

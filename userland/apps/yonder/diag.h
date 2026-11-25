@@ -275,6 +275,9 @@ void yonder_diag_summary_fact(yonder_diag_t *d, const char *key, const char *val
 // order — and so are those of them that met no room, so a set of lines
 // rewritten whole, when there may be fewer now, is counted once.
 void yonder_diag_forget(yonder_diag_t *d, const char *prefix);
+// The plain line whose key is exactly `key` let go, as forget does, and no
+// line whose key merely begins with it.
+void yonder_diag_forget_key(yonder_diag_t *d, const char *key);
 
 // A line the caller could not even name for want of memory: the file
 // says some lines are not on it, as it counts those that met no room.
