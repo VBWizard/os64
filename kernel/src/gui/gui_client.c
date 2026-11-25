@@ -302,12 +302,12 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 		canvas_phys = allocate_memory_aligned(canvas_bytes);
 		if (canvas_phys == 0)
 			return GUI_ERR_NO_RESOURCES;
-		canvas_va = task->heapEnd;
-		if (canvas_va + canvas_bytes + PAGE_SIZE >= TASK_HEAP_END) {
+		// The range and its guard page through the task's one door: a
+		// sibling thread mapping at this moment gets a range of its own.
+		if (!task_va_reserve(task, canvas_bytes, &canvas_va)) {
 			free_memory(canvas_phys);
 			return GUI_ERR_NO_RESOURCES;
 		}
-		task->heapEnd = canvas_va + canvas_bytes + PAGE_SIZE;   // + guard
 		paging_map_pages((pt_entry_t *)task->pml4v, canvas_va, canvas_phys,
 		                 canvas_bytes / PAGE_SIZE,
 		                 PAGE_PRESENT | PAGE_WRITE | PAGE_USER | PAGE_NO_EXECUTE);
@@ -418,7 +418,7 @@ undo_pivot:
 	// THROUGH THE SAME CHOKE POINT as a normal release, and not because it is
 	// tidier: these pages are already MAPPED into the task (the pivot mapped
 	// them a few lines up), user-writable, at a VA a sibling can work out —
-	// task->heapEnd is not a secret. So this rollback is subject to exactly
+	// the task's heap range is not a secret. So this rollback is subject to exactly
 	// the rule the release path is: free them without the owner's signalLock
 	// and a concurrent signal delivery can be mid-write inside them. Narrow,
 	// since it only runs when window creation fails — but rd8's window was

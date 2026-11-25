@@ -222,6 +222,9 @@
         // name, but two of the three sites already held this one and a second
         // lock is a second ordering to get wrong.
         spinlock_t signalLock;
+        // The heap range's bounds. heapEnd is the next address the range
+        // hands out and only ever advances; task_va_reserve is the one door
+        // that moves it, so two threads never claim one range.
         uint64_t heapStart, heapEnd;
         // WHERE THIS TASK'S malloc PUBLISHES ITS REPORT (SYSCALL_HEAP_REPORT,
         // 2026-08-15). A USER virtual address, valid only under this task's own
@@ -425,6 +428,15 @@
     // Release is the caller's last access; burial may follow immediately.
     void task_hold(task_t *task);
     void task_release(task_t *task);
+
+    // THE ONE DOOR FOR A TASK'S HEAP ADDRESS RANGE: claims `bytes` (whole
+    // pages) at the task's heapEnd and one guard page past them, atomically,
+    // so threads of one task mapping and creating windows at once never get
+    // the same range. Addresses are never handed out twice (a stale pointer
+    // into a released range always faults). False, with nothing claimed,
+    // for a size that is zero or not whole pages, or a range that would
+    // reach TASK_HEAP_END.
+    bool task_va_reserve(task_t *task, uint64_t bytes, uintptr_t *base);
 
 		task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bool isKernelTask, uint64_t pinnedCPU);
 	// Like task_create, with a failure verdict: -1 or OS64_SPAWN_TOO_LONG.

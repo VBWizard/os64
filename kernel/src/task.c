@@ -1189,6 +1189,26 @@ static void task_destroy(task_t *t)
 	kTaskBurialCount++;
 }
 
+bool task_va_reserve(task_t *task, uint64_t bytes, uintptr_t *base)
+{
+	if (task == NULL || bytes == 0 || (bytes & (PAGE_SIZE - 1)) != 0)
+		return false;
+	uint64_t at = __atomic_load_n(&task->heapEnd, __ATOMIC_RELAXED);
+	for (;;)
+	{
+		uint64_t end = at + bytes, next = end + PAGE_SIZE;
+		if (end < at || next < end || next >= TASK_HEAP_END)
+			return false;
+		// A CAS, not a look and a store: a sibling that moved heapEnd since
+		// we read it makes this fail and hands us its value to try from.
+		if (__atomic_compare_exchange_n(&task->heapEnd, &at, next, true, __ATOMIC_RELAXED, __ATOMIC_RELAXED))
+		{
+			*base = (uintptr_t)at;
+			return true;
+		}
+	}
+}
+
 void task_hold(task_t *task)
 {
 	__sync_fetch_and_add(&task->lifetimeHolds, 1);

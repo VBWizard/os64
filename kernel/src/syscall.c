@@ -3511,8 +3511,12 @@ static uint64_t syscall_map(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	// resource this kernel owns, and never-reuse means a stale pointer into
 	// an unmapped region ALWAYS faults instead of aliasing a new region.
 	// (A use-after-unmap tripwire for free — same philosophy as the HHDM.)
-	uintptr_t base = task->heapEnd;
-	if (base + rounded >= TASK_HEAP_END || base + rounded < base)
+	// The range and the permanently-unmapped guard page past it come from
+	// the task's one door: running off the end of a region faults instead of
+	// silently scribbling on the next one, and a sibling mapping (or making
+	// a window) at the same moment gets a range of its own.
+	uintptr_t base;
+	if (!task_va_reserve(task, rounded, &base))
 		return SYSCALL_RESULT_INVALID;   // out of heap VA (a 47-bit feat)
 
 	vma_t *vma = vma_create(base, base + rounded, PROT_READ | PROT_WRITE,
@@ -3520,11 +3524,6 @@ static uint64_t syscall_map(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	if (vma == NULL)
 		return SYSCALL_RESULT_INVALID;
 	vma_add(task, vma);
-
-	// Advance past the region PLUS one permanently-unmapped guard page:
-	// running off the end of a region faults instead of silently scribbling
-	// on the next one. malloc overruns announce themselves here.
-	task->heapEnd = base + rounded + PAGE_SIZE;
 
 	printd(DEBUG_SYSCALL, "map: task %s: %lu bytes at 0x%016lx\n",
 	       task->exename, rounded, base);
