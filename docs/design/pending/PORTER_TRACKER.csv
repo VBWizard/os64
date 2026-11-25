@@ -15,7 +15,7 @@ P.2.4,Serve catalogs and manifests and stream full or selective archives,P.2.3,d
 P.2.5,Run host and Os64 archive compatibility and failure tests,P.2.4,done,#734,GNU and Os64 archive proofs passed including 64 MiB media and corrupt or truncated inputs. Windows loopback passed.
 P.2.6,Resolve the intermittent Windows archive interruption,P.2.4,done,#734,ADDED 2026-11-24: the native server refused an unchanged object. Path and handle stats now compare timestamps within each API.
 
-P.3,Preview installs from the Porter CLI,P.2,review,,Guest preview evidence is complete. Independent review and P5 smoke are pending.
+P.3,Preview installs from the Porter CLI,P.2,done,#736,QEMU acceptance and independent review complete. Chris owns the P5 smoke run.
 P.3.1,Read the Porter catalog and verify selected target manifests,P.2,done,#736,Verified the real catalog and both complete manifests. Unique eight-digit prefixes resolve and ambiguous ones fail.
 P.3.2,Resolve effective configuration and volume-relative destination paths,P.3.1,done,#736,"Verified per-key overlays, changed routes, protected paths, cross-scope ownership and real and prospective FAT aliases."
 P.3.3,Build a reusable read-only three-way planner,P.3.2,done,#736,"Verified the two-library switches, live drift, baseline adoption, empty lots, scoped retirements and missing parent directories."
