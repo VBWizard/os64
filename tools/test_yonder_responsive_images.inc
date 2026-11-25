@@ -349,7 +349,7 @@ static void responsive_turn_check_cases(void)
     probe_page("<!doctype html><img id=pic src='data:image/png,SIZED%2080x40'>"
         "<picture><source id=s srcset='data:image/png,SIZED%2060x30'><img id=pp src='data:image/png,SIZED%2010x10'></picture>"
         "<canvas id=c width=20 height=20></canvas><p id=out>waiting</p><p id=out2>waiting</p><p id=out3>waiting</p>"
-        "<p id=trigger></p>"
+        "<p id=trigger></p><p id=draw></p>"
         "<script>var held=[];for(var n=0;n<3000;n++)held.push(document.createElement('span'));"
         "var loads=0,i=document.getElementById('pic');document.getElementById('c').getContext('2d').fillRect(0,0,4,4);"
         "i.onload=function(){document.getElementById('out').textContent='loaded '+(++loads)+' '+i.naturalWidth;};"
@@ -359,6 +359,8 @@ static void responsive_turn_check_cases(void)
         "var lates=0;late.onload=function(){document.getElementById('out3').textContent='loaded '+late.naturalWidth+' '+(++lates);};"
         "late.src='data:image/png,SIZED%2050x25';"
         "new MutationObserver(function(){document.body.appendChild(late)}).observe(document.getElementById('trigger'),{attributes:true});"
+        "var cv=document.getElementById('c');new MutationObserver(function(){cv.style.width='30px';"
+        "cv.getContext('2d').fillRect({valueOf:function(){return cv.offsetWidth?8:8}},8,4,4)}).observe(document.getElementById('draw'),{attributes:true});"
         "</script>",true);
     // The pictures are asked for and held at the fixture's pool.
     data_pool_open();responsive_serial_pool();pictures_start(&g.page);
@@ -406,6 +408,19 @@ static void responsive_turn_check_cases(void)
           "turn checks: inserted into the page, its load is not told again");
     (void)turn_check_quiet(4);
     check(turn_check_quiet(10)==0,"turn checks: and quiet once more");
+    // A drawing whose argument forces a layout: the layout's damage visit
+    // runs before the rect is drawn, and the canvas, with nothing yet to
+    // tell, leaves the list there. The drawing must put it back.
+    responsive_set(probe_id("draw"),"data-go","1");
+    (void)script_turn();
+    before=yonder_scripts_checks_visited(g.page.scripts);
+    yonder_scripts_canvas_visit_damage(g.page.scripts,turn_check_damage,NULL);
+    check(yonder_scripts_checks_visited(g.page.scripts)-before==1,
+          "turn checks: a canvas drawn after a layout its argument forced is visited");
+    check(yonder_scripts_canvas_bitmap(g.page.scripts,probe_id("c"),&painted),"turn checks: and painted");
+    yonder_scripts_canvas_painted(g.page.scripts,probe_id("c"));
+    (void)turn_check_quiet(4);
+    check(turn_check_quiet(10)==0,"turn checks: and quiet after the drawing");
     data_pool_close();probe_drop();
 }
 

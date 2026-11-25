@@ -112,6 +112,17 @@ static void changed(os64_dom_t *dom, const os64_html_change_t *c)
         d_canvas_touch(e);
     }
 }
+JSValue d_canvas_method(JSContext *ctx, JSValueConst self, JSValue *data, d_canvas_body body, int argc,
+                        JSValueConst *argv, int magic)
+{
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (!dom) return JS_EXCEPTION;
+    DValue *e = JS_GetOpaque(self, dom->canvas_class);
+    if (!e || !d_same_cluster(e->dom, dom)) return JS_ThrowTypeError(ctx, "Expected a CanvasRenderingContext2D");
+    JSValue result = body(ctx, dom, e, argc, argv, magic);
+    d_canvas_touch(e);
+    return result;
+}
 void d_canvas_touch(DValue *e)
 {
     DValueMore *more = e->more;
@@ -298,14 +309,8 @@ static int gradients_install(os64_dom_t *dom,JSContext *ctx,JSValueConst global,
 }
 enum { C_CANVAS, C_FILL, C_ALPHA, C_SAVE, C_RESTORE, C_FILL_RECT, C_CLEAR_RECT,
        C_CREATE_IMAGE, C_GET_IMAGE, C_PUT_IMAGE, C_LOST, C_RESET, C_STROKE, C_SHADOW_COLOR, C_SHADOW_BLUR, C_SHADOW_X, C_SHADOW_Y };
-static JSValue member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv,
-                       int magic, JSValue *data)
+static JSValue member_on(JSContext *ctx, os64_dom_t *dom, DValue *e, int argc, JSValueConst *argv, int magic)
 {
-    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
-    if (!dom) return JS_EXCEPTION;
-    DValue *e = JS_GetOpaque(self, dom->canvas_class);
-    if (!e || !d_same_cluster(e->dom, dom)) return JS_ThrowTypeError(ctx, "Expected a CanvasRenderingContext2D");
-    d_canvas_touch(e);
     bool set = magic & D_SET;
     magic &= ~D_SET;
     if (magic == C_CANVAS) return JS_DupValue(ctx, e->value);
@@ -431,6 +436,10 @@ static JSValue member(JSContext *ctx, JSValueConst self, int argc, JSValueConst 
     if (magic == C_LOST) return JS_NewBool(ctx, !d_more_peek(e)->canvas);
     if (!d_more_peek(e)->canvas || magic == C_RESET) return JS_UNDEFINED;
     return d_canvas_result(ctx, magic == C_SAVE ? canvas_save(d_more_peek(e)->canvas) : canvas_restore(d_more_peek(e)->canvas));
+}
+static JSValue member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic, JSValue *data)
+{
+    return d_canvas_method(ctx, self, data, member_on, argc, argv, magic);
 }
 int d_canvas_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {

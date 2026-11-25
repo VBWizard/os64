@@ -888,8 +888,9 @@ typedef struct Page {
     size_t image_source_count, image_source_bytes;
     garb_env_t image_environment;
     // Moves whenever an image source's selection is made, completed or
-    // refused, when a change touches an image with no source yet, and
-    // when the sources are let go (image_sources.inc): part of
+    // refused, when a change touches an image with no source yet or the
+    // changes cannot be read in full, and when the sources are let go
+    // (image_sources.inc): part of
     // canvas_source_answers, which lets the binding's image check skip a
     // pass while the answers stand still. A picture's arrival is an answer
     // only once its source completes (image_sources_flush, which the
@@ -19388,8 +19389,8 @@ static os64_dom_image_status_t canvas_source(void *opaque,const os64_html_node_t
 // a picture only through its source's completed selection, so a picture's
 // own changes reach it there too. The document's changes are read first
 // here as well (image_sources_sync), for an image a change brought in
-// that has no source for a flush to read. Never 0, which would say "no
-// answers".
+// that has no source for a flush to read, and for changes it cannot read
+// in full. Never 0, which would say "no answers".
 static uint64_t canvas_source_answers(void *opaque)
 {
     Page *p=page_of_doc(opaque);

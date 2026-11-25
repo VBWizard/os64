@@ -126,6 +126,30 @@ static void dom_turn_check_cases(void)
     dom_script(&f, "document.adoptNode(f2);", "turn checks: an image adopted");
     check(!turn_poll(&f, true, &node, &visited) && visited > 0,
           "turn checks: an adoption makes the next check walk");
+    /* So does an insertion that moves an image from one document to
+     * another, in either direction, and so does replaceChildren. */
+    while (turn_poll(&f, true, &node, &visited)) {}
+    check(!turn_poll(&f, true, &node, &visited) && visited == 0, "turn checks: quiet before an insertion");
+    dom_script(&f, "document.body.appendChild(e);", "turn checks: an image inserted from another document");
+    check(!turn_poll(&f, true, &node, &visited) && visited > 0,
+          "turn checks: an insertion from another document makes the next check walk");
+    check(!turn_poll(&f, true, &node, &visited) && visited == 0, "turn checks: and quiet after");
+    dom_script(&f, "other.body.appendChild(e);", "turn checks: an image inserted into another document");
+    check(!turn_poll(&f, true, &node, &visited) && visited > 0,
+          "turn checks: an insertion into another document makes the next check walk");
+    check(!turn_poll(&f, true, &node, &visited) && visited == 0, "turn checks: and quiet again");
+    dom_script(&f, "var box=document.createElement('div');document.body.appendChild(box);"
+        "box.replaceChildren(e);", "turn checks: an image carried in by replaceChildren");
+    check(!turn_poll(&f, true, &node, &visited) && visited > 0,
+          "turn checks: replaceChildren from another document makes the next check walk");
+    check(!turn_poll(&f, true, &node, &visited) && visited == 0, "turn checks: quiet once more");
+    dom_script(&f, "other.body.appendChild(e);box.appendChild(document.createElement('b'));",
+               "turn checks: the image sent back");
+    while (turn_poll(&f, true, &node, &visited)) {}
+    check(!turn_poll(&f, true, &node, &visited) && visited == 0, "turn checks: quiet before a replaceChild");
+    dom_script(&f, "box.replaceChild(e,box.firstChild);", "turn checks: an image carried in by replaceChild");
+    check(!turn_poll(&f, true, &node, &visited) && visited > 0,
+          "turn checks: replaceChild from another document makes the next check walk");
 
     /* The canvas damage visit walks the canvases that may have something to
      * tell: a new context's whole bitmap until it is painted, then a drawn

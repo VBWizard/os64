@@ -221,11 +221,19 @@ const os64_html_node_t *d_node(os64_dom_t *dom, JSContext *ctx, JSValueConst val
 /* Native verbs preflight and migrate state before publishing changes.
  * The borrowed adoption scope lets reactions queue adoption between source
  * removal and destination connection, including an unwrapped detached run. */
+void d_documents_moved(os64_dom_t *dom, const os64_html_node_t *parent, const os64_html_node_t *node)
+{
+    if (!node || !parent || os64_html_node_document(node) == os64_html_node_document(parent)) return;
+    os64_dom_t *from = d_owner(dom, node);
+    d_images_moved(dom);
+    if (from != dom) d_images_moved(from);
+}
 int64_t d_insert(os64_dom_t *dom, os64_html_node_t *parent, os64_html_node_t *node,
                   os64_html_node_t *before)
 {
     dom = d_owner(dom, parent);
     d_ranges_sweep(dom);
+    d_documents_moved(dom, parent, node);
     DAdopting scope;
     d_adopting_begin(dom, &scope, node, parent);
     int64_t status = os64_page_node_insert(dom->state, parent, node, before);
@@ -243,6 +251,7 @@ int64_t d_replace(os64_dom_t *dom, os64_html_node_t *parent, os64_html_node_t *n
 {
     dom = d_owner(dom, parent);
     d_ranges_sweep(dom);
+    d_documents_moved(dom, parent, node);
     DAdopting scope;
     d_adopting_begin(dom, &scope, node, parent);
     int64_t status = os64_page_node_replace(dom->state, parent, node, old);

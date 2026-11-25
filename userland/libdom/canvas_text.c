@@ -189,13 +189,9 @@ static canvas_text_style_t text_style(DValue *e)
     d_canvas_sync(e);if(d_more_peek(e)->canvas)canvas_state(d_more_peek(e)->canvas,&state);
     return state.text;
 }
-static JSValue style_member(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv,int magic,JSValue *data)
+static JSValue style_member_on(JSContext *ctx, os64_dom_t *dom, DValue *e, int argc, JSValueConst *argv, int magic)
 {
-    os64_dom_t *dom=d_callback(ctx,data,OS64_JS_ABI_ID);if(!dom)return JS_EXCEPTION;
-    DValue *e=JS_GetOpaque(self,dom->canvas_class);
-    if(!e||!d_same_cluster(e->dom, dom))return JS_ThrowTypeError(ctx,"Expected a CanvasRenderingContext2D");
-    d_canvas_touch(e);
-    dom = e->dom;
+    (void)dom;
     bool set=magic&D_SET;magic&=~D_SET;
     const char *s=NULL;size_t n=0;
     if(set){s=JS_ToCStringLen(ctx,&n,argc?argv[0]:JS_UNDEFINED);if(!s)return JS_EXCEPTION;}
@@ -210,6 +206,10 @@ static JSValue style_member(JSContext *ctx,JSValueConst self,int argc,JSValueCon
     JS_FreeCString(ctx,s);
     if(valid<0)return JS_EXCEPTION;
     return valid&&d_more_peek(e)->canvas?d_canvas_result(ctx,canvas_set_text_style(d_more_peek(e)->canvas,&style)):JS_UNDEFINED;
+}
+static JSValue style_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic, JSValue *data)
+{
+    return d_canvas_method(ctx, self, data, style_member_on, argc, argv, magic);
 }
 static JSValue metric_member(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv,int magic,JSValue *data)
 {
@@ -241,12 +241,8 @@ static JSValue font_error(JSContext *ctx,os64_font_status_t status)
     return d_error(ctx,status==OS64_FONT_LIMIT||status==OS64_FONT_NO_MEMORY?"QuotaExceededError":
         status==OS64_FONT_UNSUPPORTED?"NotSupportedError":"InvalidStateError","Canvas text preparation refused");
 }
-static JSValue text_method(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv,int magic,JSValue *data)
+static JSValue text_method_on(JSContext *ctx, os64_dom_t *dom, DValue *e, int argc, JSValueConst *argv, int magic)
 {
-    os64_dom_t *dom=d_callback(ctx,data,OS64_JS_ABI_ID);if(!dom)return JS_EXCEPTION;
-    DValue *e=JS_GetOpaque(self,dom->canvas_class);
-    if(!e||!d_same_cluster(e->dom, dom))return JS_ThrowTypeError(ctx,"Expected a CanvasRenderingContext2D");
-    d_canvas_touch(e);
     dom = e->dom;
     if(argc<(magic==0?1:3))return JS_ThrowTypeError(ctx,"Canvas text arguments are missing");
     size_t length;const char *string=JS_ToCStringLen(ctx,&length,argv[0]);if(!string)return JS_EXCEPTION;
@@ -331,6 +327,10 @@ static JSValue text_method(JSContext *ctx,JSValueConst self,int argc,JSValueCons
         result=d_more_peek(e)->canvas?d_canvas_result(ctx,canvas_draw_contours(d_more_peek(e)->canvas,commands.commands,commands.count,&placement,magic==2)):JS_UNDEFINED;
     }
     os64_text_run_release(run);d_provider_leave(owner);d_canvas_release(dom,commands.commands,capacity);return result;
+}
+static JSValue text_method(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic, JSValue *data)
+{
+    return d_canvas_method(ctx, self, data, text_method_on, argc, argv, magic);
 }
 int d_canvas_text_install(os64_dom_t *dom,JSContext *ctx,JSValueConst global,JSValueConst prototype)
 {

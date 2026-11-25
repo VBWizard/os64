@@ -3,7 +3,9 @@
 key (canvas_source_answers, image_sources.inc's image_answers): the answers
 must move when a selection completes, or the binding's image check skips
 the pass that would tell a load; and a provider with no answers makes every
-pass walk. Against the scripted
+pass walk. With them, one of libdom's: a context method touches its canvas
+after its body (canvas.c's d_canvas_method), since only yonder's forced
+layout can run a damage visit inside an argument. Against the scripted
 host's image slice (YONDER_IMAGES_ONLY: responsive_turn_check_cases in
 tools/test_yonder_responsive_images.inc). libdom's half (the lists, its own
 serial, the key's use) is test_dom_mutants.py --turn. A mutant is CAUGHT
@@ -30,6 +32,7 @@ args.logs.mkdir(parents=True, exist_ok=True)
 
 YONDER = 'userland/apps/yonder/yonder.c'
 SOURCES = 'userland/apps/yonder/image_sources.inc'
+CANVAS = 'userland/libdom/canvas.c'
 CASES = 'YONDER_IMAGES_ONLY=1 bash tools/test_yonder_scripts_host.sh'
 TIMEOUT = 1800
 
@@ -41,6 +44,9 @@ mutants = [
     ('the-answers-leave-out-the-selections', YONDER,
      'p?p->modern:0,p?p->scripting:0,p?p->image_answers:0,',
      'p?p->modern:0,p?p->scripting:0,0,'),
+    ('the-canvas-touched-before-the-drawing', CANVAS,
+     '    JSValue result = body(ctx, dom, e, argc, argv, magic);\n    d_canvas_touch(e);\n',
+     '    d_canvas_touch(e);\n    JSValue result = body(ctx, dom, e, argc, argv, magic);\n'),
     ('the-provider-gives-no-answers', YONDER,
      '.images={canvas_source,canvas_source_release,doc,image_sources_update,canvas_source_answers},',
      '.images={canvas_source,canvas_source_release,doc,image_sources_update,0?canvas_source_answers:NULL},'),

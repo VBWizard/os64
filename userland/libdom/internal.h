@@ -1075,17 +1075,30 @@ DValue *d_find(os64_dom_t *dom, const os64_html_node_t *node);
  * `images`, `canvases`, `sweeps`), growing it; false, the list as it was,
  * when it cannot grow. */
 bool d_turn_list_room(os64_dom_t *dom, DValue ***list, size_t n, size_t *cap, size_t need);
-/* A canvas element's record whose context a method is about to use, whose
- * size changed, or which came back into the window's tree: on its
- * binding's `canvases` until a damage visit finds nothing to tell or finds
- * it out of the tree (canvas.c). Nothing for a canvas with no context. */
+/* A canvas element's record whose context a method has used, whose size
+ * changed, or which came back into the window's tree: on its binding's
+ * `canvases` until a damage visit finds nothing to tell or finds it out of
+ * the tree (canvas.c). Nothing for a canvas with no context. */
 void d_canvas_touch(DValue *e);
+/* A 2D context method: the receiver checked, then `body`, then the canvas
+ * touched. The touch comes after the body because converting an argument
+ * runs page code, which can force a layout whose damage visit takes a
+ * canvas with nothing yet to tell off the list before the drawing. */
+typedef JSValue (*d_canvas_body)(JSContext *ctx, os64_dom_t *dom, DValue *e, int argc, JSValueConst *argv,
+                                 int magic);
+JSValue d_canvas_method(JSContext *ctx, JSValueConst self, JSValue *data, d_canvas_body body, int argc,
+                        JSValueConst *argv, int magic);
 /* An image element's answer may have changed where no image provider can
- * see it: a wrapper made for one, its source changed, or a node adoptNode
- * moved, which neither document's changes need show (a node an insertion
- * moves is a change of the document it enters). The image check's next
- * pass walks its images whatever the provider says. */
+ * see it: a wrapper made for one, its source changed, or a node moved from
+ * one document to another (by adoptNode, or by an insertion under a parent
+ * in another document), which the provider's view of either document need
+ * not show. The image check's next pass walks its images whatever the
+ * provider says. */
 void d_images_moved(os64_dom_t *dom);
+/* Before `node` goes under `parent` (dom, the parent's owner): when it
+ * comes from another document, d_images_moved for the binding it leaves and
+ * the one it enters. */
+void d_documents_moved(os64_dom_t *dom, const os64_html_node_t *parent, const os64_html_node_t *node);
 int d_point_install(os64_dom_t *, JSContext *, JSValueConst);
 int d_point_dictionary(JSContext *, JSValueConst, double out[4]);
 bool d_svg_geometry_node(const os64_html_node_t *);

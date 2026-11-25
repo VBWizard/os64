@@ -105,7 +105,12 @@ static void image_sources_sync(Page *p)
             for(size_t i=0;i<c->nremoved && !all;i++)all=image_source_subtree(p,c->removed[i],&left);
         }
     }
-    if(all)for(ImageSource *s=p->image_sources;s;s=s->next)s->dirty=true;
+    // A history too long or lost may hide an image with no source yet, so
+    // the answers move whatever the flush finds.
+    if(all) {
+        for(ImageSource *s=p->image_sources;s;s=s->next)s->dirty=true;
+        p->image_answers++;
+    }
     if(!p->image_source_reader)
         p->image_source_reader=os64_html_reader_new((os64_html_document_t *)doc,version);
     p->image_source_version=version;

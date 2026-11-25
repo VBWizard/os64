@@ -229,12 +229,8 @@ static JSValue exported(JSContext *ctx,JSValueConst self,int argc,JSValueConst *
     }
     d_canvas_release(dom,bytes,total);return result;
 }
-static JSValue member(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv,int magic,JSValue *data)
+static JSValue member_on(JSContext *ctx, os64_dom_t *dom, DValue *e, int argc, JSValueConst *argv, int magic)
 {
-    os64_dom_t *dom=d_callback(ctx,data,OS64_JS_ABI_ID);if(!dom)return JS_EXCEPTION;
-    DValue *e=JS_GetOpaque(self,dom->canvas_class);
-    if(!e||!d_same_cluster(e->dom, dom))return JS_ThrowTypeError(ctx,"Expected a CanvasRenderingContext2D");
-    d_canvas_touch(e);
     dom = e->dom;
     bool set=magic&D_SET;magic&=~D_SET;
     if(magic==I_SMOOTH||magic==I_QUALITY) {
@@ -293,6 +289,10 @@ static JSValue member(JSContext *ctx,JSValueConst self,int argc,JSValueConst *ar
     canvas_status_t status=d_more_peek(e)->canvas?canvas_draw_image(d_more_peek(e)->canvas,&image.surface,image.origin_clean,sx,sy,sw,sh,dx,dy,dw,dh):CANVAS_OK;
     image_release(&loan,&image);
     return d_canvas_result(ctx,status);
+}
+static JSValue member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic, JSValue *data)
+{
+    return d_canvas_method(ctx, self, data, member_on, argc, argv, magic);
 }
 int d_canvas_images_install(os64_dom_t *dom,JSContext *ctx,JSValueConst prototype)
 {
