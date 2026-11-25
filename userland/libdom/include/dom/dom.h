@@ -1009,6 +1009,11 @@ void os64_dom_free(os64_dom_t *dom);
  * of C-retained engine values; it becomes zero on drain. NULL answers zero. */
 size_t os64_dom_bytes(const os64_dom_t *dom);
 size_t os64_dom_registry_count(const os64_dom_t *dom);
+/* The records a host's every-turn checks have visited since the binding was
+ * made: the wrapped image elements os64_dom_image_event polled and the
+ * canvases os64_dom_canvas_visit_damage looked at (canvas.h). A host
+ * subtracts two readings for a span. NULL answers zero. */
+uint64_t os64_dom_checks_visited(const os64_dom_t *dom);
 /* WHAT THE WRAPPERS OF NODES HOLD, for a census of who holds the detached
  * (yonder's record): of the node wrappers on this binding's own registry
  * (in a cluster, another member's wrappers are on that member's),

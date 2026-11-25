@@ -212,6 +212,11 @@ typedef struct DValueMore {
     canvas_gradient_t *canvas_gradient;
     struct DPath2D *canvas_path2d;
     bool canvas_reset_pending;
+    /* On its binding's `canvases` (d_canvas_touch). */
+    bool canvas_listed;
+    /* Taken off `canvases` by a visit that found it out of the window's
+     * tree; an insertion that brings it back touches it (canvas.c). */
+    bool canvas_away;
     DQuery *children, *images, *forms, *links, *scripts, *elements;
     /* A select's options and selectedOptions, each made once ([SameObject]). */
     DQuery *options, *selected_options;
@@ -271,6 +276,9 @@ struct DValue {
     /* A DOMTokenList's own entry: the attribute it is over (D_TOKENS_*). */
     uint8_t tokens;
     bool image_reported;
+    /* On its binding's `sweeps`: a listener of its was removed under a
+     * dispatch and waits to be unlinked (event.c). */
+    bool sweep_owed;
     /* A plain target's entry IN THE OBJECT (d_event_target_init): this
      * record is the first member of the object's own state, outside the
      * registry; `value` is the object itself, not a reference; its
@@ -437,6 +445,11 @@ struct os64_dom_cluster {
     size_t provider_borrows;
     uint64_t effect_generation, animation_serial;
     uint64_t opaque_origin_serial;
+    /* Moves when an image element's answer may have changed in a way no
+     * image provider sees (d_images_moved). */
+    uint64_t image_serial;
+    /* Canvases with DValueMore.canvas_away set, in every member. */
+    size_t canvases_away;
     bool sweep_pending;
     bool poisoned, drained;
     bool timer_settings, listener_settings, scheduled_settings, handler_settings, observer_settings, custom_settings, synchronous_settings;
@@ -469,6 +482,16 @@ struct os64_dom {
     bool mutation_installed;
     size_t canvas_bytes;
     os64_dom_image_provider_t image_provider;
+    /* The image check's quiet key: what image_quiet_key (canvas_image.c) answered before
+     * the last pass that found nothing owed, which leaves the next pass
+     * nothing to find while the key stays the same; 0, none. */
+    uint64_t image_quiet;
+    /* The standalone binding's image_serial and canvases_away (a cluster
+     * keeps its own). */
+    uint64_t image_serial;
+    size_t canvases_away;
+    /* Records the loop's every-turn checks visited (os64_dom_checks_visited). */
+    uint64_t checks_visited;
     os64_dom_media_provider_t media_provider;
     JSClassID canvas_class, gradient_class, metrics_class, path2d_class;
     os64_dom_text_provider_t canvas_text;
@@ -591,6 +614,27 @@ struct os64_dom {
     DValue *event_target_prototype, *window_prototype;
     bool sweep_pending;
     DListener *invoking;
+    /* THE TURN'S OWN LISTS, so a check the loop makes every turn, or after
+     * every dispatch, walks what it may find and not every record on
+     * `values`:
+     * - `images`: the records of image elements' wrappers, in the order
+     *   they were attached (wrapper_attach), which is their order on
+     *   `values` reversed. Room is made as the record is (wrapper_prepare),
+     *   so attaching never fails;
+     * - `canvases`: the records of canvas elements with a 2D context that
+     *   may have damage or a reset to tell (d_canvas_touch), each once
+     *   (DValueMore.canvas_listed), until a visit finds one with neither
+     *   or out of the window's tree (canvas_away, until an insertion
+     *   brings it back). Room for every context, `contexts`, is made as
+     *   each is (get_context), so a touch never fails;
+     * - `sweeps`: records with a listener removed under a dispatch
+     *   (DValue.sweep_owed), each once. A list that could not grow is given
+     *   up (`sweeps_all`) and the sweep takes `values`, as it did before.
+     * Each holds records on this binding's `values` and nothing else, and
+     * is freed with them. */
+    DValue **images, **canvases, **sweeps;
+    size_t nimages, images_cap, ncanvases, canvases_cap, contexts, nsweeps, sweeps_cap;
+    bool sweeps_all;
     /* Listeners a host's dispatch has called, ever (os64_dom_listener_calls). */
     uint64_t listener_calls;
     /* The import map os64_dom_import_map is parsing, while it does
@@ -1027,6 +1071,34 @@ os64_dom_t *d_owner(os64_dom_t *, const os64_html_node_t *);
 os64_dom_t *d_creation_owner(os64_dom_t *, const os64_html_node_t *);
 bool d_same_cluster(const os64_dom_t *, const os64_dom_t *);
 DValue *d_find(os64_dom_t *dom, const os64_html_node_t *node);
+/* Room for `need` records on one of a binding's turn lists (os64_dom's
+ * `images`, `canvases`, `sweeps`), growing it; false, the list as it was,
+ * when it cannot grow. */
+bool d_turn_list_room(os64_dom_t *dom, DValue ***list, size_t n, size_t *cap, size_t need);
+/* A canvas element's record whose context a method has used, whose size
+ * changed, or which came back into the window's tree: on its binding's
+ * `canvases` until a damage visit finds nothing to tell or finds it out of
+ * the tree (canvas.c). Nothing for a canvas with no context. */
+void d_canvas_touch(DValue *e);
+/* A 2D context method: the receiver checked, then `body`, then the canvas
+ * touched. The touch comes after the body because converting an argument
+ * runs page code, which can force a layout whose damage visit takes a
+ * canvas with nothing yet to tell off the list before the drawing. */
+typedef JSValue (*d_canvas_body)(JSContext *ctx, os64_dom_t *dom, DValue *e, int argc, JSValueConst *argv,
+                                 int magic);
+JSValue d_canvas_method(JSContext *ctx, JSValueConst self, JSValue *data, d_canvas_body body, int argc,
+                        JSValueConst *argv, int magic);
+/* An image element's answer may have changed where no image provider can
+ * see it: a wrapper made for one, its source changed, or a node moved from
+ * one document to another (by adoptNode, or by an insertion under a parent
+ * in another document), which the provider's view of either document need
+ * not show. The image check's next pass walks its images whatever the
+ * provider says. */
+void d_images_moved(os64_dom_t *dom);
+/* Before `node` goes under `parent` (dom, the parent's owner): when it
+ * comes from another document, d_images_moved for the binding it leaves and
+ * the one it enters. */
+void d_documents_moved(os64_dom_t *dom, const os64_html_node_t *parent, const os64_html_node_t *node);
 int d_point_install(os64_dom_t *, JSContext *, JSValueConst);
 int d_point_dictionary(JSContext *, JSValueConst, double out[4]);
 bool d_svg_geometry_node(const os64_html_node_t *);

@@ -141,6 +141,16 @@ void yonder_tr_intersections(yonder_tr_t *t, uint64_t targets)
         t->observed_most = targets;
 }
 
+void yonder_tr_checked(yonder_tr_t *t, uint64_t records)
+{
+    if (!t->on)
+        return;
+    t->checked_turns++;
+    t->checked += records;
+    if (records > t->checked_most)
+        t->checked_most = records;
+}
+
 static bool same(const char *a, const char *b)
 {
     while (*a != '\0' && *a == *b) {
@@ -487,6 +497,12 @@ void yonder_tr_walks_line(const yonder_tr_t *t, const yonder_tr_list_t *list_now
         put(&o, " a step, the most ");
         put_u(&o, t->observed_most);
     }
+    put(&o, "; the every-turn checks visited ");
+    put_u(&o, t->checked);
+    put(&o, t->checked == 1 ? " record in " : " records in ");
+    put_u(&o, t->checked_turns);
+    put(&o, t->checked_turns == 1 ? " turn, the most in one " : " turns, the most in one ");
+    put_u(&o, t->checked_most);
     // A list behind the reading's start is another binding's, as above.
     bool behind = list_now->arms < t->list_from.arms || list_now->walked < t->list_from.walked;
     uint64_t arms = list_now->arms - (behind ? 0 : t->list_from.arms);

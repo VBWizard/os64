@@ -1190,7 +1190,9 @@ static void media_release(os64_dom_t *dom)
         DValue *e = *link;
         DMedia *m = JS_IsObject(e->value) && JS_GetClassID(e->value) == dom->media_class
                         ? JS_GetOpaque(e->value, dom->media_class) : NULL;
-        if (m != NULL && m->entry == e && !listened(e)) {
+        // One waiting on its binding's `sweeps` (a removal deferred under
+        // another member's dispatch) waits for a later release.
+        if (m != NULL && m->entry == e && !listened(e) && !e->sweep_owed) {
             *link = e->next;
             dom->retained--;
             m->entry = NULL;

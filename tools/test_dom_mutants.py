@@ -18,6 +18,7 @@ parser.add_argument('--logs',type=pathlib.Path,default=pathlib.Path('/tmp/dom-d5
 parser.add_argument('--reclaim',action='store_true',help='run D6 binding ownership mutants')
 parser.add_argument('--events',action='store_true',help='run D7a event, timer and ask mutants')
 parser.add_argument('--realms',action='store_true',help='run F2 cluster ownership mutants')
+parser.add_argument('--turn',action='store_true',help="run the every-turn checks' list and quiet-key mutants")
 parser.add_argument('--only',default='',help='run only the mutants whose names hold this text')
 parser.add_argument('--probe',default='',help='select an existing host probe, e.g. --probe=--clone')
 args=parser.parse_args()
@@ -261,6 +262,38 @@ if args.realms:
       ('child-report-primary-task','report','os64_js_realm_call(dom->realm, OS64_JS_ABI_ID, dom->report_fire->value,','os64_js_call(dom->runtime, OS64_JS_ABI_ID, dom->report_fire->value,'),
       ('aggregate-dom-cap-ignored','core','(dom->cluster && total > dom->cluster->limits.dom_bytes - dom->cluster->bytes)','(false && dom->cluster && total > dom->cluster->limits.dom_bytes - dom->cluster->bytes)'),
     ]
+if args.turn:
+    # The turn's own lists (os64_dom's images, canvases, sweeps), the image
+    # check's quiet key, and the count the reading takes, against the
+    # --canvas probe (test_dom_turn_checks.inc).
+    args.probe=args.probe or '--canvas'
+    mutants=[
+      ('turn-image-unlisted','node','        dom->images[dom->nimages++] = entry;\n','        (void)0;\n'),
+      ('turn-image-room-unmade','node','        !d_turn_list_room(dom, &dom->images, dom->nimages, &dom->images_cap, dom->nimages + 1)) {','        false) {'),
+      ('turn-image-made-unmoved','node','        d_images_moved(dom);\n    }\n    return JS_DupValue(ctx, entry->value);','    }\n    return JS_DupValue(ctx, entry->value);'),
+      ('turn-source-change-unmoved','canvas_image','    if(!e->image_generation)e->image_reported=false;\n    d_images_moved(dom);','    if(!e->image_generation)e->image_reported=false;'),
+      ('turn-insertion-across-documents-unmoved','node','    d_documents_moved(dom, parent, node);\n    DAdopting scope;\n    d_adopting_begin(dom, &scope, node, parent);\n    int64_t status = os64_page_node_insert(','    DAdopting scope;\n    d_adopting_begin(dom, &scope, node, parent);\n    int64_t status = os64_page_node_insert('),
+      ('turn-documents-moved-never','node','    if (!node || !parent || os64_html_node_document(node) == os64_html_node_document(parent)) return;','    if (parent || !parent) return;'),
+      ('turn-replace-across-documents-unmoved','node','    d_documents_moved(dom, parent, node);\n    DAdopting scope;\n    d_adopting_begin(dom, &scope, node, parent);\n    int64_t status = os64_page_node_replace(','    DAdopting scope;\n    d_adopting_begin(dom, &scope, node, parent);\n    int64_t status = os64_page_node_replace('),
+      ('turn-replace-children-across-documents-unmoved','content','    d_documents_moved(dom, parent, replacement);\n',''),
+      ('turn-adoption-unmoved','implementation','        d_images_moved(dom);\n        d_custom_adopted(dom, node, from, document);','        d_custom_adopted(dom, node, from, document);'),
+      ('turn-key-ignores-answers','canvas_image','uint64_t key=(answers^(serial*0x9E3779B97F4A7C15ull))*0xBF58476D1CE4E5B9ull;','uint64_t key=(1^(serial*0x9E3779B97F4A7C15ull))*0xBF58476D1CE4E5B9ull;'),
+      ('turn-key-ignores-serial','canvas_image','uint64_t key=(answers^(serial*0x9E3779B97F4A7C15ull))*0xBF58476D1CE4E5B9ull;','uint64_t key=(answers^(0*serial*0x9E3779B97F4A7C15ull))*0xBF58476D1CE4E5B9ull;'),
+      ('turn-quiet-after-a-find','canvas_image','    if(owed||stop)return owed;','    if(owed||stop){dom->image_quiet=quiet;return owed;}'),
+      ('turn-quiet-unchecked','canvas_image','    if(quiet && quiet==dom->image_quiet)return false;','    (void)0;'),
+      ('turn-images-oldest-first','canvas_image','owed=image_owed(dom,storage->images[k-1],node,failed,consume,&stop);','owed=image_owed(dom,storage->images[storage->nimages-k],node,failed,consume,&stop);'),
+      ('turn-image-visits-uncounted','canvas_image','    dom->checks_visited+=visited;\n    if(owed||stop)return owed;','    if(owed||stop)return owed;'),
+      ('turn-canvas-untouched-by-a-method','canvas','    JSValue result = body(ctx, dom, e, argc, argv, magic);\n    d_canvas_touch(e);','    JSValue result = body(ctx, dom, e, argc, argv, magic);'),
+      ('turn-canvas-untouched-by-a-new-size','canvas','        e->more->canvas_reset_pending = true;\n        d_canvas_touch(e);','        e->more->canvas_reset_pending = true;'),
+      ('turn-canvas-never-leaves','canvas','            if (tell) {\n                storage->canvases[kept++] = e;','            if (true) {\n                storage->canvases[kept++] = e;'),
+      ('turn-canvas-away-stays-listed','canvas','    if(!d_in_window_tree(dom,e->node)){*tell=false;*away=true;return true;}','    if(!d_in_window_tree(dom,e->node))return true;'),
+      ('turn-canvas-never-back','canvas','for (size_t i = 0; i < c->nadded && n != NULL; i++, n = n->next) canvases_back(dom, n);','if (0) canvases_back(dom, n);'),
+      ('turn-canvas-back-from-a-detached-tree','canvas','*canvases_away(dom) != 0 && d_in_window_tree(dom, c->target)) {','*canvases_away(dom) != 0) {'),
+      ('turn-canvas-room-unmade','canvas','    if (supported && !d_turn_list_room(storage, &storage->canvases, storage->ncanvases, &storage->canvases_cap,\n                                       storage->contexts + 1))','    if (false)'),
+      ('turn-canvas-visits-uncounted','canvas','    dom->checks_visited+=visited;\n    d_provider_leave(dom);','    (void)visited;\n    d_provider_leave(dom);'),
+      ('turn-sweep-unlisted','event','                storage->sweeps[storage->nsweeps++] = entry;','                (void)0;'),
+      ('turn-sweep-flag-kept','event','        member->sweeps[i]->sweep_owed = false;','        (void)0;'),
+    ]
 
 # Runtime output is bounded independently of compiler object sizes. Never read
 # a mutant's unbounded log into memory; a timeout/signal alone is not a catch.
@@ -305,7 +338,7 @@ with tempfile.TemporaryDirectory(prefix='os64-dom-mutants.') as directory:
             if result.returncode: print(f'COMPILE ERROR {name}');continue
             replaced=f'userland_libpage_{page_unit}.c.o' if page_unit else f'dom-{unit}.o'
             selected=[p for p in objects if p.name!=replaced]
-            result=subprocess.run(['cc','-fsanitize=address,undefined','-pthread','-Wl,-z,noexecstack','-Wl,--wrap=d_location_exotic_install',*maths,*map(str,selected),str(obj),'-o',str(binary)],cwd=root,stdout=log,stderr=log)
+            result=subprocess.run(['cc','-fsanitize=address,undefined','-pthread','-Wl,-z,noexecstack','-Wl,--wrap=d_location_exotic_install','-Wl,--wrap=d_window_named_prototype',*maths,*map(str,selected),str(obj),'-o',str(binary)],cwd=root,stdout=log,stderr=log)
             if result.returncode: print(f'LINK ERROR {name}');continue
             compiled+=1
             try: result=subprocess.run([str(binary),run_mode],stdout=log,stderr=log,timeout=45,preexec_fn=child_limits)
