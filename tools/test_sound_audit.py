@@ -8,7 +8,11 @@ import hashlib
 import json
 import re
 import subprocess
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import image_notices  # noqa: E402  (tools/image_notices.py)
 
 ROOT = Path(__file__).resolve().parents[1]
 LIB = ROOT / 'userland/libsound'
@@ -81,13 +85,30 @@ for name in manifest['files']:
         # copyright line is a comment of its own, ahead of its conditions.
         head = text[:text.index('*/', text.index('SUCH DAMAGE')) + 2]
         check(head in notice, f'license/speexdsp-LICENSE does not carry the notice at the head of {name}')
+installed, why = image_notices.installed_on_both_images(ROOT, 'speexdsp.txt', 'license/speexdsp-LICENSE')
+check(installed, f'the notice is not installed on both images: {why}')
 root_make = (ROOT / 'GNUmakefile').read_text()
-check(root_make.count('/etc/licenses/speexdsp.txt') == 2, 'the notice is not installed on both images')
 check('userland/bin/libsound.so' in root_make, 'libsound.so is not in the images')
 
-# The programs that use it load it.
+# The programs that use it load it, themselves or through a library they
+# load (a player reaches it through libmedia.so). The kernel loads every
+# DT_NEEDED name from /lib, so the closure is what a program gets.
+def needed(path):
+    return set(re.findall(r'\(NEEDED\).*\[(.*?)\]', run('x86_64-elf-readelf', '-dW', path)))
+
+
+def closure(path):
+    seen, todo = set(), list(needed(path))
+    while todo:
+        lib = todo.pop()
+        if lib not in seen:
+            seen.add(lib)
+            todo.extend(needed(ROOT / 'userland/bin' / lib))
+    return seen
+
+
 for program in ('play', 'tests/resampletest'):
-    needs = set(re.findall(r'\(NEEDED\).*\[(.*?)\]', run('x86_64-elf-readelf', '-dW', ROOT / 'userland/bin' / program)))
-    check('libsound.so' in needs, f'{program} does not load libsound.so: {needs}')
+    loads = closure(ROOT / 'userland/bin' / program)
+    check('libsound.so' in loads, f'{program} does not load libsound.so: {sorted(loads)}')
 
 print(f'PASS sound audit: {len(manifest["files"])} pinned files, {len(exported)} exports, imports {sorted(undefined)}')
