@@ -85,8 +85,11 @@ static bool race_claim(const char *path)
     return ok && removed;
 }
 
-// Fills the table, however big the kernel makes it, then asks for one more.
-#define HELD_MAX 1024
+// Fills the table, however big the kernel lets it grow, then asks for one
+// more. The bound only has to be past the kernel's ceiling
+// (TASK_HANDLES_CEILING, kernel/include/handle_blocks.h), which ring 3 is
+// not told; reaching it means the table never refused.
+#define HELD_MAX 8192
 
 static bool handle_full_creates_nothing(const char *path)
 {

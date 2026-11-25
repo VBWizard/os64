@@ -26,7 +26,8 @@
 #define PIPES 250
 #define BELLS 500
 #define CEILING 4096
-#define FAIL(step) os64_exit(0x4A7D0000u | (step))
+static void said(int step);
+#define FAIL(step) (said(step), os64_exit(0x4A7D0000u | (step)))
 
 static int32_t s_pipes[PIPES][2];
 static os64_bell_t s_bells[BELLS];
@@ -35,6 +36,8 @@ static os64_bell_t s_fill[CEILING];
 typedef struct {
     uint64_t held, room, ceiling, most, failed;
 } table_t;
+
+static char s_line[512];   // the table line last read, for a failure to show
 
 // The first line of /proc/self/handles, read into `out`.
 static bool table_read(table_t *out)
@@ -52,6 +55,12 @@ static bool table_read(table_t *out)
     }
     os64_close((int32_t)h);
     text[have] = '\0';
+    size_t n = 0;
+    while (text[n] != '\0' && text[n] != '\n' && n + 1 < sizeof(s_line)) {
+        s_line[n] = text[n];
+        n++;
+    }
+    s_line[n] = '\0';
     const char *word[] = {"table\theld ", "\troom ", "\tceiling ", "\tmost ", "\tfailed "};
     uint64_t *field[] = {&out->held, &out->room, &out->ceiling, &out->most, &out->failed};
     const char *at = text;
@@ -95,6 +104,12 @@ static int64_t threads_now(void)
     return -1;
 }
 
+// A failing step says what it last read before its exit code speaks.
+static void said(int step)
+{
+    os64_printf("handletest: step %d failed; the table last read: %s\n", step, s_line);
+}
+
 // Pipe p carries its own byte: write it, read it back.
 static bool pipe_carries(int p)
 {
@@ -113,14 +128,15 @@ static bool bell_rings(int b)
 static volatile int s_reader_bad;
 static volatile int s_grow_done;
 
-// The second thread of step 5: round trips through pipes 0..15 until the
-// opener has grown the table, counting any that come back wrong.
+// The second thread of step 5: round trips through sixteen pipes still open
+// (step 4 closed the odd ones) until the opener has grown the table,
+// counting any that come back wrong.
 static int64_t reader(void *arg)
 {
     (void)arg;
     uint64_t rounds = 0;
     while (!__atomic_load_n(&s_grow_done, __ATOMIC_ACQUIRE) || rounds < 64) {
-        for (int p = 0; p < 16; p++)
+        for (int p = 0; p < 32; p += 2)
             if (!pipe_carries(p))
                 __atomic_add_fetch(&s_reader_bad, 1, __ATOMIC_RELAXED);
         rounds++;
@@ -139,12 +155,11 @@ int main(int argc, char **argv)
     (void)argc;
     (void)argv;
     table_t start, t;
-    // 1. The table's line. Its `held` counts the handle the read itself
-    // holds; `start.held - 1` is what the program holds.
-    if (!table_read(&start) || start.room != 64 || start.ceiling != CEILING || start.held < 4 ||
+    // 1. The table's line. /proc takes its snapshot before the open's own
+    // handle exists, so `held` is what the program holds.
+    if (!table_read(&start) || start.room != 64 || start.ceiling != CEILING || start.held < 3 ||
         start.most < start.held)
         FAIL(1);
-    start.held--;
 
     // 2. A thousand handles more.
     int32_t highest = 2;
@@ -158,7 +173,7 @@ int main(int argc, char **argv)
             FAIL(2);
         highest = s_bells[b].handle;
     }
-    if (!table_read(&t) || t.held != start.held + 1 + 2 * PIPES + BELLS || t.room < t.held || t.room > 2048 ||
+    if (!table_read(&t) || t.held != start.held + 2 * PIPES + BELLS || t.room < t.held || t.room > 2048 ||
         t.most < t.held || t.failed != start.failed)
         FAIL(2);
 
@@ -238,8 +253,9 @@ int main(int argc, char **argv)
     os64_bell_close(&s_fill[--filled]);
     if (threads_now() != threads)
         FAIL(6);
-    // The read's own handle fills the entry the bell gave back.
-    if (!table_read(&t) || t.held != CEILING || t.room != CEILING || t.failed != start.failed + 2)
+    // One entry free: the bell given back, which the read's own handle
+    // takes after the snapshot.
+    if (!table_read(&t) || t.held != CEILING - 1 || t.room != CEILING || t.failed != start.failed + 2)
         FAIL(6);
 
     // 7. Everything closed.
@@ -251,7 +267,7 @@ int main(int argc, char **argv)
         os64_close(s_pipes[p][0]);
         os64_close(s_pipes[p][1]);
     }
-    if (!table_read(&t) || t.held != start.held + 1 || t.room != CEILING || t.most != CEILING)
+    if (!table_read(&t) || t.held != start.held || t.room != CEILING || t.most != CEILING)
         FAIL(7);
     return (int)0x4A7D0000u;
 }
