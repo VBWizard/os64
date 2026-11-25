@@ -309,9 +309,11 @@ bool handle_cancel_reserved(struct task *t, int slot)
 	                                 HANDLE_CLOSING, false,
 	                                 __ATOMIC_ACQ_REL, __ATOMIC_RELAXED))
 		return false;
+	// The count first, then the slot: a claim that takes the slot the
+	// instant it reads NONE must not find it still counted.
+	handle_counts_gave(&task->handleCounts);
 	entry->object = NULL;
 	__atomic_store_n(&entry->type, HANDLE_NONE, __ATOMIC_RELEASE);
-	handle_counts_gave(&task->handleCounts);
 	return true;
 }
 
@@ -899,9 +901,11 @@ bool handle_close_rc(struct task *t, int h, int *rc, bool *deferred)
 	// this slot (type == NONE), object is already NULL and never a dangling
 	// pointer to what we just closed. The slot was UNREUSABLE the whole time
 	// it held HANDLE_CLOSING, which is what shut the close-vs-alloc race.
+	// The count before the slot, as cancel does: reuse must not count it
+	// twice.
+	handle_counts_gave(&task->handleCounts);
 	handle->object = NULL;
 	__atomic_store_n(&handle->type, HANDLE_NONE, __ATOMIC_RELEASE);
-	handle_counts_gave(&task->handleCounts);
 	return true;
 }
 
