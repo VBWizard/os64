@@ -299,7 +299,7 @@ of § 3.5's rules.
   `/dev/glass`; and the same under the frame clock's tearing count.
 - `make run-sparse` as well, since a second thread publishes.
 
-### 3.11 As built (P1a to P2a)
+### 3.11 As built (P1a to P2b)
 
 - **P1a**: `task_va_reserve` (task.c) is the one door; `map` and a window's
   canvas take their ranges through it, and so does a plane's canvas.
@@ -346,7 +346,7 @@ of § 3.5's rules.
   the code (`signal_park_must_end`, as every park) but no case makes one.
 - **P2a**: libmedia's show thread (`media_player.c`), the pace's one owner
   while a plane is on, with the pass of P2's design state; its decisions are
-  `media_show.c`, pure (`tools/test_media_show_host.sh`, 15 mutants): a
+  `media_show.c`, pure (`tools/test_media_show_host.sh`, 17 mutants): a
   publish owed, stale and ready, a recreate past the class, closing and its
   bound. `os64_media_player_plane` waits for the create's verdict (a tripwire
   bound only); `shown` pins a frame (two at most); a refused recreate hands
@@ -355,6 +355,14 @@ of § 3.5's rules.
   refused, published hidden then placed, `shown` pinned while the pace moves,
   a new size stale then ready on a new plane, closed placed and finished
   after the bound with the plane taken out, refused with no slot).
+- **P2b**: gplay on a plane, as § 6 says. Its window is painted only when
+  something but the picture changes (the readout, refreshed every fifteen
+  display frames while shown; a resize; the plane placed or hidden), and it is the
+  facts' READY at the hole's own size that places the plane. `--no-plane`
+  asks for none, for § 8's measurements with the plane off. Proof:
+  `/tests/gplaytest`, where `--check` now also judges the path (a plane on
+  to the end with `frame` never called, or none with `--no-plane`; step 10
+  is the window's path) and step 5's script resizes on a plane.
 - **Open**: kept pairs of smaller classes can fill
   a task's budget for its life, so a larger plane is refused until it dies
   (beside one 4K pair in use, two kept 1080p pairs leave no room in 128 MiB

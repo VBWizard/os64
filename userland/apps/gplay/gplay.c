@@ -3,9 +3,12 @@
 //     gplay film.mp4                 play it; q or Escape leaves
 //     gplay --exit-at-end film.mp4   and leave when it has played
 //     gplay --maximized film.mp4     start with the window maximised
+//     gplay --no-plane film.mp4      paint every picture in the window,
+//                                    asking the player for no plane
 //
 // For tests (/tests/gplaytest): --check plays to the end and judges the
-// counts (exit 3 when one is wrong), and with --expect-refusal also that the
+// counts (exit 3 when one is wrong), the plane among them (on to the end, or
+// none with --no-plane), and with --expect-refusal also that the
 // device was refused and then regained; --cover opens a window of its own over
 // the whole screen, so gplay's is answered no frames; --script "ms:action,..."
 // performs keys at times from the start (pause, back, forward, backfar,
@@ -26,15 +29,15 @@
 // the canvas, the keys, the title and the readout. VIDEO.md § 3 is the
 // design.
 //
-// ON A PLANE (VIDEO_PLANE.md § 6), which gplay asks the player for first:
-// the player's show thread publishes every picture to a plane of the
-// window, and main paints the window only when something but the picture
-// changes: black bars opaque and the picture's rectangle see-through,
-// placed with the plane in one publish once the plane is READY for that
-// size; the readout an overlay rectangle over it; a new size by painting
-// the video itself (`shown`) and hiding the plane until it is ready again.
-// With no plane (refused, or ended) it is the window that paints every
-// picture, as below.
+// ON A PLANE (VIDEO_PLANE.md § 6), which gplay asks the player for first
+// unless given --no-plane: the player's show thread publishes every picture
+// to a plane of the window, and main paints the window only when something
+// but the picture changes: black bars opaque and the picture's rectangle
+// see-through, placed with the plane in one publish once the plane is READY
+// for that size; the readout an overlay rectangle over it; a new size by
+// painting the video itself (`shown`) and hiding the plane until it is
+// ready again. With no plane (not asked, refused, or ended) it is the
+// window that paints every picture, as below.
 //
 // THE THREADS. main: the window, and without a plane the frame requests and
 // at each frame answer the player's picture for that blank; every player
@@ -96,7 +99,7 @@ typedef struct {
     uint64_t display_missed, last_frame_number;
 } app_t;
 
-static bool s_exit_at_end, s_check, s_cover, s_maximized, s_expect_refusal;
+static bool s_exit_at_end, s_check, s_cover, s_maximized, s_expect_refusal, s_no_plane;
 static const char *s_script;
 
 static int64_t now_us(void)
@@ -708,6 +711,20 @@ static bool counts_hold(const os64_media_player_facts_t *f, const char *name)
                     (unsigned long)f->refusals, f->refused, (unsigned long)f->sound_written);
         ok = false;
     }
+    // The path asked for is the one that ran: with --no-plane no plane at
+    // all; otherwise a plane on to the end, every picture it showed
+    // published by the show thread, and main never asking for one.
+    if (s_no_plane && f->plane_state != OS64_MEDIA_PLANE_NONE) {
+        os64_printf("gplay: check: --no-plane, yet the plane's state is %d\n", f->plane_state);
+        ok = false;
+    } else if (!s_no_plane && (f->plane_state != OS64_MEDIA_PLANE_ON || f->frame_refused != 0 ||
+                               (!s_cover && f->plane_published == 0))) {
+        os64_printf("gplay: check: wanted a plane on to the end (state %d, refusal %d, published %lu, frame calls "
+                    "refused %lu)\n",
+                    f->plane_state, f->plane_refusal, (unsigned long)f->plane_published,
+                    (unsigned long)f->frame_refused);
+        ok = false;
+    }
     return ok;
 }
 
@@ -741,6 +758,8 @@ int main(int argc, char **argv)
             s_maximized = true;
         else if (os64_strcmp(argv[first], "--cover") == 0)
             s_cover = true;
+        else if (os64_strcmp(argv[first], "--no-plane") == 0)
+            s_no_plane = true;
         else if (os64_strcmp(argv[first], "--script") == 0 && first + 1 < argc)
             s_script = argv[++first];
         else
@@ -748,8 +767,8 @@ int main(int argc, char **argv)
         first++;
     }
     if (first != argc - 1) {
-        os64_printf("usage: gplay [--exit-at-end] [--maximized] [--check [--expect-refusal]] [--cover] "
-                    "[--script steps] file\n");
+        os64_printf("usage: gplay [--exit-at-end] [--maximized] [--no-plane] [--check [--expect-refusal]] "
+                    "[--cover] [--script steps] file\n");
         return 1;
     }
     const char *path = argv[first];
@@ -839,8 +858,9 @@ int main(int argc, char **argv)
         }
     }
     layout(a, &v, &info, v.ctx.surf.width, v.ctx.surf.height);
-    // A plane first; refused, the window paints every picture.
-    v.plane = os64_media_player_plane(a->player, win) == 0;
+    // A plane first (unless --no-plane); refused, the window paints every
+    // picture.
+    v.plane = !s_no_plane && os64_media_player_plane(a->player, win) == 0;
     if (v.plane) {
         (void)plane_publish(a, &v, false);   // black, the video painted from `shown` once there is one
         plane_step(a, &v);

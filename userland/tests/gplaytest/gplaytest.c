@@ -19,7 +19,13 @@
 //      picture by the clock and drains its sound, and the end comes;
 //   8. the file with no sound covered: the end comes on the clock alone;
 //   9. a file that opens but is not media (a page) is refused with
-//      exit 2: the player fails its probe and stays gplay's until closed.
+//      exit 2: the player fails its probe and stays gplay's until closed;
+//  10. the file with both again with --no-plane: the window paints every
+//      picture, as with a plane refused.
+//
+// Every --check run but step 10 also has gplay judge that its plane was on
+// to the end (VIDEO_PLANE.md § 6), so steps 1 to 8 prove the plane's path
+// and step 10 the window's.
 //
 // Steps 2, 7 and 8 are the player's promise that a caller who never asks
 // for a frame does not stop it (os64/media_player.h § A picture nobody asks
@@ -132,7 +138,9 @@ static int steps(void)
         return r;
     if ((r = expect(8, (char *[]){"/bin/gplay", "--check", "--cover", PICTURE_ONLY, 0}, 0)) != 0)
         return r;
-    return expect(9, (char *[]){"/bin/gplay", "--check", "/tests/pages/audio.html", 0}, 2);
+    if ((r = expect(9, (char *[]){"/bin/gplay", "--check", "/tests/pages/audio.html", 0}, 2)) != 0)
+        return r;
+    return expect(10, (char *[]){"/bin/gplay", "--check", "--no-plane", AV, 0}, 0);
 }
 
 int main(void)
