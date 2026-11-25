@@ -433,6 +433,10 @@ static bool selected_entry(planner_t *p, const porter_entry_t *entry)
         conflict(item, why);
         return !old || show_recorded_route(p, old);
     }
+    if (porter_log_contains(item->where.mount, item->where.path, item->where.relative)) {
+        conflict(item, "destination is reserved");
+        return !old || same_place(&item->where, old) || show_recorded_route(p, old);
+    }
     if (!register_selected(p, row, entry))
         return false;
     if (os64_streq(item->where.relative, "/") || porter_protected(p->config, p->volumes, &item->where))
@@ -562,6 +566,7 @@ static bool add_implied_parents(planner_t *p)
         const porter_plan_item_t *item = &p->plan->items[i];
         char parent[PORTER_PATH];
         if (item->where.mount && *item->where.relative && item->after.kind != PORTER_ABSENT &&
+            !porter_log_contains(item->where.mount, item->where.path, item->where.relative) &&
             porter_parent(parent, item->where.relative) &&
             !implied_parent(p, item->where.mount, parent))
             return false;
@@ -630,8 +635,11 @@ static bool scan_directory(planner_t *p, const porter_mount_t *mount, const char
     key->scanned = true;
     char dir[PORTER_PATH];
     porter_kind_t kind;
-    if (!porter_join(dir, mount->where, relative) ||
-        !porter_probe(dir, mount->fat, &kind))
+    if (!porter_join(dir, mount->where, relative))
+        return false;
+    if (porter_log_contains(mount, dir, relative))
+        return true;
+    if (!porter_probe(dir, mount->fat, &kind))
         return false;
     if (kind == PORTER_ABSENT)
         return true;
@@ -656,12 +664,20 @@ static bool scan_directory(planner_t *p, const porter_mount_t *mount, const char
             preserve_directories(p, mount, relative);
         if (k && (k->row || k->owner || k->foreign || k->selected_below))
             continue;
+        char path[PORTER_PATH];
+        if (!porter_join(path, mount->where, child)) {
+            ok = false;
+            break;
+        }
+        if (porter_log_contains(mount, path, child))
+            continue;
         porter_plan_item_t *item = add_item(p->plan);
-        if (!item || !porter_join(item->where.path, mount->where, child)) {
+        if (!item) {
             ok = false;
             break;
         }
         item->where.mount = mount;
+        os64_strcopy(item->where.path, sizeof(item->where.path), path);
         os64_strcopy(item->where.relative, sizeof(item->where.relative), child);
         item->action = PORTER_UNMANAGED;
         item->before.kind = (e.flags & OS64_DE_DIR) ? PORTER_DIR : PORTER_FILE;
@@ -680,6 +696,8 @@ static bool scan_neighbors(planner_t *p)
             continue;
         // Directory scans append rows and can move the plan's storage.
         porter_location_t where = item->where;
+        if (porter_log_contains(where.mount, where.path, where.relative))
+            continue;
         bool directory = item->before.kind == PORTER_DIR;
         char parent[PORTER_PATH];
         if (porter_parent(parent, where.relative) &&
@@ -767,7 +785,8 @@ static bool estimate(planner_t *p)
     porter_location_t archive;
     const char *why = NULL;
     bool backup_ready = porter_locate(p->volumes, p->config->backup, &archive, &why) &&
-                        !os64_streq(archive.relative, "/");
+                        !os64_streq(archive.relative, "/") &&
+                        !porter_log_contains(archive.mount, archive.path, archive.relative);
     const porter_mount_t *backup_mount = backup_ready ? archive.mount : NULL;
     if (backup_mount) {
         porter_kind_t kind;

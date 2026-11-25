@@ -13,6 +13,7 @@
 #define PORTER_MOUNTS     128
 #define PORTER_METADATA   (16u * 1024u * 1024u)
 #define PORTER_STATE      "/home/.porter"
+#define PORTER_LOG_DIR    "/var/porter"
 
 typedef enum { PORTER_ABSENT, PORTER_DIR, PORTER_FILE } porter_kind_t;
 
@@ -137,6 +138,7 @@ const porter_mount_t *porter_mount_at(const porter_volumes_t *volumes, const cha
 const porter_mount_t *porter_mount_by_guid(const porter_volumes_t *volumes, const char *guid);
 bool porter_locate(const porter_volumes_t *volumes, const char *path, porter_location_t *out,
                    const char **failure);
+bool porter_log_contains(const porter_mount_t *mount, const char *path, const char *relative);
 bool porter_protected(const porter_config_t *config, const porter_volumes_t *volumes,
                       const porter_location_t *where);
 bool porter_probe(const char *path, bool fat, porter_kind_t *kind);

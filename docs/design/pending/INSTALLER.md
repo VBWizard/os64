@@ -332,11 +332,22 @@ and its runtime independent of the desktop. Reuse the mount-aware staging,
 path checks and verified publication already present in the tree.
 [Existing installer code](../../../userland/apps/os64get/install.c)
 
+Each CLI invocation records its argument vector, ordinary stdout and stderr in
+order, and exit status in a separate `/var/porter/run-*.log` named by UTC time
+and task ID. The CLI displays
+the transcript path on stderr and reports logging failures there while keeping
+the command's live output and exit status. An interrupted or incomplete log
+can lack the exit footer. The transcript writer is available to the desktop
+frontend. Preview writes this transcript and leaves managed files and install
+history untouched. Porter reserves the log tree and excludes it from package
+plans. Logs survive ordinary reboots and `os64get -a`. A full
+`p5-refresh.sh` image refresh resets that part of the root filesystem.
+
 | Proposed slice | Acceptance |
 | --- | --- |
 | 1. Freeze normal outputs | Repeat the two-worktree build at different times. Compare ELF and data bytes, trace names and GDB symbols. |
 | 2. Publisher, catalog and Windows transfer | Concurrent publishers, complete scopes, bounded tar.gz export, large media, empty directories, source removal, missing roots and corrupted streams. |
-| 3. CLI preview | Run the two-library example above both ways. Distinguish recognized downgrade from local drift, and detect collisions on actual mounted volumes. |
+| 3. CLI preview | Run the two-library example above both ways. Distinguish recognized downgrade from local drift, and detect collisions on actual mounted volumes. Verify transcripts on successful and failed commands, with concurrent invocations and a failed log open. |
 | 4. Checked barrier and ext2 transactions | Kernel review, storage failure injection, interrupted install and single undo. Restart and use `porter recover` offline. Exercise a direct preview switch and its undo on a disposable disk. |
 | 5. FAT, kernel and rescue promotion | Exercise absent-name and bad-kernel boots, a live compatible update, and an incompatible main-runtime update from rescue. Verify reboot follows durable completion and a failed flush leaves a recoverable operation. |
 | 6. Multi-run undo | Verify older backups before starting, interrupt between receipts, preserve unrelated media and finish the unwind offline. |

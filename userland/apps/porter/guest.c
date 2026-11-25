@@ -406,12 +406,37 @@ bool porter_locate(const porter_volumes_t *volumes, const char *path, porter_loc
     return true;
 }
 
+static bool other_boot_root(const porter_mount_t *mount)
+{
+    return os64_streq(mount->where, "/ext2") || os64_streq(mount->where, "/fat");
+}
+
+static bool under_log_directory(const char *path, bool fat)
+{
+    size_t len = sizeof(PORTER_LOG_DIR) - 1;
+    char prefix[sizeof(PORTER_LOG_DIR)];
+    if (os64_strlen(path) < len || (path[len] && path[len] != '/'))
+        return false;
+    os64_memcpy(prefix, path, len);
+    prefix[len] = 0;
+    return porter_folded_equal(prefix, PORTER_LOG_DIR, fat);
+}
+
+bool porter_log_contains(const porter_mount_t *mount, const char *path, const char *relative)
+{
+    return under_log_directory(path, mount->fat) ||
+           (other_boot_root(mount) && under_log_directory(relative, mount->fat));
+}
+
 bool porter_protected(const porter_config_t *cfg, const porter_volumes_t *volumes,
                       const porter_location_t *where)
 {
     bool fat = where->mount->fat;
     const char *rel = where->relative;
-    if (overlaps(rel, "/.porter", fat) || overlaps(rel, "/.os64get-tmp", fat) ||
+    // Reserve the active log directory and its equivalent on either boot root.
+    if (overlaps(where->path, PORTER_LOG_DIR, fat) ||
+        (other_boot_root(where->mount) && overlaps(rel, PORTER_LOG_DIR, fat)) ||
+        overlaps(rel, "/.porter", fat) || overlaps(rel, "/.os64get-tmp", fat) ||
         overlaps(where->path, PORTER_STATE, fat) || overlaps(where->path, "/home/porter.conf", fat) ||
         overlaps(where->path, "/tmp/os64get", fat) ||
         (fat && (overlaps(rel, "/efi", true) || overlaps(rel, "/boot/limine", true))))
