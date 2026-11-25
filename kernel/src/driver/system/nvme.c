@@ -426,59 +426,39 @@ __asm__ volatile ("sfence" ::: "memory"); // Ensure memory writes are visible
     nvme_ring_doorbell(controller, isAdminQueue ? 0 : 1, true, *tailIndexPtr);
 }
 
-/// @brief Wait for an admin or command queue entry to reflect completion (updates current phase, panics on timeout, ignores completion errors)
-/// @param controller 
-/// @param adminQueue 
-/// @param entry 
-/// @param cid 
-/// @param entryIndex 
-void nvme_wait_for_completion(nvme_controller_t* controller, bool adminQueue, volatile nvme_completion_queue_entry_t* entry, nvme_submission_queue_entry_t* command)
+// Poll on a same-core TSC because an I/O-queue owner holds interrupts off.
+// The BSP cannot advance the tick clock while it is that owner.
+static bool nvme_poll_completion(nvme_controller_t *controller,
+                                 const volatile nvme_completion_queue_entry_t *entry,
+                                 uint16_t cid, unsigned phase)
 {
-	int expectedPhase = 0;
+    uint64_t limit = kCPUCyclesPerSecond
+        ? (uint64_t)controller->defaultTimeout * (kCPUCyclesPerSecond / 1000)
+        : 20000000000ULL;
+    uint64_t start = rdtsc();
+    while (entry->cid != cid || entry->status.phase_tag != phase) {
+        if (rdtsc() - start > limit)
+            return false;
+        __builtin_ia32_pause();
+    }
+    return true;
+}
 
-	if (adminQueue)
-		expectedPhase = get_and_update_phase_bit(&controller->admCompCurrentPhases, controller->admCompQueueHeadIndex);
-	else
-		expectedPhase = get_and_update_phase_bit(&controller->cmdCompCurrentPhases, controller->cmdCompQueueHeadIndex);
-
-	printd(DEBUG_NVME | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "NVME:\tWaiting for completion of cid 0x%04x, expectedPhase = %u, before wait, status={status_code: 0x%02x, status_code_type: 0x%02x, more: 0x%u, phase: %u}\n",
-						entry->cid, expectedPhase, entry->status.status_code, entry->status.status_code_type, entry->status.more, entry->status.phase_tag);
-
-	// Poll with PAUSE against a same-core rdtsc deadline — deliberately NOT
-	// the tick-based wait(): I/O-queue waits run under the controller ioLock
-	// with interrupts off, and if the waiting core is the BSP, IF=0 there
-	// stops IRQ0 and kTicksSinceStart itself — a tick-based timeout would
-	// never expire. rdtsc read on ONE core is monotonic, so it's safe here
-	// (cross-core TSC comparison is what must be avoided on QEMU/WSL2).
-	// During init_NVME, kCPUCyclesPerSecond hasn't been measured yet
-	// (detect_cpu runs after storage init), so fall back to a generous
-	// fixed cycle budget (~5s on a 4GHz part).
-	uint64_t deadline_cycles = kCPUCyclesPerSecond
-		? (uint64_t)controller->defaultTimeout * (kCPUCyclesPerSecond / 1000)
-		: 20000000000ULL;
-	uint64_t start = rdtsc();
-	bool timed_out = false;
-	bool waited = false;
-
-	while (entry->cid != command->cid || entry->status.phase_tag != expectedPhase)
-	{
-		if (rdtsc() - start > deadline_cycles)
-		{
-			timed_out = true;
-			break;
-		}
-		waited = true;
-		__builtin_ia32_pause();
-	}
-
-	if (timed_out)
-	{
-		log_nvme_debug_info(controller, adminQueue, controller->cmdSubQueueTailIndex, controller->cmdCompQueueHeadIndex, adminQueue?0:1);
-		panic("Timeout (%u ms) waiting for NVMe completion of cid 0x%04x\n", controller->defaultTimeout, command->cid);
-	}
-	if (waited)
-		printd(DEBUG_NVME | DEBUG_DETAILED, "\tNVME:\t After waiting for completion of cid 0x%04x, status={status_code: 0x%02x, status_code_type: 0x%02x, more: 0x%u, phase: %u}\n",
-							entry->cid, entry->status.status_code, entry->status.status_code_type, entry->status.more, entry->status.phase_tag);
+// Admin and data I/O retain their fatal timeout policy. Flush can keep
+// its outstanding slot without retaining DMA buffers from the caller.
+void nvme_wait_for_completion(nvme_controller_t *controller, bool admin,
+                              volatile nvme_completion_queue_entry_t *entry,
+                              nvme_submission_queue_entry_t *command)
+{
+    unsigned phase = admin
+        ? get_and_update_phase_bit(&controller->admCompCurrentPhases, controller->admCompQueueHeadIndex)
+        : get_and_update_phase_bit(&controller->cmdCompCurrentPhases, controller->cmdCompQueueHeadIndex);
+    if (!nvme_poll_completion(controller, entry, command->cid, phase)) {
+        log_nvme_debug_info(controller, admin, controller->cmdSubQueueTailIndex,
+                            controller->cmdCompQueueHeadIndex, admin ? 0 : 1);
+        panic("Timeout (%u ms) waiting for NVMe completion of cid 0x%04x\n",
+              controller->defaultTimeout, command->cid);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1105,7 +1085,25 @@ static void nvme_iostat_note(bool isWrite, uint32_t blockCount)
 		       kNvmeWriteStats.sz9_127, kNvmeWriteStats.sz128p);
 }
 
-static void nvme_do_io(nvme_controller_t* controller, uint64_t LBA, size_t length, void* buffer, bool isWrite) {
+static bool nvme_finish_flush(nvme_controller_t *controller, bool *flush_ok)
+{
+    if (!controller->flush_pending)
+        return true;
+    volatile nvme_completion_queue_entry_t *entry =
+        &controller->cmdCompQueue[controller->cmdCompQueueHeadIndex];
+    if (!nvme_poll_completion(controller, entry, controller->flush_cid, controller->flush_phase))
+        return false;
+    *flush_ok = entry->status.status_code == 0 && entry->status.status_code_type == 0;
+    if (!*flush_ok)
+        printd(DEBUG_NVME, "NVME: Flush failed (sct=%u sc=%u)\n",
+               entry->status.status_code_type, entry->status.status_code);
+    controller->cmdCompQueueHeadIndex = (controller->cmdCompQueueHeadIndex + 1) % controller->queueDepth;
+    nvme_ring_doorbell(controller, 1, false, controller->cmdCompQueueHeadIndex);
+    controller->flush_pending = false;
+    return true;
+}
+
+static bool nvme_do_io(nvme_controller_t* controller, uint64_t LBA, size_t length, void* buffer, bool isWrite) {
     if (controller->maxBytesPerTransfer == 0)
         panic("nvme_do_io: controller->maxBytesPerTransfer = 0\n");
 
@@ -1174,6 +1172,13 @@ static void nvme_do_io(nvme_controller_t* controller, uint64_t LBA, size_t lengt
         // the CID counter, or the shared DMA bounce buffers. See the ioLock
         // comment block above nvme_io_lock for why this exists.
         uint64_t lockFlags = nvme_io_lock(controller);
+        bool past_flush_ok;
+        if (!nvme_finish_flush(controller, &past_flush_ok)) {
+            nvme_io_unlock(controller, lockFlags);
+            if (prpCount > 2)
+                free_prp_list(cmd->prp2, prpCount - 1);
+            return false;
+        }
 
         // CID wraps safely: the lock guarantees one command in flight, so no
         // two commands ever share a CID slot.
@@ -1195,15 +1200,17 @@ static void nvme_do_io(nvme_controller_t* controller, uint64_t LBA, size_t lengt
             isWrite ? "write" : "read", controller->cmdCompQueueHeadIndex);
         nvme_wait_for_completion(controller, false, completionEntry, cmd);
 
-        if (completionEntry->status.status_code || completionEntry->status.status_code_type) {
-            log_nvme_debug_info(controller, false, controller->cmdSubQueueTailIndex, controller->cmdCompQueueHeadIndex, 1);
-            panic("NVMe %s error. System log contains more information.", isWrite ? "write" : "read");
-        }
+        bool completed = completionEntry->status.status_code == 0 &&
+                         completionEntry->status.status_code_type == 0;
+        if (!completed)
+            printd(DEBUG_NVME, "NVME: %s failed at LBA %lu (sct=%u sc=%u)\n",
+                   isWrite ? "write" : "read", currentLBA,
+                   completionEntry->status.status_code_type, completionEntry->status.status_code);
 
         controller->cmdCompQueueHeadIndex = (controller->cmdCompQueueHeadIndex + 1) % controller->queueDepth;
         nvme_ring_doorbell(controller, 1, false, controller->cmdCompQueueHeadIndex);
 
-        if (!isWrite) {
+        if (!isWrite && completed) {
             printd(DEBUG_NVME | DEBUG_DETAILED, "Copying data to user buffer: DMA Buffer=0x%016lx, User Buffer Offset=0x%016lx, Length=%lu\n",
                 (uintptr_t)dmaBuffer, userBufferOffset, transferLength);
             memcpy((void*)userBufferOffset, dmaBuffer, transferLength);
@@ -1215,15 +1222,19 @@ static void nvme_do_io(nvme_controller_t* controller, uint64_t LBA, size_t lengt
         if (prpCount > 2)
             free_prp_list(cmd->prp2, prpCount - 1);
 
+        if (!completed)
+            return false;
+
         userBufferOffset += transferLength;
         currentLBA += blockCount;
         remaining -= transferLength;
     }
+    return true;
 }
 
 #ifdef DISK_WRITING_ENABLED
-void nvme_write_disk(nvme_controller_t* controller, uint64_t LBA, size_t length, void* buffer) {
-    nvme_do_io(controller, LBA, length, buffer, true);
+bool nvme_write_disk(nvme_controller_t* controller, uint64_t LBA, size_t length, void* buffer) {
+    return nvme_do_io(controller, LBA, length, buffer, true);
 }
 #endif
 
@@ -1234,53 +1245,56 @@ void nvme_write_disk(nvme_controller_t* controller, uint64_t LBA, size_t length,
 // the NAND. Same critical-section dance as nvme_do_io, minus the entire data
 // phase: NSID + opcode IS the whole command (NVMe 1.x §6.8 — no PRPs, no
 // LBAs; the drive flushes everything for that namespace).
-static void nvme_flush_controller(nvme_controller_t* controller)
+static bool nvme_flush_controller(nvme_controller_t *controller)
 {
-    nvme_submission_queue_entry_t cmdOnStack;
-    nvme_submission_queue_entry_t* cmd = &cmdOnStack;
-    memset(cmd, 0, sizeof(cmdOnStack));
-    cmd->opc  = NVME_OPCODE_FLUSH;
-    cmd->nsid = controller->nsid;
-
-    uint64_t lockFlags = nvme_io_lock(controller);
-    cmd->cid = controller->cmdCID++;
-    nvme_submit_command(controller, cmd, false);
-
-    volatile nvme_completion_queue_entry_t* completionEntry =
-        (volatile nvme_completion_queue_entry_t*)&controller->cmdCompQueue[controller->cmdCompQueueHeadIndex];
-    nvme_wait_for_completion(controller, false, completionEntry, cmd);
-
-    // A flush error at shutdown is REPORTED, never panicked: the descent
-    // must reach "safe to turn off" regardless — a panic here would strand
-    // the operator less safe than the flush failure did.
-    if (completionEntry->status.status_code || completionEntry->status.status_code_type)
-        printd(DEBUG_NVME, "NVME: FLUSH failed (sct=%u sc=%u) — drive cache state unknown\n",
-               completionEntry->status.status_code_type, completionEntry->status.status_code);
-
-    controller->cmdCompQueueHeadIndex = (controller->cmdCompQueueHeadIndex + 1) % controller->queueDepth;
-    nvme_ring_doorbell(controller, 1, false, controller->cmdCompQueueHeadIndex);
-    nvme_io_unlock(controller, lockFlags);
+    uint64_t flags = nvme_io_lock(controller);
+    bool ok = false;
+    if (nvme_finish_flush(controller, &ok)) {
+        nvme_submission_queue_entry_t command = {0};
+        command.opc = NVME_OPCODE_FLUSH;
+        command.nsid = controller->nsid;
+        command.cid = controller->cmdCID++;
+        controller->flush_cid = command.cid;
+        controller->flush_phase = get_and_update_phase_bit(&controller->cmdCompCurrentPhases,
+                                                           controller->cmdCompQueueHeadIndex);
+        controller->flush_pending = true;
+        nvme_submit_command(controller, &command, false);
+        ok = false;
+        if (!nvme_finish_flush(controller, &ok))
+            printd(DEBUG_NVME, "NVME: Flush timed out; holding its completion slot\n");
+    }
+    nvme_io_unlock(controller, flags);
+    return ok;
 }
 
-// Every NVMe device in the block table gets the order. (AHCI's ATA FLUSH
-// CACHE 0xE7 twin rides the AHCI-write DEBTS row — no write path, no cache
-// to flush, no customer: the P5 has no SATA controller at all.)
+bool nvme_flush_all_checked(void)
+{
+    bool found = false, ok = true;
+    for (int i = 0; i < kBlockDeviceInfoCount; i++) {
+        block_device_info_t *device = &kBlockDeviceInfo[i];
+        if (device->bus == BUS_NVME && device->block_extra_info != NULL) {
+            found = true;
+            if (!nvme_flush_controller(device->block_extra_info))
+                ok = false;
+        }
+    }
+    return found && ok;
+}
+
 void nvme_flush_all(void)
 {
-    for (int i = 0; i < kBlockDeviceInfoCount; i++)
-        if (kBlockDeviceInfo[i].bus == BUS_NVME && kBlockDeviceInfo[i].block_extra_info != NULL)
-            nvme_flush_controller((nvme_controller_t*)kBlockDeviceInfo[i].block_extra_info);
+    (void)nvme_flush_all_checked();
 }
 
-void nvme_read_disk(nvme_controller_t* controller, uint64_t LBA, size_t length, void* buffer) {
-    nvme_do_io(controller, LBA, length, buffer, false);
+static bool nvme_read_disk(nvme_controller_t* controller, uint64_t LBA, size_t length, void* buffer) {
+    return nvme_do_io(controller, LBA, length, buffer, false);
 }
 
 size_t nvme_vfs_read_disk(block_device_info_t* device, uint64_t sector, void* buffer, uint64_t sector_count)
 {
 	nvme_controller_t* controller = device->block_extra_info;
-	nvme_read_disk(controller, sector, sector_count * controller->blockSize, buffer);
-	return 0;
+	return nvme_read_disk(controller, sector, sector_count * controller->blockSize, buffer)
+	    ? 0 : (size_t)-1;
 }
 
 size_t nvme_vfs_write_disk(block_device_info_t* device, uint64_t sector, void* buffer, size_t length)
@@ -1292,13 +1306,8 @@ size_t nvme_vfs_write_disk(block_device_info_t* device, uint64_t sector, void* b
 	block_verify_write_allowed(device, sector, length);
 
 	nvme_controller_t* controller = device->block_extra_info;
-	nvme_write_disk(controller, sector, length * controller->blockSize, buffer);
-	// 0 = success, matching nvme_vfs_read_disk. This was `void` until the FAT
-	// glue started propagating write results (2026-07-18) — the bops cast hid
-	// the mismatch, so "success" was whatever RAX happened to hold, and the
-	// root-fs disk test failed on the first honest look at it. An NVMe error
-	// never reaches this line anyway: nvme_do_io panics on device errors.
-	return 0;
+	return nvme_write_disk(controller, sector, length * controller->blockSize, buffer)
+	    ? 0 : (size_t)-1;
 }
 
 void init_vfs_block_device(nvme_controller_t* controller, enum eATADeviceType deviceType)
@@ -1369,6 +1378,7 @@ void nvme_init_device(pci_device_t* nvmeDevice)
 	controller->mmioAddress = baseMemoryAddress;
 	controller->mmioSize = bar0_size;
 	controller->adminCID = controller->cmdCID = 0;
+	controller->flush_pending = false;
 	controller->cmdQID = 1;
 
 	// The register window lives at its HHDM alias — an UPPER-half VA, which

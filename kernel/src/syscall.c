@@ -33,6 +33,8 @@
 #include "fpu.h"
 #include "os64/signal.h"   // OS64_SIG_ERR_* — the errors ring 3 is told
 #include "vfs.h"     // kRootFilesystem + vfs_file_t (open/seek/file read/write)
+#include "porter_writer.h"
+#include "driver/system/nvme.h"
 #include "shutdown.h"   // shutdown_system — SYSCALL_SHUTDOWN's engine
 #include "allocator.h"  // free_memory — unmap returns pages at the choke point
 #include "dlist.h"      // dlist_remove (unmap drops the region's VMA node)
@@ -179,6 +181,8 @@ static uint64_t syscall_net_dial(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_net_announce(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_porter_lease(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+static uint64_t syscall_storage_barrier(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 static uint64_t syscall_sync_all(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_shutdown(uint64_t arg0, uint64_t arg1, uint64_t arg2,
@@ -305,6 +309,8 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_PTY_SNAPSHOT, "pty_snapshot", syscall_pty_snapshot, false, 0x02),  // arg1 = header out; arg2 = cells out, NULLABLE (max_cells 0 = header-only probe — handler validates)
 	SYSCALL_DEFINE(SYSCALL_PTY_RESIZE,   "pty_resize",   syscall_pty_resize,   false, 0x00),  // args: master handle, cols, rows — values, no pointers
 	SYSCALL_DEFINE(SYSCALL_NET_DIAL,  "net_dial",  syscall_net_dial,  false, 0x01),  // arg0 = os64_netdest_t in ptr
+	SYSCALL_DEFINE(SYSCALL_PORTER_LEASE, "porter_lease", syscall_porter_lease, false, 0),
+	SYSCALL_DEFINE(SYSCALL_STORAGE_BARRIER, "storage_barrier", syscall_storage_barrier, false, 0),
 	SYSCALL_DEFINE(SYSCALL_SYNC_ALL,  "sync_all",  syscall_sync_all,  false, 0x00),  // no args — the broom sweeps the whole floor
 	SYSCALL_DEFINE(SYSCALL_SHUTDOWN,  "shutdown",  syscall_shutdown,  false, 0x00),  // no args, no return — the ordered descent (shutdown.c)
 	SYSCALL_DEFINE(SYSCALL_TASKID,    "taskid",    syscall_taskid,    false, 0x00),  // no args — who am I? (V1's question, V1's answer: a number in a register; os64's noun)
@@ -5320,6 +5326,7 @@ static uint64_t syscall_thread_exit(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	// The thread that is currently executing must still BE in the running
 	// queue when the scheduler takes over — that is how it finds itself.
 	self->retVal = (uint64_t)arg0;
+	porter_writer_depart(self);
 	self->exited = true;
 
 	// Off the run queue and never coming back: hand the core to someone
@@ -5399,6 +5406,54 @@ static uint64_t syscall_sync_all(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	long rc = fp->result;
 	kfree(fp);
 	return (rc < 0) ? SYSCALL_RESULT_INVALID : (uint64_t)rc;
+}
+
+static uint64_t syscall_porter_lease(uint64_t op, uint64_t user_out, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+    (void)arg2; (void)arg3; (void)arg4; (void)arg5;
+    core_local_storage_t *cls = get_core_local_storage();
+    thread_t *thread = cls ? cls->currentThread : NULL;
+    if (!thread || !cls->task)
+        return SYSCALL_RESULT_INVALID;
+    if (op == OS64_PORTER_RELEASE && !user_out && porter_writer_held(thread)) {
+        porter_writer_depart(thread);
+        return 0;
+    }
+    if (op != OS64_PORTER_ACQUIRE || !user_out || thread->exiting)
+        return SYSCALL_RESULT_INVALID;
+    os64_porter_owner_t owner;
+    int status = porter_writer_acquire(thread, cls->task->taskID, &owner);
+    if (!status && !copy_to_user_buffer((void *)user_out, &owner, sizeof(owner))) {
+        porter_writer_depart(thread);
+        return SYSCALL_RESULT_BAD_USER_DATA;
+    }
+    return (uint64_t)(int64_t)status;
+}
+
+static void file_do_storage_barrier(void *arg)
+{
+    file_io_params_t *p = arg;
+    bool files_ok = vfs_sync_all() >= 0;
+    bool device_ok = nvme_flush_all_checked();
+    p->result = files_ok && device_ok ? 0 : -1;
+}
+
+static uint64_t syscall_storage_barrier(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+    (void)arg0; (void)arg1; (void)arg2; (void)arg3; (void)arg4; (void)arg5;
+    core_local_storage_t *cls = get_core_local_storage();
+    if (!cls || !porter_writer_held(cls->currentThread))
+        return SYSCALL_RESULT_INVALID;
+    file_io_params_t *p = kmalloc(sizeof(*p));
+    if (!p)
+        return SYSCALL_RESULT_INVALID;
+    p->result = -1;
+    call_in_kernel_context(file_do_storage_barrier, p);
+    uint64_t status = p->result;
+    kfree(p);
+    return status;
 }
 
 // shutdown(8)'s engine — the contract and lineage live in syscall_numbers.h,
