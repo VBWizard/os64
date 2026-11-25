@@ -348,12 +348,17 @@ static void responsive_turn_check_cases(void)
 {
     probe_page("<!doctype html><img id=pic src='data:image/png,SIZED%2080x40'>"
         "<picture><source id=s srcset='data:image/png,SIZED%2060x30'><img id=pp src='data:image/png,SIZED%2010x10'></picture>"
-        "<canvas id=c width=20 height=20></canvas><p id=out>waiting</p><p id=out2>waiting</p>"
+        "<canvas id=c width=20 height=20></canvas><p id=out>waiting</p><p id=out2>waiting</p><p id=out3>waiting</p>"
+        "<p id=trigger></p>"
         "<script>var held=[];for(var n=0;n<3000;n++)held.push(document.createElement('span'));"
         "var loads=0,i=document.getElementById('pic');document.getElementById('c').getContext('2d').fillRect(0,0,4,4);"
         "i.onload=function(){document.getElementById('out').textContent='loaded '+(++loads)+' '+i.naturalWidth;};"
         "var ploads=0,pp=document.getElementById('pp');"
         "pp.onload=function(){document.getElementById('out2').textContent='loaded '+(++ploads)+' '+pp.naturalWidth;};"
+        "var inert=document.implementation.createHTMLDocument(''),late=inert.createElement('img');"
+        "var lates=0;late.onload=function(){document.getElementById('out3').textContent='loaded '+late.naturalWidth+' '+(++lates);};"
+        "late.src='data:image/png,SIZED%2050x25';"
+        "new MutationObserver(function(){document.body.appendChild(late)}).observe(document.getElementById('trigger'),{attributes:true});"
         "</script>",true);
     data_pool_open();responsive_serial_pool();pictures_start(&g.page);script_turn();
     for(int t=0;t<12;t++){responsive_drain();script_turn();}
@@ -378,6 +383,16 @@ static void responsive_turn_check_cases(void)
           "turn checks: a picture's source changed, which only yonder sees, is found and its load told");
     (void)turn_check_quiet(4);
     check(turn_check_quiet(10)==0,"turn checks: and quiet again");
+    // An image of a document made by script (createHTMLDocument), which
+    // shares the page's storage and so loads where it is; inserted into the
+    // page, it is not told again, and the turns are quiet after.
+    check(probe_text_is("out3","loaded 50 1"),"turn checks: an image of a script's document loads where it is");
+    responsive_set(probe_id("trigger"),"data-go","1");
+    for(int t=0;t<12;t++){responsive_drain();script_turn();}
+    check(probe_text_is("out3","loaded 50 1") && probe_id("trigger")->parent->last_child->tag==OS64_HTML_TAG_IMG,
+          "turn checks: inserted into the page, its load is not told again");
+    (void)turn_check_quiet(4);
+    check(turn_check_quiet(10)==0,"turn checks: and quiet once more");
     data_pool_close();probe_drop();
 }
 

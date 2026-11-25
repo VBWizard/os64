@@ -606,7 +606,8 @@ names a `diagnostics` directory, each reading adds four lines:
   visited (libdom's `os64_dom_checks_visited`: the wrapped images the
   image check polled, the canvases with a context the damage visit looked
   at), over the turns told and the most in one, which on a quiet page is
-  0 however many wrappers it holds; the timer list (kept in due order, so each
+  0 however many wrappers it holds (a canvas the page draws on is
+  visited until its drawing is painted); the timer list (kept in due order, so each
   arm, a set or an interval's re-arm, walks past the timers due before
   it), live now with the reading's arms and the entries they walked; and
   the values the binding holds for the engine (`os64_dom_registry_count`:
@@ -624,6 +625,7 @@ names a `diagnostics` directory, each reading adds four lines:
   and `setInterval`; and nothing at all without `diagnostics` but a test
   of a flag at each call. The collector's counts are the engine's, kept
   always: one addition per object a run walks, two counter reads per run.
+  The checks' count is libdom's, kept always too: one addition per check.
   libdom counts the timer list only while the sites are on.
 
 ### Built differently from the brief, and why

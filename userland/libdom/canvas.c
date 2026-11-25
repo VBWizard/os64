@@ -76,9 +76,34 @@ canvas_status_t d_canvas_prepare(DValue *e)
     d_canvas_sync(e);
     return d_more_peek(e)->canvas ? CANVAS_OK : d_more_peek(e)->canvas_object ? CANVAS_NO_MEMORY : create(e);
 }
+static size_t *canvases_away(os64_dom_t *dom)
+{
+    return dom->cluster ? &dom->cluster->canvases_away : &dom->canvases_away;
+}
+/* The canvases a visit took off for being out of the window's tree, in the
+ * subtree at `root` (its shadow trees too) an insertion just put in: each
+ * touched, to tell what it kept while it was away. */
+static void canvases_back(os64_dom_t *dom, const os64_html_node_t *root)
+{
+    for (const os64_html_node_t *n = root; n != NULL;) {
+        if (n->kind == OS64_HTML_ELEMENT && d_node_kind(n) == D_PROTO_CANVAS) {
+            DValue *e = d_find(dom, n);
+            if (e != NULL && e->more != NULL && e->more->canvas_away) d_canvas_touch(e);
+        }
+        if (n->shadow_root != NULL) canvases_back(dom, n->shadow_root);
+        if (n->first_child != NULL) { n = n->first_child; continue; }
+        while (n != root && n->next == NULL) n = n->parent;
+        if (n == root) break;
+        n = n->next;
+    }
+}
 static void changed(os64_dom_t *dom, const os64_html_change_t *c)
 {
     d_image_changed(dom,c);
+    if (c->kind == OS64_HTML_CHANGE_CHILDREN && *canvases_away(dom) != 0 && d_in_window_tree(dom, c->target)) {
+        const os64_html_node_t *n = c->added;
+        for (size_t i = 0; i < c->nadded && n != NULL; i++, n = n->next) canvases_back(dom, n);
+    }
     if (c->kind != OS64_HTML_CHANGE_ATTR || c->attr_ns ||
         (os64_strcmp(c->attr_local, "width") && os64_strcmp(c->attr_local, "height"))) return;
     DValue *e = d_find(dom, c->target);
@@ -90,7 +115,12 @@ static void changed(os64_dom_t *dom, const os64_html_change_t *c)
 void d_canvas_touch(DValue *e)
 {
     DValueMore *more = e->more;
-    if (more == NULL || more->canvas_object == NULL || more->canvas_listed) return;
+    if (more == NULL || more->canvas_object == NULL) return;
+    if (more->canvas_away) {
+        more->canvas_away = false;
+        --*canvases_away(e->dom);
+    }
+    if (more->canvas_listed) return;
     /* get_context made room for every context on this list. */
     os64_dom_t *storage = e->dom;
     storage->canvases[storage->ncanvases++] = e;
@@ -448,12 +478,14 @@ bool os64_dom_canvas_bitmap(os64_dom_t *dom, const os64_html_node_t *node, canva
 }
 /* One listed canvas's damage or reset, visited: false when delivery ended
  * under the visit. *tell: whether it still has either to tell, and so stays
- * listed. A canvas out of the window's tree keeps its damage for when it is
- * back. */
-static bool canvas_damage_visit(os64_dom_t *dom,DValue *e,os64_dom_canvas_damage_fn visit,void *opaque,bool *tell)
+ * listed. A canvas out of the window's tree tells nothing and leaves the
+ * list (*away), its damage kept for when an insertion brings it back. */
+static bool canvas_damage_visit(os64_dom_t *dom,DValue *e,os64_dom_canvas_damage_fn visit,void *opaque,bool *tell,
+                                bool *away)
 {
     *tell=true;
-    if(!d_in_window_tree(dom,e->node))return true;
+    *away=false;
+    if(!d_in_window_tree(dom,e->node)){*tell=false;*away=true;return true;}
     if(d_more_peek(e)->canvas_reset_pending){
         visit(opaque,e->node,0,0,NULL);
         return d_delivery_active(dom);
@@ -468,8 +500,9 @@ static bool canvas_damage_visit(os64_dom_t *dom,DValue *e,os64_dom_canvas_damage
     return true;
 }
 /* Each member's listed canvases. Each visit marks its own canvas and runs
- * no script, so the order is free; one with nothing to tell leaves the
- * list, and a context method or a new size puts it back (d_canvas_touch). */
+ * no script, so the order is free; one with nothing to tell, or out of the
+ * tree, leaves the list, and a context method, a new size or its return to
+ * the tree puts it back (d_canvas_touch). */
 void os64_dom_canvas_visit_damage(os64_dom_t *dom,os64_dom_canvas_damage_fn visit,void *opaque)
 {
     if(!visit || !d_provider_enter(dom))return;
@@ -481,10 +514,17 @@ void os64_dom_canvas_visit_damage(os64_dom_t *dom,os64_dom_canvas_damage_fn visi
         size_t kept = 0, k = 0;
         for (; k < storage->ncanvases && going; k++, visited++) {
             DValue *e = storage->canvases[k];
-            bool tell;
-            going = canvas_damage_visit(dom, e, visit, opaque, &tell);
-            if (tell) storage->canvases[kept++] = e;
-            else e->more->canvas_listed = false;
+            bool tell, away;
+            going = canvas_damage_visit(dom, e, visit, opaque, &tell, &away);
+            if (tell) {
+                storage->canvases[kept++] = e;
+                continue;
+            }
+            e->more->canvas_listed = false;
+            if (away) {
+                e->more->canvas_away = true;
+                ++*canvases_away(e->dom);
+            }
         }
         // Those a stopped visit never reached stay as they were.
         for (; k < storage->ncanvases; k++) storage->canvases[kept++] = storage->canvases[k];

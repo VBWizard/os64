@@ -888,7 +888,8 @@ typedef struct Page {
     size_t image_source_count, image_source_bytes;
     garb_env_t image_environment;
     // Moves whenever an image source's selection is made, completed,
-    // refused or owed again (image_sources.inc): part of
+    // refused or owed again, and when the sources are let go
+    // (image_sources.inc): part of
     // canvas_source_answers, which lets the binding's image check skip a
     // pass while the answers stand still. A picture's arrival is an answer
     // only once its source completes (image_sources_flush, which the
@@ -19377,14 +19378,16 @@ static os64_dom_image_status_t canvas_source(void *opaque,const os64_html_node_t
 // What canvas_source's answers stand on, as one number (the image
 // provider's `answers`): which page holds the document, whether it is the
 // one on screen and modern, what an image source reads besides its
-// element (the page's address, the view and zoom a selection is made for,
-// scripting), and image_answers, which moves with every selection made,
-// completed, refused or owed again. canvas_source reads a picture only
-// through its source's completed selection, so a picture's own changes
-// reach it there. The changes
-// to the document since the last look are read first (image_sources_sync),
-// which owes again the selections they touch. Never 0, which would say
-// "no answers".
+// element (the page's address, scripting, and the view and zoom a
+// selection falls back on before the page has an environment), and
+// image_answers, which moves with every selection made, completed,
+// refused or owed again. A new environment re-reads every selection
+// (image_sources_environment), which moves image_answers where one
+// changed. canvas_source reads a picture only through its source's
+// completed selection, so a picture's own changes reach it there. The
+// changes to the document since the last look are read first
+// (image_sources_sync), which owes again the selections they touch. Never
+// 0, which would say "no answers".
 static uint64_t canvas_source_answers(void *opaque)
 {
     Page *p=page_of_doc(opaque);

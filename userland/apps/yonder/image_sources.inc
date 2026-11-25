@@ -34,10 +34,15 @@ static ImageSource *image_source_find(const Page *p,const os64_html_node_t *node
     return p->image_source_slot_cap?p->image_source_slots[image_source_slot(p,node)]:NULL;
 }
 
+// A selection owed again: its source's, or for an image with none yet
+// (one never asked, or answered from outside this document until an
+// insertion brought it in) the first, which moves the answers all the same.
 static void image_source_dirty(Page *p,const os64_html_node_t *node)
 {
     ImageSource *s=image_source_find(p,node);
     if(s){s->dirty=true;p->image_answers++;}
+    else if(node->kind==OS64_HTML_ELEMENT && node->ns==OS64_HTML_NS_HTML && node->tag==OS64_HTML_TAG_IMG)
+        p->image_answers++;
 }
 
 static bool image_picture_dirty(Page *p,const os64_html_node_t *node,unsigned *left)
@@ -51,8 +56,9 @@ static bool image_picture_dirty(Page *p,const os64_html_node_t *node,unsigned *l
     return false;
 }
 
-// A moved subtree may carry an image into/out of a picture, or change the
-// document's first base. Bound inspection; incomplete history invalidates all.
+// A moved subtree may carry an image into/out of a picture, or into this
+// document, or change the document's first base. Its shadow trees are
+// walked too. Bound inspection; incomplete history invalidates all.
 static bool image_source_subtree(Page *p,const os64_html_node_t *root,unsigned *left)
 {
     if(!root)return false;
@@ -61,6 +67,7 @@ static bool image_source_subtree(Page *p,const os64_html_node_t *root,unsigned *
         --*left;
         if(n->ns==OS64_HTML_NS_HTML && n->tag==OS64_HTML_TAG_BASE)return true;
         image_source_dirty(p,n);
+        if(n->shadow_root && image_source_subtree(p,n->shadow_root,left))return true;
         if(n->first_child){n=n->first_child;continue;}
         while(n!=root && !n->next)n=n->parent;
         if(n==root)break;

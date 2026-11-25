@@ -214,6 +214,9 @@ typedef struct DValueMore {
     bool canvas_reset_pending;
     /* On its binding's `canvases` (d_canvas_touch). */
     bool canvas_listed;
+    /* Taken off `canvases` by a visit that found it out of the window's
+     * tree; an insertion that brings it back touches it (canvas.c). */
+    bool canvas_away;
     DQuery *children, *images, *forms, *links, *scripts, *elements;
     /* A select's options and selectedOptions, each made once ([SameObject]). */
     DQuery *options, *selected_options;
@@ -445,6 +448,8 @@ struct os64_dom_cluster {
     /* Moves when an image element's answer may have changed in a way no
      * image provider sees (d_images_moved). */
     uint64_t image_serial;
+    /* Canvases with DValueMore.canvas_away set, in every member. */
+    size_t canvases_away;
     bool sweep_pending;
     bool poisoned, drained;
     bool timer_settings, listener_settings, scheduled_settings, handler_settings, observer_settings, custom_settings, synchronous_settings;
@@ -477,12 +482,14 @@ struct os64_dom {
     bool mutation_installed;
     size_t canvas_bytes;
     os64_dom_image_provider_t image_provider;
-    /* The image check's quiet key: what d_image_quiet_key answered before
+    /* The image check's quiet key: what image_quiet_key (canvas_image.c) answered before
      * the last pass that found nothing owed, which leaves the next pass
      * nothing to find while the key stays the same; 0, none. */
     uint64_t image_quiet;
-    /* The standalone binding's image_serial (a cluster keeps its own). */
+    /* The standalone binding's image_serial and canvases_away (a cluster
+     * keeps its own). */
     uint64_t image_serial;
+    size_t canvases_away;
     /* Records the loop's every-turn checks visited (os64_dom_checks_visited). */
     uint64_t checks_visited;
     os64_dom_media_provider_t media_provider;
@@ -616,9 +623,10 @@ struct os64_dom {
      *   so attaching never fails;
      * - `canvases`: the records of canvas elements with a 2D context that
      *   may have damage or a reset to tell (d_canvas_touch), each once
-     *   (DValueMore.canvas_listed), until a visit finds one with neither.
-     *   Room for every context, `contexts`, is made as each is
-     *   (get_context), so a touch never fails;
+     *   (DValueMore.canvas_listed), until a visit finds one with neither
+     *   or out of the window's tree (canvas_away, until an insertion
+     *   brings it back). Room for every context, `contexts`, is made as
+     *   each is (get_context), so a touch never fails;
      * - `sweeps`: records with a listener removed under a dispatch
      *   (DValue.sweep_owed), each once. A list that could not grow is given
      *   up (`sweeps_all`) and the sweep takes `values`, as it did before.
@@ -1067,13 +1075,16 @@ DValue *d_find(os64_dom_t *dom, const os64_html_node_t *node);
  * `images`, `canvases`, `sweeps`), growing it; false, the list as it was,
  * when it cannot grow. */
 bool d_turn_list_room(os64_dom_t *dom, DValue ***list, size_t n, size_t *cap, size_t need);
-/* A canvas element's record whose context a method is about to use, or
- * whose size changed: on its binding's `canvases` until a damage visit
- * finds nothing to tell (canvas.c). Nothing for a canvas with no context. */
+/* A canvas element's record whose context a method is about to use, whose
+ * size changed, or which came back into the window's tree: on its
+ * binding's `canvases` until a damage visit finds nothing to tell or finds
+ * it out of the tree (canvas.c). Nothing for a canvas with no context. */
 void d_canvas_touch(DValue *e);
 /* An image element's answer may have changed where no image provider can
- * see it (a wrapper made for one, its source changed, a node adopted): the
- * image check's next pass walks its images whatever the provider says. */
+ * see it: a wrapper made for one, its source changed, or a node adoptNode
+ * moved, which neither document's changes need show (a node an insertion
+ * moves is a change of the document it enters). The image check's next
+ * pass walks its images whatever the provider says. */
 void d_images_moved(os64_dom_t *dom);
 int d_point_install(os64_dom_t *, JSContext *, JSValueConst);
 int d_point_dictionary(JSContext *, JSValueConst, double out[4]);

@@ -181,11 +181,37 @@ static void dom_turn_check_cases(void)
     os64_dom_canvas_visit_damage(f.binding, turn_damage, NULL);
     check(turn_damaged == 2 && os64_dom_checks_visited(f.binding) - before == 2,
           "turn checks: a context made later joins the visit");
+    /* A canvas out of the tree leaves the list, its damage kept, and an
+     * insertion into the tree brings it back with it. */
+    dom_script(&f, "var off=document.createElement('canvas');off.id='off';var xo=off.getContext('2d');"
+        "xo.fillRect(0,0,2,2);",
+        "turn checks: a canvas drawn out of the tree");
+    os64_dom_canvas_painted(f.binding, native_id(f.document->document, "lone"));
+    os64_dom_canvas_painted(f.binding, native_id(f.document->document, "k1"));
+    os64_dom_canvas_visit_damage(f.binding, turn_damage, NULL);
+    before = os64_dom_checks_visited(f.binding);
+    turn_damaged = 0;
+    os64_dom_canvas_visit_damage(f.binding, turn_damage, NULL);
+    check(turn_damaged == 0 && os64_dom_checks_visited(f.binding) - before == 0,
+          "turn checks: a canvas out of the tree leaves the list");
+    dom_script(&f, "var holder=document.createElement('div');holder.appendChild(off);",
+               "turn checks: and joins another detached tree");
+    before = os64_dom_checks_visited(f.binding);
+    os64_dom_canvas_visit_damage(f.binding, turn_damage, NULL);
+    check(os64_dom_checks_visited(f.binding) - before == 0, "turn checks: which brings nothing back");
+    dom_script(&f, "document.body.appendChild(holder);", "turn checks: the tree holding it is inserted");
+    before = os64_dom_checks_visited(f.binding);
+    turn_damaged = 0;
+    os64_dom_canvas_visit_damage(f.binding, turn_damage, NULL);
+    check(turn_damaged == 1 && os64_dom_checks_visited(f.binding) - before == 1,
+          "turn checks: an insertion into the tree brings it back, with the damage it kept");
+    os64_dom_canvas_painted(f.binding, native_id(f.document->document, "off"));
+    os64_dom_canvas_visit_damage(f.binding, turn_damage, NULL);
     dom_script(&f, "k2.width=40;", "turn checks: a canvas resized");
     turn_damaged = 0;
     before = os64_dom_checks_visited(f.binding);
     os64_dom_canvas_visit_damage(f.binding, turn_damage, NULL);
-    check(turn_damaged == 3 && os64_dom_checks_visited(f.binding) - before == 3,
+    check(turn_damaged == 1 && os64_dom_checks_visited(f.binding) - before == 1,
           "turn checks: a resized canvas tells its reset");
 
     /* A provider with no answers makes every pass, as before. */

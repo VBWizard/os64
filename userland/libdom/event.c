@@ -328,9 +328,11 @@ static void unlink_removed(os64_dom_t *dom, DValue *entry)
     }
 }
 
-/* A dispatch walks records by their links, so a record removed under it is
- * only marked; the last dispatch to leave sweeps the records whose removal
- * it deferred, which wait on their bindings' `sweeps`. */
+/* A dispatch walks listener records by their links, so a listener removed
+ * under it is only marked; the last dispatch to leave unlinks the marked
+ * listeners of the targets that had one removed, which wait on their
+ * bindings' `sweeps` (a binding whose list could not grow sweeps every
+ * record on `values`; a collectable target is on neither). */
 static size_t dispatch_depth(const os64_dom_t *dom)
 {
     return dom->cluster ? dom->cluster->dispatching : dom->dispatching;
@@ -1525,7 +1527,7 @@ static int dispatch(Dispatch *d, const os64_html_node_t *node)
     event->path_closed_slots = NULL;
     d_free(dom, steps);
     sweep(dom);
-    /* sweep unlinks records on the registry; a collectable target is not on it. */
+    /* sweep unlinks the marked listeners of records on the registry; a collectable target is not on it. */
     if (d->plain != NULL && d->plain->engine_held && dispatch_depth(dom) == 0) unlink_removed(dom, d->plain);
     if (activation != NULL && result == 0 &&
         d_activation_after(dom, ctx, activation, event->canceled, &saved) < 0)
