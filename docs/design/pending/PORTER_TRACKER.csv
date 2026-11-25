@@ -15,7 +15,7 @@ P.2.4,Serve catalogs and manifests and stream full or selective archives,P.2.3,d
 P.2.5,Run host and Os64 archive compatibility and failure tests,P.2.4,done,#734,GNU and Os64 archive proofs passed including 64 MiB media and corrupt or truncated inputs. Windows loopback passed.
 P.2.6,Resolve the intermittent Windows archive interruption,P.2.4,done,#734,ADDED 2026-11-24: the native server refused an unchanged object. Path and handle stats now compare timestamps within each API.
 
-P.3,Preview installs from the Porter CLI,P.2,code,,Chris accepted the P5 media smoke. Transcript follow-up in progress.
+P.3,Preview installs from the Porter CLI,P.2,done,#736,Preview and transcripts passed QEMU and independent review. Chris owns the updated P5 smoke.
 P.3.1,Read the Porter catalog and verify selected target manifests,P.2,done,#736,Verified the real catalog and both complete manifests. Unique eight-digit prefixes resolve and ambiguous ones fail.
 P.3.2,Resolve effective configuration and volume-relative destination paths,P.3.1,done,#736,"Verified per-key overlays, changed routes, protected paths, cross-scope ownership and real and prospective FAT aliases."
 P.3.3,Build a reusable read-only three-way planner,P.3.2,done,#736,"Verified the two-library switches, live drift, baseline adoption, empty lots, scoped retirements and missing parent directories."
@@ -29,4 +29,4 @@ P.6,Unwind multiple receipts in order,P.4,todo,,Preflight older backups and resu
 P.7,Deliver the desktop front end and complete hardware acceptance,P.5 P.6,todo,,Compare CLI and GUI behavior and run the accepted rehearsal on hardware.
 P.3.7,Expose the exact booted kernel identity for system preview,P.3.4,done,#736,ADDED 2026-11-24: staged bytes can differ from the booted ELF. Both stock roots matched the booted ELF; the older kernel blocked system only.
 P.3.8,Keep a runnable guest preview regression,P.3.5,done,#736,ADDED 2026-11-24: P.4 will consume these decisions. The checked-in QEMU regression covers the preview and absence of writes.
-P.3.9,Record per-run Porter transcripts on Os64,P.3.8,doing,,ADDED 2026-11-25: Chris requested a local record of each invocation and its live output.
+P.3.9,Record per-run Porter transcripts on Os64,P.3.8,done,#736,"ADDED 2026-11-25: Chris requested a local record of each invocation. Ext2 and FAT checks covered pipes, concurrent runs, stdout and stderr, failure outcomes and reserved paths."
