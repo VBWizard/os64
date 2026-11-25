@@ -50,6 +50,7 @@ typedef struct DMediaElement DMediaElement;
 typedef struct DMediaTask {
     struct DMediaTask *next;
     DMediaElement *media;
+    JSValue wrapper;                /* the element's, while queued (HOLDERS) */
     const char *type;               /* the event, NULL to only settle */
     uint8_t settle;
     uint8_t clocked;                /* its CLOCKED_* bit, 0 for an event of a change */
@@ -219,6 +220,7 @@ static void queue(os64_dom_t *dom, DMediaElement *m, const char *type, uint8_t s
     DMediaTask *t = d_alloc(dom, sizeof(*t));
     if (t == NULL) return;
     t->media = m;
+    t->wrapper = d_holder_take(dom, m->node);
     t->type = type;
     t->settle = settle;
     if (settle != SETTLE_NONE) {
@@ -364,6 +366,7 @@ static void media_load(os64_dom_t *dom, JSContext *ctx, DMediaElement *m)
                 JS_FreeValue(ctx, arg);
             }
             promises_release(dom, t->promises, t->promise_count);
+            JS_FreeValueRT(dom->engine, t->wrapper);
             d_free(dom, t);
         }
         s->tail = last;
@@ -866,6 +869,7 @@ bool os64_dom_media_fire(os64_dom_t *dom, os64_js_outcome_t *outcome)
     }
     d_task_close(dom, name, outcome);
     promises_release(dom, t->promises, t->promise_count);
+    JS_FreeValueRT(dom->engine, t->wrapper);
     d_free(dom, t);
     return true;
 }
@@ -880,6 +884,7 @@ static void tasks_drop(os64_dom_t *dom)
         s->head = t->next;
         task_leaves(t);
         promises_release(dom, t->promises, t->promise_count);
+        JS_FreeValueRT(dom->engine, t->wrapper);
         d_free(dom, t);
     }
     s->tail = NULL;

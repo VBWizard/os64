@@ -39,6 +39,10 @@ yonder_host_build() {
     # back under its own and run from what was read, so the suite proves
     # through the bytecode everything it proves.
     if [ "${JS_ROUND_TRIP:-0}" = 1 ]; then host_flags+=(-DOS64_JS_BYTECODE_ROUND_TRIP); fi
+    # DOM_GC_STRESS=1: a whole engine collection at each of libdom's safe
+    # points (report.c d_safe_point), so every mark is checked by the
+    # engine's assertions many times over.
+    if [ "${DOM_GC_STRESS:-0}" = 1 ]; then host_flags+=(-DOS64_DOM_GC_STRESS); fi
     # Match the production SVG library membership as geometry modules grow.
     local svg_sources=()
     mapfile -t svg_sources < <(python3 -c '

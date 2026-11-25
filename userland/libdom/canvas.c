@@ -214,10 +214,11 @@ static JSValue get_context(JSContext *ctx, JSValueConst self, int argc, JSValueC
     if (JS_IsException(object)) { d_canvas_free(e); return object; }
     DValue *held = d_retain(dom, ctx, object);
     if (!held) { d_canvas_free(e); return JS_EXCEPTION; }
-    JS_SetOpaque(object, e);
+    d_view_keep(e, held);
     /* d_canvas_prepare's success made the DValueMore. */
     e->more->canvas_object = held;
     storage->contexts++;
+    JS_SetOpaque(object, e);
     d_canvas_touch(e);
     return JS_DupValue(ctx, object);
 }
@@ -441,10 +442,26 @@ static JSValue member(JSContext *ctx, JSValueConst self, int argc, JSValueConst 
 {
     return d_canvas_method(ctx, self, data, member_on, argc, argv, magic);
 }
+/* The context's opaque is its canvas's record, which keeps it; its own
+ * record (more->canvas_object) holds the canvas's wrapper (VIEWS). */
+static void context_finalize(JSRuntime *rt, JSValue value)
+{
+    const DValue *e = JS_GetOpaque(value, os64_js_class_id(&canvas_slot));
+    if (e != NULL) d_view_release(rt, e->more->canvas_object);
+    JS_SetOpaque(value, NULL);
+}
+
+static void context_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark)
+{
+    const DValue *e = JS_GetOpaque(value, os64_js_class_id(&canvas_slot));
+    if (e != NULL) d_view_mark(rt, e->more->canvas_object, mark);
+}
+
 int d_canvas_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     dom->canvas_class = os64_js_class_id(&canvas_slot);
-    const JSClassDef definition = {.class_name = "CanvasRenderingContext2D"};
+    const JSClassDef definition = {.class_name = "CanvasRenderingContext2D", .finalizer = context_finalize,
+                                   .gc_mark = context_mark};
     if (!JS_IsRegisteredClass(dom->engine, dom->canvas_class) && JS_NewClass(dom->engine, dom->canvas_class, &definition) < 0) return -1;
     JSValue prototype = JS_NewObject(ctx);
     if (!d_retain(dom, ctx, prototype)) return -1;

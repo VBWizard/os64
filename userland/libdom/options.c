@@ -193,7 +193,7 @@ static JSValue select_collection(os64_dom_t *dom, JSContext *ctx, const os64_htm
     DQuery **slot = selected ? &more->selected_options : &more->options;
     if (*slot != NULL) return JS_DupValue(ctx, (*slot)->entry->value);
     JSValue value = d_special_collection(dom, ctx, select, selected ? D_QUERY_SELECTED_OPTIONS : D_QUERY_OPTIONS,
-                                         NULL);
+                                         NULL, entry);
     if (JS_IsException(value)) return value;
     if (!selected && JS_SetPrototype(ctx, value, dom->options_prototype->value) < 0) {
         JS_FreeValue(ctx, value);

@@ -379,20 +379,31 @@ static JSValue document_member(JSContext *ctx, JSValueConst self, int argc, JSVa
                                             os64_js_class_id(&implementation_slot));
     DValue *held = d_retain(dom, ctx, object);
     if (held == NULL) return JS_EXCEPTION;
-    JS_SetOpaque(held->value, entry);
+    d_view_keep(entry, held);
     more->implementation = held;
+    JS_SetOpaque(held->value, entry);
     return JS_DupValue(ctx, held->value);
 }
 
+/* The object's opaque is its document's record, which keeps it; its own
+ * record (more->implementation) holds the document's wrapper (VIEWS). */
 static void clear(JSRuntime *rt, JSValue value)
 {
-    (void)rt;
+    const DValue *document = JS_GetOpaque(value, os64_js_class_id(&implementation_slot));
+    if (document != NULL) d_view_release(rt, document->more->implementation);
     JS_SetOpaque(value, NULL);
+}
+
+static void implementation_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark)
+{
+    const DValue *document = JS_GetOpaque(value, os64_js_class_id(&implementation_slot));
+    if (document != NULL) d_view_mark(rt, document->more->implementation, mark);
 }
 
 int d_implementation_classic(os64_dom_t *dom, JSContext *ctx)
 {
-    static const JSClassDef implementation_class = {.class_name = "DOMImplementation", .finalizer = clear};
+    static const JSClassDef implementation_class = {.class_name = "DOMImplementation", .finalizer = clear,
+                                                    .gc_mark = implementation_mark};
     JSClassID id = os64_js_class_id(&implementation_slot);
     if (!JS_IsRegisteredClass(dom->engine, id) && JS_NewClass(dom->engine, id, &implementation_class) < 0)
         return -1;
