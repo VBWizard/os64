@@ -228,6 +228,9 @@ storage, normally under `/home`, while entries are undoable.
 
 ## The writer and recovery
 
+The P.4 transaction protocol is specified in the
+[ext2 write-order contract](INSTALLER_EXT2_TRANSACTIONS.md).
+
 Serialize mutations across both front ends and all scopes. The operation record
 must identify a boot and a live task incarnation. Exclusive creation is a
 candidate primitive. The slice brief must cover a cut during acquisition,

@@ -23,7 +23,15 @@ P.3.4,Expose a preview CLI with kernel compatibility and byte estimates,P.3.3,do
 P.3.5,Prove safety and preview scenarios on QEMU ext2 and FAT,P.3.4,done,#736,"Eight disposable QEMU scenarios compared files and Porter state before and after preview, including FAT and ext2."
 P.3.6,Prepare a frozen P5 preview cohort and workstation instructions,P.3.5,done,#736,Frozen media and system publications and workstation instructions verified locally with a SHA-256 inventory.
 
-P.4,Implement checked storage barriers and ext2 install and undo,P.3,todo,,Verify interrupted transactions and offline recovery with a disposable disk.
+P.4,Implement checked storage barriers and ext2 install and undo,P.3,code,,Specify durable decisions and verify offline recovery on disposable disks.
+P.4.1,Write the ext2 transaction and storage ordering contract,P.3,doing,,Cover acquisition cuts and task reuse and replay under an exclusive writer.
+P.4.2,Add checked storage barriers and a task-owned writer lease,P.4.1,doing,,Check filesystem and NVMe status and release serialization on task teardown.
+P.4.3,Stream selective packages and build verified local backup archives,P.4.1,doing,,Bound and verify archive coverage and stage only approved bytes on the destination volumes.
+P.4.4,Publish ext2 installs with immutable intents and receipts,P.4.2 P.4.3,doing,,Revalidate shared preview data and retain the decision through interrupted history publication.
+P.4.5,Expose history and implement single undo and offline recovery,P.4.4,doing,,Verify actual identities and reject unexpected edits and serialize restart attempts.
+P.4.6,Proof ext2 transactions on disposable QEMU disks,P.4.5,doing,,Exercise direct switches and undo and interruptions and storage failure and concurrent recovery.
+P.4.7,Propagate completed NVMe write failures to Porter,P.4.2,doing,,ADDED 2026-11-25: the controller consumed failed data completions through a panic path that hid errors from the transaction.
+P.4.8,Preserve independent ownership and edits during staging,P.4.4 P.4.5,doing,,ADDED 2026-11-25: foreign directory ownership and changes to matching dependencies need explicit coverage.
 P.5,Update FAT and kernel files and prove bootable rescue,P.4,todo,,Boot the known-good rescue runtime and exercise failure and reboot boundaries.
 P.6,Unwind multiple receipts in order,P.4,todo,,Preflight older backups and resume interrupted undo while preserving independent media.
 P.7,Deliver the desktop front end and complete hardware acceptance,P.5 P.6,todo,,Compare CLI and GUI behavior and run the accepted rehearsal on hardware.
