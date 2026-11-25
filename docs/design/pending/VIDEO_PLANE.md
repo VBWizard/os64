@@ -532,9 +532,11 @@ CAS on their type, as before.
 | buried | nobody | nobody | `task_destroy` frees the blocks, then the task | n/a |
 
 The thread call reserves its handle, then makes the thread, then commits: a
-refused reservation makes no thread, a failed make cancels the reservation,
-and only a commit refused because the task's teardown cancelled the
-reservation leaves a thread with no handle, in a task that is already dying.
+refused reservation makes no thread, and a failed make cancels the
+reservation. A reservation is its owner's alone — a close refuses one, and
+teardown's sweep passes it by — so the commit cannot be refused; a commit
+after the teardown began closes the handle it published, as every commit
+does, in a task that is dying.
 
 ## 8. Slices
 

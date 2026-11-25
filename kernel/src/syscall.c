@@ -2091,9 +2091,9 @@ static uint64_t syscall_read_pinned(task_t *task, const handle_t *h,
 			// table handle_close_all had already swept, and a conn that is
 			// no longer the listener's and never closed by anyone stays
 			// listed with its buffers and its port forever (Codex #101
-			// rd6). A reservation is what teardown cancels, and a commit
-			// that lands after teardown passed the slot closes the handle
-			// itself. A full table is also discovered before the handshake
+			// rd6). A reservation is its owner's alone (teardown's sweep
+			// passes it by), and a commit that lands after teardown began
+			// closes the handle itself. A full table is also discovered before the handshake
 			// is spent, which the alloc-after could not do.
 			int ch = handle_reserve(task);
 			if (ch < 0)
@@ -2121,9 +2121,9 @@ static uint64_t syscall_read_pinned(task_t *task, const handle_t *h,
 			                      .peer_port = conn->peer_port, ._reserved = 0 };
 			if (!handle_commit_reserved(task, ch, HANDLE_NET_TCP, conn))
 			{
-				// Teardown cancelled the reservation first: the task is
-				// dying, and this conn has no owner but us. Hang it up
-				// cleanly (the peer gets a FIN) rather than strand it.
+				// Not this call's reservation any more (handle.h: commit):
+				// this conn has no owner but us. Hang it up cleanly (the
+				// peer gets a FIN) rather than strand it.
 				tcp_conn_release(conn);
 				return SYSCALL_RESULT_INVALID;
 			}
@@ -2634,8 +2634,9 @@ static uint64_t syscall_pty_create_common(uint32_t cols, uint32_t rows, uint8_t 
 	pty_master_hold(slave);
 	if (!handle_commit_reserved(task, mh, HANDLE_PTY_MASTER, slave))
 	{
-		// Teardown cancelled the slot first: release the master's ownership
-		// and then our hold, which permits the never-seated slave's burial.
+		// Not this call's reservation any more (handle.h: commit): release
+		// the master's ownership and then our hold, which permits the
+		// never-seated slave's burial.
 		pty_master_close(slave);
 		pty_master_unhold(slave);
 		return SYSCALL_RESULT_INVALID;
@@ -3030,7 +3031,7 @@ static uint64_t syscall_net_announce(uint64_t arg0, uint64_t arg1, uint64_t arg2
 	}
 	if (!handle_commit_reserved(task, h, HANDLE_NET_LISTENER, l))
 	{
-		tcp_listener_close(l);   // teardown cancelled the slot first: the task is dying
+		tcp_listener_close(l);   // not this call's reservation any more (handle.h: commit)
 		return SYSCALL_RESULT_INVALID;
 	}
 	printd(DEBUG_NET, "net_announce: task %s <- tcp!%s!%u = handle %d\n",
@@ -5289,10 +5290,10 @@ static uint64_t syscall_thread(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	}
 	if (!handle_commit_reserved(task, h, HANDLE_THREAD, j))
 	{
-		// The task's teardown cancelled the reservation while the thread was
-		// being made: the task is dying, the handle is gone, and the thread
-		// runs detached until the teardown reaches it (DEBTS: a dying task
-		// can still gain a thread).
+		// Commit refuses only a slot that is not this call's reservation
+		// (handle.h), which nothing but this call moves. Were it ever to,
+		// the thread already runs: detached, with no handle to answer for
+		// it.
 		thread_join_close(j);
 		return SYSCALL_RESULT_INVALID;
 	}

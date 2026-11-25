@@ -139,6 +139,10 @@ static int handle_claim(task_t *task, handle_type_t as, handle_t **out)
 		uint32_t size = handle_block_size(k);
 		for (uint32_t i = k == 0 ? 3 : 0; i < size; i++)
 		{
+			// A plain look first: an exchange on every taken entry would
+			// pull each one's line from every thread reading through it.
+			if (__atomic_load_n(&entries[i].type, __ATOMIC_RELAXED) != HANDLE_NONE)
+				continue;
 			handle_type_t expected = HANDLE_NONE;
 			if (__atomic_compare_exchange_n(&entries[i].type, &expected, as,
 			                                false, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED))
@@ -271,6 +275,11 @@ bool handle_commit_reserved(struct task *t, int slot, handle_type_t type, void *
 
 	entry->object = object;
 	__atomic_store_n(&entry->type, type, __ATOMIC_RELEASE);
+	// The store above and the load below must not trade places: teardown
+	// sets its flag and then sweeps, and a commit that read the flag clear
+	// while its entry still looked CLOSING to the sweep would leave a
+	// handle neither of them closes.
+	__atomic_thread_fence(__ATOMIC_SEQ_CST);
 	if (__atomic_load_n(&task->tearingDown, __ATOMIC_ACQUIRE))
 		(void)handle_close(t, slot);
 	return true;
@@ -775,6 +784,15 @@ bool handle_close_rc(struct task *t, int h, int *rc, bool *deferred)
 	{
 		spinlock_release_irqrestore(&task->handleLock, lockFlags);
 		return false;   // another closer owns it — must NOT revert, that frees it mid-close
+	}
+	if (type == HANDLE_RESERVED)
+	{
+		// The number was closed and handed to a reservation between our
+		// liveness look and the exchange. A reservation is its owner's
+		// alone: give it back untouched.
+		__atomic_store_n(&handle->type, HANDLE_RESERVED, __ATOMIC_RELEASE);
+		spinlock_release_irqrestore(&task->handleLock, lockFlags);
+		return false;
 	}
 
 	// We own it, and alloc cannot touch a CLOSING slot, so `object` is stable.

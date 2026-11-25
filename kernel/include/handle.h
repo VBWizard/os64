@@ -66,9 +66,10 @@ typedef enum handle_type
 
 	// A slot reserved before an operation that may publish external state.
 	// Exclusive file creation uses it so a full handle table is discovered
-	// BEFORE the filesystem creates the name. It is not operable; commit turns
-	// it into a live type, while close/task teardown cancels it like any other
-	// handle claim.
+	// BEFORE the filesystem creates the name. It is not operable, and only
+	// its owner moves it: commit turns it into a live type, cancel gives it
+	// back. A close refuses it, and teardown's sweep passes it by; the
+	// owner's commit after a teardown closes what it published.
 	HANDLE_RESERVED,
 
 	// A slot mid-CLOSE (2026-08-24). Distinct from NONE so handle_alloc — which
@@ -91,15 +92,19 @@ struct task;
 void handle_table_init(struct task *t);
 
 // Claim the lowest free slot, adding a block when every one is taken.
-// Returns the handle, or -1 at the ceiling or when a block could not be had
-// (counted as a refusal).
+// Returns the handle, or -1 when no block can be added — at the ceiling, a
+// block that could not be had, or a task tearing down — counted as a
+// refusal.
 int handle_alloc(struct task *t, handle_type_t type, void *object);
 
 // Two-phase allocation for operations that must know a return slot exists
-// before they mutate external state. reserve returns a slot or -1; commit
-// publishes its object, and cancel gives an unused reservation back. A task
-// teardown may cancel the reservation first, in which case commit is false
-// and the caller still owns `object`.
+// before they mutate external state. reserve returns a slot or -1 (as
+// handle_alloc refuses); commit publishes its object, and cancel gives an
+// unused reservation back. Only the owner moves a reservation (a close
+// refuses one, teardown's sweep passes it by), so commit refuses only a slot
+// that is not the caller's reservation; the caller then still owns
+// `object`. A commit that lands after the task's teardown began closes the
+// handle it published, and still answers true.
 int  handle_reserve(struct task *t);
 bool handle_commit_reserved(struct task *t, int slot, handle_type_t type, void *object);
 bool handle_cancel_reserved(struct task *t, int slot);
