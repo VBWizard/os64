@@ -821,3 +821,30 @@ int d_node_install(os64_dom_t *dom, JSContext *ctx)
     if (d_shadow_prototypes(dom, ctx) < 0 || d_data_prototypes(dom, ctx) < 0) return -1;
     return d_geometry_install(dom, ctx);
 }
+
+size_t os64_dom_wrappers(const os64_dom_t *dom, const os64_html_node_t **out, size_t cap, os64_dom_wrappers_t *counts)
+{
+    *counts = (os64_dom_wrappers_t){0};
+    if (dom == NULL || dom->document == NULL)
+        return 0;
+    const os64_html_node_t *root = dom->document->document;
+    size_t n = 0;
+    for (const DValue *entry = dom->values; entry != NULL; entry = entry->next) {
+        if (entry->node == NULL || !JS_IsObject(entry->value) || JS_GetClassID(entry->value) != dom->node_class)
+            continue;
+        counts->wrappers++;
+        if (os64_html_shadow_including_root(entry->node) == root) {
+            counts->connected++;
+            continue;
+        }
+        counts->elsewhere++;
+        // The registry's own reference is one; any other is script's or
+        // another engine value's (a closure, a property, a queued job).
+        if (__js_rc(JS_VALUE_GET_PTR(entry->value))->ref_count == 1)
+            counts->elsewhere_only_ours++;
+        if (n < cap)
+            out[n] = entry->node;
+        n++;
+    }
+    return n;
+}

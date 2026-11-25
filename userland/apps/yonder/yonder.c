@@ -1462,8 +1462,9 @@ static bool page_rebuild_owed(const Page *p)
 
 // Counts the trees any Page has been given, so a reader can tell a new
 // layout from the old one even where the new tree has the old one's
-// address; and the animation ticks that moved boxes in the shown one
-// (tick_page). What intersections_turn reads for "something moved".
+// address; and the times boxes moved in the shown one with no new tree:
+// an animation's tick (tick_page), or a box that only moved, kept in it
+// (restyle_kept_shown). What intersections_turn reads for "something moved".
 static uint64_t s_trees_given, s_ticks_moved;
 
 // The tree a Page holds from now on, and with it the animations its layout
@@ -2154,6 +2155,7 @@ static void restyle_counted(const Page *p, flow_restyle_t kept)
         return;
     yonder_layout_stats_t sample = {.restyle_reason_names = names};
     if (kept.kind == FLOW_RESTYLE_NOTHING) sample.kept_nothing = 1;
+    else if (kept.kind == FLOW_RESTYLE_PAINT && kept.moved > 0) sample.kept_moved = 1, sample.kept_moved_boxes = kept.moved;
     else if (kept.kind == FLOW_RESTYLE_PAINT) sample.kept_paint = 1;
     else if ((unsigned)kept.why < YONDER_LAYOUT_RESTYLE_REASONS) sample.kept_declined[kept.why] = 1;
     layout_profile_add(p, &sample);
@@ -4762,6 +4764,10 @@ static flow_tree_t *restyle_kept_shown(Page *p, Page *reclaim, int32_t width, in
     restyle_counted(p, kept);
     if (kept.kind == FLOW_RESTYLE_DECLINED)
         return NULL;
+    // A box that only moved moved what an observation reads, as a tick that
+    // moves boxes does (intersections_turn).
+    if (kept.moved > 0)
+        s_ticks_moved++;
     // `--geometry-check`: every Nth kept tree is laid out whole beside
     // itself and the two compared; the record says how many were and the
     // first that differed, with the element and what differed.
@@ -5344,6 +5350,38 @@ static void census_text(const Page *p, char *out, size_t cap)
                   (unsigned long)f.drawn, (unsigned long)f.other, (unsigned long)garb_cascade_elements(p->cascade));
 }
 
+// WHO HOLDS THE DETACHED, for the record's `holders` lines: the census's
+// held units by holder (os64_html_holders) — a script wrapper's node in
+// them, else only the change log's references, else something else — the
+// node wrappers in the document and not, and of the latter how many only
+// the binding's registry references, and the change log's readers.
+static void holders_text(const Page *p, char *out, size_t cap)
+{
+    os64_dom_wrappers_t w;
+    size_t n = yonder_scripts_wrappers(p->scripts, NULL, 0, &w);
+    const os64_html_node_t **nodes = n > 0 ? os64_malloc(n * sizeof(*nodes)) : NULL;
+    if (nodes != NULL)
+        n = yonder_scripts_wrappers(p->scripts, nodes, n, &w);
+    os64_html_holders_t h;
+    os64_html_holders(page_doc(p), nodes, nodes != NULL ? n : 0, &h);
+    os64_free(nodes);
+    if (h.short_of_memory || (n > 0 && nodes == NULL)) {
+        os64_snprintf(out, cap, "not counted: no memory for the walk");
+        return;
+    }
+    os64_snprintf(out, cap,
+                  "detached and held, by a script wrapper's node %lu units, %lu nodes (%lu elements); by the change "
+                  "log alone %lu, %lu (%lu); by something else %lu, %lu (%lu); node wrappers %lu: in the document %lu, "
+                  "elsewhere %lu, of those only our registry references %lu; the change log: %lu readers (%lu lost), "
+                  "the oldest %lu versions behind, %lu entries, %lu bytes",
+                  (unsigned long)h.marked.units, (unsigned long)h.marked.nodes, (unsigned long)h.marked.elements,
+                  (unsigned long)h.log_only.units, (unsigned long)h.log_only.nodes, (unsigned long)h.log_only.elements,
+                  (unsigned long)h.other.units, (unsigned long)h.other.nodes, (unsigned long)h.other.elements,
+                  (unsigned long)w.wrappers, (unsigned long)w.connected, (unsigned long)w.elsewhere,
+                  (unsigned long)w.elsewhere_only_ours, (unsigned long)h.readers, (unsigned long)h.lost_readers,
+                  (unsigned long)h.oldest_lag, (unsigned long)h.log_entries, (unsigned long)h.log_bytes);
+}
+
 static void diag_observe(Page *p, const char *when)
 {
     yonder_diag_t *d = p->diag;
@@ -5358,6 +5396,9 @@ static void diag_observe(Page *p, const char *when)
     char nodes[640];
     census_text(p, nodes, sizeof(nodes));
     yonder_diag_fact(d, "nodes", nodes);
+    char holders[640];
+    holders_text(p, holders, sizeof(holders));
+    yonder_diag_fact(d, "holders", holders);
     if (p->svg_cache) {
         yonder_svg_cache_stats_t stats = yonder_svg_cache_stats(p->svg_cache);
         os64_snprintf(v, sizeof(v), "%lu hits, %lu misses, %lu rasterizations, %lu bypasses",
@@ -10554,6 +10595,10 @@ static void diag_paint_reading(Page *p, uint32_t n)
         census_text(p, nodes, sizeof(nodes));
         os64_snprintf(nkey, sizeof(nkey), "nodes reading %u", (unsigned)n);
         yonder_diag_reading_fact(p->diag, nkey, nodes);
+        char holders[640];
+        holders_text(p, holders, sizeof(holders));
+        os64_snprintf(nkey, sizeof(nkey), "holders reading %u", (unsigned)n);
+        yonder_diag_reading_fact(p->diag, nkey, holders);
         // W0's two tables, each written when it holds anything and started
         // again for the next reading (WHOLE_REPAINTS.md).
         const struct { CountedAt *t; const char *key; } w0[] = {

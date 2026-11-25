@@ -103,6 +103,11 @@ static DamageSaid damage_step(void)
     s_change_said = "(no rebuild)";
     g.ui.any_dirty = false;
     script_rebuild();
+    // Each part widened to the backdrops it reaches, as glass_paint does
+    // before it paints: without it, a backdrop filter beside a change is
+    // painted from a part that leaves it out, and the check finds a
+    // difference yonder never paints.
+    backdrop_damage();
     DamageSaid said = {0, 0, false, s_change_said, g.ui.any_dirty ? g.ui.damage_count : 0};
     os64_gui_rect_t v = g.view.bounds, d = g.ui.dirty;
     said.whole = d.x <= v.x && d.y <= v.y && d.x + d.w >= v.x + v.w && d.y + d.h >= v.y + v.h;
@@ -450,8 +455,10 @@ static void damage_cases(void)
               "damage: the check puts back what the window held under a widget");
     }
     damage_style("mover", "transform:translateY(3000px)");
-    damage_expect("damage: a transform kept in place that moves the page's extent is the whole view", damage_step(),
-                  kRefused[FLOW_PARTS_MOVED]);
+    // The page's extent changing alone moves no pixel of the page: the
+    // view's scrollbars are set from it after the rebuild.
+    damage_expect("damage: a transform kept in place that moves the page's extent is painted in parts", damage_step(),
+                  "in parts");
     damage_style("mover", "transform:translateX(200px)");
     (void)damage_step();
     damage_style("mover", "transform:translateX(10px)");

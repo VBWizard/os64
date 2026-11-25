@@ -119,6 +119,29 @@ not depend on them, and `position: relative` offsets: translate the
 box's subtree in the kept tree, recompute its scroller's reach, damage
 old and new bounds. No placement. Smaller (38 of 456 here); after N3.
 
+*As built (2026-11-24).* The restyle kept in the tree (restyle.inc
+`keep_move`) takes a write whose only change past what the painter reads
+is the insets of a positioned block-level box: its size not following them
+(CSS 2.1 §§ 10.3.7, 10.6.4), the same side placing it before and after, no
+percentage, and its own transform free to change in the same write. Nothing
+in the box may be clipped, scrolled, sticky, fixed or transformed (named
+declines). A relative inline and an atom on a line decline as `a relative
+inline`: their pieces reach through their line into their block's overflow.
+An element with no box, or a static one, takes the write and moves nothing.
+The move is exact to the 26.6: the box's offset since the layout is summed
+on the tree (`FMoved`), and its public boxes are made again by the public
+build itself in a relocate mode (flow.c `public_box`), from the layout's
+records plus that offset. So a rect read equals a whole layout's rounding
+edge by edge, never a rounded delta. The records stay as the layout made
+them, and so does the graft's snapshot reader (#722's rule), so the next
+layout places the written element afresh. The page's extent and the
+scrollers' ranges are reached again, the moved boxes' ink is reached
+again (a clip outside them, which did not move, cuts it), the marks are
+the written element's before and after (N3's), the moved boxes' drawn
+stamps move, and yonder
+tells the observers something moved. The record counts kept moves (`layout
+kept: ... a box that only moved N (M boxes)`).
+
 ## Proof: this is only safe with an oracle, as the cascade's was
 
 - **The table's test.** For each field classed PAINT: on generated

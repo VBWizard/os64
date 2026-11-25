@@ -139,9 +139,10 @@ typedef struct {
     // boxes, placement and the public tree), forced by a read ([1]) or not.
     yonder_layout_needed_t needed;
     // The restyles kept in the shown tree (flow_restyle_in_place): those
-    // that found nothing to change, those that wrote paint-only values, and
-    // the declined by reason (names with the sample, as the cascade's).
-    uint64_t kept_nothing, kept_paint;
+    // that found nothing to change, those that wrote paint-only values,
+    // those that moved boxes that only moved (and the boxes), and the
+    // declined by reason (names with the sample, as the cascade's).
+    uint64_t kept_nothing, kept_paint, kept_moved, kept_moved_boxes;
     uint64_t kept_declined[YONDER_LAYOUT_RESTYLE_REASONS];
     const char *const *restyle_reason_names;
     // The geometry reads answered from the shown tree with no work (N2);

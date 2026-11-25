@@ -95,6 +95,9 @@ The images carry the full kernel ELF to preserve the boot layout used by
 Limine on UEFI. Kernel DWARF paths are relative to the repository. Run GDB
 from the checkout root for source lookup.
 
+`make package` publishes an immutable Porter snapshot of the installable files.
+[Porter publishing and server setup](docs/design/pending/PORTER_PUBLISHING.md)
+
 ### Running
 
 ```bash
