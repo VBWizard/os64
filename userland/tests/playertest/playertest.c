@@ -679,7 +679,7 @@ static int step_plane(void)
         code = die(8, "the plane would not be hidden", hide(win, old_name));
         goto out;
     }
-    f = WAIT_FACT(&pr, 3000, f_.plane_ready && f_.plane_pic_w == 960);
+    f = WAIT_FACT(&pr, 3000, f_.plane_ready);   // ready means the size asked: 960 x 540
     if (!f.plane_ready || f.plane_pic_w != 960 || f.plane_recreates != 1 || f.plane_cap_w < 960 ||
         f.plane_name == old_name) {
         code = die(8, "hidden, the new size did not come ready on a new plane (recreates)", (int64_t)f.plane_recreates);

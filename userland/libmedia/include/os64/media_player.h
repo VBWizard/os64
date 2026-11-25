@@ -12,7 +12,9 @@
 // its own, converts pictures to the size asked on another, and gives its
 // sound to an output (os64/media_output.h) as a voice. The caller drives it
 // from ONE thread of its own (gplay's main, yonder's window thread): every
-// call here is that thread's but `shown`, which any thread may make. At
+// call here is that thread's but `shown` and `shown_done`, which any thread
+// may make while the player is open (and must have stopped making before
+// os64_media_player_close). At
 // each display frame it asks for the picture to show at that frame's blank
 // (unless the player has a plane, whose show thread asks: § A plane,
 // below), and it reads the facts when the player asks to be looked at. The library knows nothing of windows, keys, pages
@@ -65,11 +67,15 @@
 // the plane is on. The caller places and hides the plane in its own window
 // publishes, says when it means to place it (os64_media_player_plane_want),
 // and paints the video itself, when it must, from os64_media_player_shown.
-// - A NEW SIZE (§ 4.4): after os64_media_player_size the plane is STALE (a
-//   placed plane keeps its size); the caller paints `shown` itself and
-//   hides the plane; the show thread gives the plane the new size (a new
-//   plane past the old one's class) and says READY; the caller wants it and
-//   places it again. A new plane refused hands the pace back to `frame`.
+// - THE FIRST PLACE waits for facts.plane_ready: the kernel refuses a place
+//   for a plane with no picture of the place's size.
+// - A NEW SIZE (§ 4.4): after os64_media_player_size a placed plane goes
+//   STALE (a placed plane keeps its size) once a picture of the new size is
+//   picked; the caller paints `shown` itself and hides the plane; the show
+//   thread gives the plane the new size (a new plane past the old one's
+//   class) and says READY; the caller wants it and places it again. A
+//   hidden plane is simply given the new size. A new plane refused hands
+//   the pace back to `frame`.
 // - A PLACED PLANE SHOWS THROUGH whatever the window paints inside its clip,
 //   outside its overlays, so a caller that stops wanting the picture there
 //   (the element gone, a new page) hides the plane in the publish that
@@ -233,10 +239,12 @@ typedef struct {
     // The plane (OS64_MEDIA_PLANE_*), as the show thread holds it.
     int plane_state;
     uint32_t plane_name;            // the GUI's name for it, 0 none
-    int plane_refusal;              // the GUI's answer when none could be had (0: the start tripwire)
+    int plane_refusal;              // the GUI's answer when none could be had (0: no GUI answer, the show
+                                    // thread could not start or the start tripwire passed)
     uint32_t plane_cap_w, plane_cap_h, plane_pic_w, plane_pic_h;
-    bool plane_ready;               // it holds a picture of the size being converted to
-    bool plane_stale;               // a picture of another size is due and it is placed
+    bool plane_ready;               // it holds a picture of the size being converted to (the size asked)
+    bool plane_stale;               // a picture of another size was picked while it was placed; until the
+                                    // publish that gives it that size
     uint64_t plane_published, plane_recreates;
     uint64_t plane_ended_placed;    // closings that ended with the plane still placed
     uint64_t frames_missed;         // display frames passed with no answer, playing and shown
@@ -252,7 +260,7 @@ void os64_media_player_facts(os64_media_player_t *p, os64_media_player_facts_t *
 #define OS64_MEDIA_PLANE_STARTING  1   // the plane call is waiting for its verdict
 #define OS64_MEDIA_PLANE_ON        2   // made: the show thread paces
 #define OS64_MEDIA_PLANE_REFUSED   3   // none could be had (facts.plane_refusal): `frame` is the caller's
-#define OS64_MEDIA_PLANE_ENDED     4   // the show thread has ended (closing, or the window gone)
+#define OS64_MEDIA_PLANE_ENDED     4   // the show thread has ended (closing, or the window gone): `frame` is the caller's
 
 // Deliver to a plane of `win` (a window of this task). Waits for the show
 // thread's verdict: 0, the plane made; OS64_MEDIA_NO_PLANE, none (the
@@ -277,7 +285,8 @@ typedef struct {
 // os64_media_player_shown_done: its pixels do not change and it is not
 // reused, while the pace moves on. Moves nothing in the pace. At most two
 // views are held at once (OS64_MEDIA_BUSY past them); OS64_MEDIA_BAD_ARGS
-// with no picture yet. A view is dead after close.
+// with no picture yet. Give every view back before close: a view is dead
+// after it.
 int os64_media_player_shown(os64_media_player_t *p, os64_media_player_view_t *out);
 void os64_media_player_shown_done(os64_media_player_t *p, os64_media_player_view_t *view);
 

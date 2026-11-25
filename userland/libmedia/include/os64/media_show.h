@@ -20,7 +20,11 @@
 //   a placed plane's size): the plane is STALE until the caller hides it.
 // - Not placed, a pick beyond the plane's capacity asks for a new plane
 //   (RECREATE) before its publish.
-// - READY: the plane holds a picture of the size the player converts to.
+// - READY: the plane holds a picture of the size the player converts to
+//   (the size asked for, not the size of the pick: after a new size is
+//   asked, the plane is not ready until a picture of it is published).
+// - STALE: a picture of another size is picked while the plane is placed;
+//   it stays stale until the publish that gives the plane that size.
 // - CLOSING: the first pass that sees it starts a bound; the place empty,
 //   the plane is destroyed and the thread ends; still placed when the bound
 //   has passed, the thread ends with it placed and the kernel's exit path
@@ -41,6 +45,7 @@ typedef struct {
     uint32_t pic_w, pic_h;          // the picture the plane holds (0 x 0 before its first)
     uint32_t cap_w, cap_h;          // the plane's capacity
     uint32_t published;             // the serial of the pick last published, 0 none
+    uint32_t target_w, target_h;    // the size the player converts to, as the last pass said
     bool stale, ready;
     bool closing;
     int64_t closing_since;
@@ -55,6 +60,7 @@ typedef struct {
     bool gone;
     bool have;                      // a pick to consider
     uint32_t w, h, serial;          // the pick's size and serial
+    uint32_t target_w, target_h;    // the size the player converts to
 } os64_media_show_input_t;
 
 typedef struct {

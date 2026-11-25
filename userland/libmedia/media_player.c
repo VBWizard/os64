@@ -741,8 +741,24 @@ static void pick_for(os64_media_player_t *p, int64_t blank, int64_t period, int6
 }
 
 #define SHOW_CLOSING_PATIENCE_MS 50
+// Paused, a wake is a poke (a play, a seek, a size, want, and the picture
+// thread's push of the picture owed after a seek); this is its backstop.
 #define SHOW_PAUSED_PATIENCE_MS 250
 #define SHOW_START_TRIPWIRE_US 10000000
+
+// Playing: the time until the next ready picture is due, capped at a tick,
+// so a plane with no frame answers (hidden, wanted, or its window covered)
+// is kept current at the pictures' own pace. A frame answers sooner while
+// the plane is shown. Under the lock.
+static uint32_t show_patience_ms(os64_media_player_t *p)
+{
+    const os64_media_pictures_entry_t *next = os64_media_pictures_peek(&p->ready, 0);
+    if (next == NULL)
+        return OS64_MEDIA_PLAYER_TICK_US / 1000;
+    int64_t clock = os64_media_clock_read(&p->clock, now_us());
+    int64_t ms = next->at > clock ? (next->at - clock) * 1000 / RATE : 0;
+    return ms < 1 ? 1 : ms > OS64_MEDIA_PLAYER_TICK_US / 1000 ? OS64_MEDIA_PLAYER_TICK_US / 1000 : (uint32_t)ms;
+}
 
 // The plane's creator, and from the plane's making the pace's one owner
 // (P2's design state § 1 has the pass, step by step). Every GUI call and
@@ -788,7 +804,7 @@ static int64_t show_thread(void *arg)
     for (;;) {
         os64_lock_acquire(&p->lock);
         uint32_t patience = p->quit ? SHOW_CLOSING_PATIENCE_MS
-                          : p->state == OS64_MEDIA_PLAYER_PLAYING ? OS64_MEDIA_PLAYER_TICK_US / 1000
+                          : p->state == OS64_MEDIA_PLAYER_PLAYING ? show_patience_ms(p)
                           : SHOW_PAUSED_PATIENCE_MS;
         os64_lock_release(&p->lock);
 
@@ -807,8 +823,10 @@ static int64_t show_thread(void *arg)
             if (p->last_number != 0 && f.number > p->last_number + 1)
                 p->frames_missed += f.number - p->last_number - 1;
             p->last_number = f.number;
-        } else {
-            p->last_number = 0;   // a pause or a wait not answered is no missed frame
+        } else if (!(rc == 0 && f.why == OS64_GUI_PLANE_POKED)) {
+            // A pause, or a wait its patience ended (the plane not shown),
+            // is no missed frame; a poke changes nothing of the count.
+            p->last_number = 0;
         }
         if (rc == 0 && f.why == OS64_GUI_PLANE_PATIENCE)
             p->waits_patience++;
@@ -819,7 +837,8 @@ static int64_t show_thread(void *arg)
         if (!closing && !gone)
             pick_for(p, blank, period, now, &c);
         os64_media_show_input_t in = {.now = now, .placed = placed, .wanted = p->plane_wanted, .closing = closing,
-                                      .gone = gone, .have = p->shown != NULL && !closing};
+                                      .gone = gone, .have = p->shown != NULL && !closing,
+                                      .target_w = p->pic_w, .target_h = p->pic_h};
         if (in.have) {
             in.w = p->shown->w;
             in.h = p->shown->h;
@@ -836,10 +855,18 @@ static int64_t show_thread(void *arg)
         unlock(p);
         collect_release(p, &c);
 
+        if (act.recreate && os64_gui_plane_destroy(win, (uint32_t)name) != 0) {
+            // The place was empty at the wait, but the caller placed the
+            // plane since: it stays, and the next pass sees it placed.
+            os64_lock_acquire(&p->lock);
+            frame_unpin(p, pin, &c);
+            unlock(p);
+            collect_release(p, &c);
+            continue;
+        }
         if (act.recreate) {
-            // The place is empty (the core asks only then): the old stores go
-            // to the task's kept ones, and a plane of the class this size needs.
-            (void)os64_gui_plane_destroy(win, (uint32_t)name);
+            // The old stores go to the task's kept ones, and a plane of the
+            // class this size needs.
             name = os64_gui_plane_create(win, in.w, in.h);
             got = name > 0 ? os64_gui_plane_surface(win, (uint32_t)name, &surf) : name;
             os64_lock_acquire(&p->lock);
@@ -862,6 +889,7 @@ static int64_t show_thread(void *arg)
             p->plane_name = (uint32_t)name;
             p->plane_canvas = surf.pixels;
             p->plane_pitch = surf.pitch_px;
+            look(p);   // the plane's name changed
             unlock(p);
         }
         if (act.publish) {
@@ -911,7 +939,7 @@ int os64_media_player_plane(os64_media_player_t *p, int64_t win)
     if (h < 0) {
         os64_lock_acquire(&p->lock);
         p->plane_state = OS64_MEDIA_PLANE_REFUSED;
-        p->plane_refusal = OS64_MEDIA_NO_MEMORY;
+        p->plane_refusal = 0;   // no GUI answer: the thread could not start
         os64_lock_release(&p->lock);
         os64_bell_close(&p->show_bell);
         return OS64_MEDIA_NO_PLANE;
@@ -936,6 +964,7 @@ int os64_media_player_plane(os64_media_player_t *p, int64_t win)
     }
     if (state != OS64_MEDIA_PLANE_ON) {
         (void)os64_thread_join((int32_t)h, NULL);
+        os64_close((int32_t)h);   // a join only reads the handle
         os64_lock_acquire(&p->lock);
         p->plane_state = OS64_MEDIA_PLANE_REFUSED;
         os64_lock_release(&p->lock);
@@ -1046,6 +1075,12 @@ static void finish(os64_media_player_t *p)
     os64_lock_release(&p->lock);
     collect_release(p, &c);
     os64_lock_acquire(&p->lock);
+    // A view is dead after close (os64/media_player.h): a pin still held
+    // must not keep its picture from going back.
+    for (int i = 0; i < FRAMES; i++) {
+        p->frame[i].pins = 0;
+        p->frame[i].retire_owed = false;
+    }
     os64_media_pictures_flush(&p->ready, release_ready, ready_context);
     frame_retire(p, p->shown, &c);
     frame_retire(p, p->reconverted, &c);
@@ -1337,12 +1372,17 @@ static int64_t decoding_thread(void *arg)
     (void)os64_bell_ring(&p->picture_bell);
     unlock(p);
     os64_free(pcm);
-    if (p->picture_thread > 0)
+    // A join only reads a thread's handle; each is closed after it.
+    if (p->picture_thread > 0) {
         (void)os64_thread_join((int32_t)p->picture_thread, NULL);
+        os64_close((int32_t)p->picture_thread);
+    }
     // The show thread ends after its plane is destroyed (the caller hid it),
     // or at the closing bound with it placed: `finished` comes after both.
-    if (p->show_thread > 0)
+    if (p->show_thread > 0) {
         (void)os64_thread_join((int32_t)p->show_thread, NULL);
+        os64_close((int32_t)p->show_thread);
+    }
     for (;;) {
         os64_lock_acquire(&p->lock);
         bool gone = !p->voiced || p->voice.gone;
@@ -1403,12 +1443,17 @@ int os64_media_player_create(const os64_media_player_config_t *cfg, os64_media_p
     p->loaded = cfg->loaded;
     p->last_frame_call = now_us();
     // The decoding thread is never joined: it frees the player as its last
-    // act. A start that reports failure may still be running (the kernel,
-    // out of handles, starts it detached): the player is then left to it,
-    // never freed here.
+    // act. A thread's handle is reserved before the thread exists, so a
+    // start that reports failure started nothing, and the player is freed.
     int64_t h = os64_thread(decoding_thread, p);
-    if (h < 0)
+    if (h < 0) {
+        if (!p->bell_borrowed)
+            os64_bell_close(&p->decode_bell);
+        os64_bell_close(&p->picture_bell);
+        os64_free(p->pcm_storage);
+        os64_free(p);
         return OS64_MEDIA_NO_MEMORY;
+    }
     os64_close((int32_t)h);
     *out = p;
     return 0;

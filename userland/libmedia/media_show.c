@@ -29,10 +29,12 @@ os64_media_show_act_t os64_media_show_decide(os64_media_show_t *s, const os64_me
         return act;
     }
     bool stale_was = s->stale, ready_was = s->ready;
+    s->target_w = in->target_w;
+    s->target_h = in->target_h;
+    s->ready = s->pic_w == in->target_w && s->pic_h == in->target_h;
     if (in->have) {
         bool same = in->w == s->pic_w && in->h == s->pic_h;
         bool fresh = in->serial != s->published;
-        s->ready = same;
         if (in->placed) {
             // The kernel keeps a placed plane's size: another size waits for
             // the caller's hide.
@@ -61,7 +63,7 @@ bool os64_media_show_published(os64_media_show_t *s, bool done, uint32_t w, uint
     s->pic_h = h;
     s->published = serial;
     s->stale = false;
-    s->ready = true;
+    s->ready = w == s->target_w && h == s->target_h;
     s->publishes++;
     return s->stale != stale_was || s->ready != ready_was;
 }

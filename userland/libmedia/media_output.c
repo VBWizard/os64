@@ -954,6 +954,7 @@ int os64_media_output_destroy(os64_media_output_t *o)
     (void)os64_bell_ring(&o->bell);
     os64_lock_release(&o->lock);
     (void)os64_thread_join((int32_t)o->thread, NULL);
+    os64_close((int32_t)o->thread);   // a join only reads the handle
     os64_bell_close(&o->bell);
     os64_free(o->buf);
     os64_free(o->carry);
