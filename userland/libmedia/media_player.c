@@ -41,7 +41,11 @@
 #define RATE OS64_AUDIO_RATE
 #define DECODED_DEPTH 8
 #define READY_DEPTH 3
-#define FRAMES (READY_DEPTH + 3)          // the ready ones, the one shown, one being converted, one reconverted
+#define SHOWN_VIEWS 2                     // os64_media_player_shown's pins held at once, at most
+// The ready ones, the one shown, one being converted, one reconverted, and
+// one for each view `shown` may hold (a pinned frame retired is not free
+// until it is given back). Frames are allocated at first use.
+#define FRAMES (READY_DEPTH + 3 + SHOWN_VIEWS)
 #define PCM_FRAMES (2u * RATE)            // two seconds of sound queued
 #define CHUNK_FRAMES 4096u                // what the decoding thread asks for at once
 #define BUFFER_SOUND (RATE / 2u)          // buffering ends with this much sound queued
@@ -993,7 +997,7 @@ int os64_media_player_shown(os64_media_player_t *p, os64_media_player_view_t *ou
         os64_lock_release(&p->lock);
         return OS64_MEDIA_BAD_ARGS;
     }
-    if (p->pinned >= 2) {
+    if (p->pinned >= SHOWN_VIEWS) {
         os64_lock_release(&p->lock);
         return OS64_MEDIA_BUSY;
     }
@@ -1695,7 +1699,9 @@ void os64_media_player_facts(os64_media_player_t *p, os64_media_player_facts_t *
     f.plane_cap_h = p->show.cap_h;
     f.plane_pic_w = p->show.pic_w;
     f.plane_pic_h = p->show.pic_h;
-    f.plane_ready = p->show.ready;
+    // Against the size asked as it is now: a size asked since the show
+    // thread's last pass is not ready, whatever that pass said.
+    f.plane_ready = p->show.ready && p->show.pic_w == p->pic_w && p->show.pic_h == p->pic_h;
     f.plane_stale = p->show.stale;
     f.plane_published = p->show.publishes;
     f.plane_recreates = p->show.recreates;
