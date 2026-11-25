@@ -5290,10 +5290,11 @@ static uint64_t syscall_thread(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	}
 	if (!handle_commit_reserved(task, h, HANDLE_THREAD, j))
 	{
-		// Commit refuses only a slot that is not this call's reservation
-		// (handle.h), which nothing but this call moves. Were it ever to,
-		// the thread already runs: detached, with no handle to answer for
-		// it.
+		// Cannot happen: commit refuses only a slot that is not this call's
+		// reservation (handle.h), and nothing but this call writes it — a
+		// close never writes a reserved slot, and teardown's sweep passes
+		// it by. Were it ever to, the thread already runs: detached, with
+		// no handle to answer for it.
 		thread_join_close(j);
 		return SYSCALL_RESULT_INVALID;
 	}

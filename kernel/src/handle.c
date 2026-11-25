@@ -747,8 +747,8 @@ bool handle_close_rc(struct task *t, int h, int *rc, bool *deferred)
 	// nature — it needs two threads inside the same slot — which is why it
 	// took a busy machine to show up and did not reproduce on demand.
 	//
-	// The claim is an ATOMIC EXCHANGE to a CLOSING sentinel, and the SENTINEL
-	// (not HANDLE_NONE) is the fix's whole point (tightened twice):
+	// The claim moves the slot to a CLOSING sentinel, and the SENTINEL (not
+	// HANDLE_NONE) is the fix's whole point (tightened three times):
 	//
 	//   Round 1 exchanged straight to HANDLE_NONE, which shut the two-CLOSERS
 	//   race (xchg makes exactly one win). But NONE means "free", and
@@ -764,33 +764,30 @@ bool handle_close_rc(struct task *t, int h, int *rc, bool *deferred)
 	//   console handle's object is legitimately NULL, so it cannot be one);
 	//   a loser sees CLOSING or NONE and bails.
 	//
+	//   It was a blind exchange, putting back what it should not have taken.
+	//   That wrote CLOSING, for a few instructions, over a free slot or a
+	//   RESERVED one whose number a sibling's close had raced to — and a
+	//   reservation's owner does not take the lock, so its commit or cancel
+	//   in that window failed (Fable's read of H0). The claim is now a LOOK
+	//   AND A CAS: under the lock a free, reserved or closing slot is left
+	//   untouched, and a live type is changed to CLOSING. Under the lock only
+	//   another closer can change a live type, and closers are excluded, so
+	//   the CAS succeeds; a close never writes a slot it does not own.
+	//
 	// UNDER handleLock (the file header's § The pin): the claim is what a
-	// handle_pin in progress must not straddle. The lock covers the exchange
+	// handle_pin in progress must not straddle. The lock covers the claim
 	// and the read of `object` only — the release below can sleep in the
 	// VFS, and it does not need the lock, because a pin that got in first
 	// already holds its own reference on the object.
 	task_t *task = (task_t *)t;
 	uint64_t lockFlags = spinlock_acquire_irqsave(&task->handleLock);
-	handle_type_t type = __atomic_exchange_n(&handle->type, HANDLE_CLOSING, __ATOMIC_ACQ_REL);
-	if (type == HANDLE_NONE)
+	handle_type_t type = __atomic_load_n(&handle->type, __ATOMIC_ACQUIRE);
+	// Free, a reservation (its owner's alone), or another closer's: none is
+	// ours to write.
+	if (type == HANDLE_NONE || type == HANDLE_RESERVED || type == HANDLE_CLOSING ||
+	    !__atomic_compare_exchange_n(&handle->type, &type, HANDLE_CLOSING, false,
+	                                 __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
 	{
-		// We stamped CLOSING onto an already-free slot — undo it so alloc can
-		// have it back. (Nobody else can be mid-close on a NONE slot.)
-		__atomic_store_n(&handle->type, HANDLE_NONE, __ATOMIC_RELEASE);
-		spinlock_release_irqrestore(&task->handleLock, lockFlags);
-		return false;
-	}
-	if (type == HANDLE_CLOSING)
-	{
-		spinlock_release_irqrestore(&task->handleLock, lockFlags);
-		return false;   // another closer owns it — must NOT revert, that frees it mid-close
-	}
-	if (type == HANDLE_RESERVED)
-	{
-		// The number was closed and handed to a reservation between our
-		// liveness look and the exchange. A reservation is its owner's
-		// alone: give it back untouched.
-		__atomic_store_n(&handle->type, HANDLE_RESERVED, __ATOMIC_RELEASE);
 		spinlock_release_irqrestore(&task->handleLock, lockFlags);
 		return false;
 	}

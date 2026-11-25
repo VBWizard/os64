@@ -45,7 +45,10 @@ bool test_handle_table_grows(void)
           handle_alloc(t, HANDLE_CONSOLE_OUT, NULL) == 900 && handle_alloc(t, HANDLE_CONSOLE_OUT, NULL) == 1103;
     /* A reservation in an added block commits and cancels like one in block 0. */
     int r = handle_reserve(t);
-    ok &= r == 1104 && handle_cancel_reserved(t, r) && handle_reserve(t) == 1104;
+    /* A close never writes a reservation: it answers false and the
+     * owner's cancel and commit still find it theirs. */
+    ok &= r == 1104 && !handle_close(t, r) && handle_entry(t, r)->type == HANDLE_RESERVED;
+    ok &= handle_cancel_reserved(t, r) && handle_reserve(t) == 1104;
     ok &= handle_commit_reserved(t, 1104, HANDLE_CONSOLE_IN, NULL) && handle_entry(t, 1104)->type == HANDLE_CONSOLE_IN;
     handle_t shared;
     ok &= handle_share(t, 700, &shared) && shared.type == HANDLE_CONSOLE_OUT;
