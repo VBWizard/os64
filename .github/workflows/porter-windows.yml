@@ -1,0 +1,27 @@
+name: Porter Windows service
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/porter-windows.yml
+      - tools/os64serve.py
+      - tools/porter_store.py
+      - tools/test_porter.py
+
+permissions:
+  contents: read
+
+jobs:
+  loopback:
+    runs-on: windows-2022
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: python -m unittest discover -s tools -p test_porter.py -k FileSnapshotTests
+      - run: |
+          for ($attempt = 1; $attempt -le 12; $attempt++) {
+            python -m unittest discover -s tools -p test_porter.py -k LoopbackTests
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }

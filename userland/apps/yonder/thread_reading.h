@@ -136,6 +136,9 @@ typedef struct {
     // The intersection steps: how many, the observed targets they walked,
     // and the most one walked.
     uint64_t observed_steps, observed, observed_most;
+    // The loop's every-turn checks (the dom's os64_dom_checks_visited): the
+    // turns told, the records visited in them, and the most in one turn.
+    uint64_t checked_turns, checked, checked_most;
 } yonder_tr_t;
 
 // The reading starts at `now`, its counts zero, the collector's and the
@@ -156,6 +159,8 @@ void yonder_tr_inside(yonder_tr_t *t, yonder_tr_in_t in, uint64_t ticks);
 void yonder_tr_timer(yonder_tr_t *t, const char *site, uint64_t ticks, uint64_t layouts, uint64_t layout_ticks);
 // An intersection step that walked `targets` observed targets.
 void yonder_tr_intersections(yonder_tr_t *t, uint64_t targets);
+// A turn whose every-turn checks visited `records` records.
+void yonder_tr_checked(yonder_tr_t *t, uint64_t records);
 
 // The lines, written into `out` (cut to `cap`, always terminated), for the
 // reading as it stands at `now` with the call under way ended there (the
@@ -175,7 +180,9 @@ void yonder_tr_collector_line(const yonder_tr_t *t, const yonder_tr_collector_t 
                               uint64_t limit, uint64_t per_ms, char *out, size_t cap);
 
 // The record walks a turn can make whose size the page sets: the
-// intersection steps and the targets they walked; the timer list, live now,
+// intersection steps and the targets they walked; the records the loop's
+// every-turn checks visited, over the turns told, and the most in one; the
+// timer list, live now,
 // with the arms since the reading began and the entries they walked past
 // (`list_now` against the reading's start, or from its own start when it is
 // behind it: another binding's); and the values the binding
