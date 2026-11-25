@@ -190,6 +190,14 @@ bool test_planes(void)
 	rc = gui_window_publish_edits(handle, &short_damage, &e, 1);
 	check(rc == OS64_GUI_ERR_PLANE_DAMAGE, "damage short of the clip refused (rule 2)", rc);
 	check(plane_state(handle, pa) == GUI_PLANE_PICTURED, "a refused commit changed nothing", 0);
+	// A clip taller than any window could be, refused before its overlays'
+	// area is counted (it would walk every row between them).
+	os64_gui_plane_edit_t tall = place_edit(pa, 0, 0, 2);
+	tall.clip = (os64_gui_rect_t){0, 0, 1, INT32_MAX};
+	tall.overlay[0] = (os64_gui_rect_t){0, 0, 1, 1};
+	tall.overlay[1] = (os64_gui_rect_t){0, INT32_MAX - 1, 1, 1};
+	rc = gui_window_publish_edits(-1, NULL, &tall, 1);
+	check(rc == OS64_GUI_ERR_PLANE_OVERLAP, "a clip past any window's size refused, even on no window", rc);
 	// An overlay outside its clip.
 	os64_gui_plane_edit_t out_of_clip = place_edit(pa, 20, 30, 1);
 	out_of_clip.overlay[0].x = 0;

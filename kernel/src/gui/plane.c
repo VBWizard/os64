@@ -406,6 +406,9 @@ int64_t gui_plane_create(int64_t handle, uint32_t width, uint32_t height)
 		kfree(fresh);
 		return win == NULL ? err : refuse(GUI_PLANE_REFUSED_NO_SLOT, GUI_ERR_NO_RESOURCES);
 	}
+	// The window's own id, never reused: a handle can be, by a window made
+	// while the lock is let go below.
+	uint32_t win_id = win->id;
 	plane_store_t *store = kept_pair_locked(task, cap_w, cap_h);
 	if (store != NULL) {
 		store->in_use = true;
@@ -446,8 +449,13 @@ int64_t gui_plane_create(int64_t handle, uint32_t width, uint32_t height)
 	}
 
 	// The window and its slot again: either may have changed while the
-	// lock was let go. A loser keeps its pair for the task.
+	// lock was let go, and the handle may now name another window. A loser
+	// keeps its pair for the task.
 	win = gui_handle_owned_locked(handle, &err);
+	if (win != NULL && win->id != win_id) {
+		win = NULL;
+		err = GUI_ERR_INVALID_HANDLE;
+	}
 	int slot = win ? free_slot(win) : -1;
 	if (slot < 0) {
 		store->in_use = false;
@@ -600,8 +608,11 @@ static bool place_same(const pc_place_t *a, const pc_place_t *b)
 }
 
 // What can be checked of an edit list with no window: the count, the
-// reserved fields, each place's arithmetic (plane_place_valid with the
-// content's bounds left out), and no plane named twice.
+// reserved fields, each place's arithmetic, and no plane named twice. A
+// place is held to the largest content any window can have (wm_dim_max), so
+// its overlay area is counted over rows no window could exceed: against
+// INT32_MAX a clip a pixel wide and INT32_MAX tall would have the count walk
+// two billion rows before any window was looked up.
 static int64_t edits_shape(const os64_gui_plane_edit_t *edits, uint32_t count)
 {
 	if (count > OS64_GUI_PLANE_EDITS_MAX || (count > 0 && edits == NULL))
@@ -624,7 +635,7 @@ static int64_t edits_shape(const os64_gui_plane_edit_t *edits, uint32_t count)
 		place.noverlays = e->noverlays;
 		for (uint32_t k = 0; k < e->noverlays; k++)
 			place.overlay[k] = to_pc(e->overlay[k]);
-		if (!plane_place_valid(&place, (uint32_t)INT32_MAX, (uint32_t)INT32_MAX, GUI_PLANE_OVERLAY_PIXELS))
+		if (!plane_place_valid(&place, wm_dim_max(), wm_dim_max(), GUI_PLANE_OVERLAY_PIXELS))
 			return refuse(GUI_PLANE_REFUSED_OVERLAP, OS64_GUI_ERR_PLANE_OVERLAP);
 	}
 	return 0;
