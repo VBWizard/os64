@@ -391,7 +391,7 @@ READING A HANDLE WITH PATIENCE.
 
 A pipe costs two handles and a 64 KiB ring (`PIPE_CAPACITY`) for a
 one-bit message. The handle budget says that is too dear here: a task has
-64 handles (`OS64_TASK_HANDLES`), yonder's baseline holds about nineteen
+64 handles without its table growing (`OS64_TASK_HANDLES`), yonder's baseline holds about nineteen
 (its three standard handles, the work pool's two pipes, twelve worker
 thread handles), the pool keeps up to sixteen, and thirteen fetches may be
 in flight at once (twelve workers and a synchronous XHR on the window

@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "os64/file.h"
+#include "handle_blocks.h"
 
 // handle.h — the per-task handle table.
 //
@@ -21,11 +22,9 @@
 // ONE handle type for everything (files, pipes, later windows) — a handle is a
 // tagged reference to a kernel object, and read/write dispatch on the tag.
 
-// Room for a program that works in parallel: a work pool's pipes and
-// threads, and then a socket per fetch in flight, is well past sixteen
-// before much has been fetched. A slot costs 16 bytes of task_t. The size
-// is the ABI's, because userland derives limits from it.
-#define TASK_MAX_HANDLES OS64_TASK_HANDLES
+// THE TABLE GROWS (handle_blocks.h): block 0 is inside the task, the rest
+// are added as the task needs them, up to TASK_HANDLES_CEILING. A number,
+// once handed out, names the same entry for the task's whole life.
 
 typedef enum handle_type
 {
@@ -91,7 +90,9 @@ struct task;
 // Seed a task's table: 0/1/2 = console in/out/err, everything else free.
 void handle_table_init(struct task *t);
 
-// Claim the lowest free slot. Returns the handle, or -1 if the table is full.
+// Claim the lowest free slot, adding a block when every one is taken.
+// Returns the handle, or -1 at the ceiling or when a block could not be had
+// (counted as a refusal).
 int handle_alloc(struct task *t, handle_type_t type, void *object);
 
 // Two-phase allocation for operations that must know a return slot exists
@@ -155,6 +156,15 @@ bool handle_close(struct task *t, int h);
 // verdict belongs to an operation still in flight on another thread, and
 // this close does not have it.
 bool handle_close_rc(struct task *t, int h, int *rc, bool *deferred);
+
+// Where handle `n` of `t` lives, or NULL for a number no entry of the table
+// has room for. The entry may be free: the caller reads its type.
+handle_t *handle_entry(struct task *t, int n);
+// The numbers the table has room for now (block 0 and every block added).
+uint32_t handle_table_room(struct task *t);
+// The blocks added past block 0, freed with the task (task_destroy). Nothing
+// may look in the table afterwards.
+void handle_table_free(struct task *t);
 
 // Close every handle a task holds. Called on task exit — WITHOUT this, a task
 // that dies holding a pipe end keeps that end open forever, and the process on

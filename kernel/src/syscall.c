@@ -5270,19 +5270,29 @@ static uint64_t syscall_thread(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		return SYSCALL_RESULT_BAD_USER_DATA;
 	}
 
-	thread_join_t *j = thread_join_create(task, arg0, arg1, arg2);
-	if (j == NULL)
-		return SYSCALL_RESULT_INVALID;
-
-	int h = handle_alloc(task, HANDLE_THREAD, j);
+	// THE HANDLE BEFORE THE THREAD: thread_join_create submits the thread to
+	// the scheduler, so a handle asked for afterwards could be refused with
+	// the thread already running, and a caller told "no thread" would have
+	// one. Reserved first, a refusal creates nothing; a create that fails
+	// gives the reservation back; an error from this call means no thread.
+	int h = handle_reserve(task);
 	if (h < 0)
 	{
-		// Out of handle slots. The thread is ALREADY RUNNING — it was
-		// submitted to the scheduler inside thread_join_create — so this
-		// drops the handle's reference and lets it run detached rather
-		// than pretending it never started.
-		printd(DEBUG_THREAD, "syscall_thread: %s out of handles; thread 0x%08lx runs detached\n",
-		       task->exename, j->threadID);
+		printd(DEBUG_THREAD, "syscall_thread: %s out of handles; no thread made\n", task->exename);
+		return SYSCALL_RESULT_INVALID;
+	}
+	thread_join_t *j = thread_join_create(task, arg0, arg1, arg2);
+	if (j == NULL)
+	{
+		(void)handle_cancel_reserved(task, h);
+		return SYSCALL_RESULT_INVALID;
+	}
+	if (!handle_commit_reserved(task, h, HANDLE_THREAD, j))
+	{
+		// The task's teardown cancelled the reservation while the thread was
+		// being made: the task is dying, the handle is gone, and the thread
+		// runs detached until the teardown reaches it (DEBTS: a dying task
+		// can still gain a thread).
 		thread_join_close(j);
 		return SYSCALL_RESULT_INVALID;
 	}

@@ -349,16 +349,22 @@
 		struct arena *pta_buildingChildArena;
 		uintptr_t taskMemoryNextVirt;  // Next available virtual address for task-specific allocations
 		dlist_t* shared_objects;       // shared_object_t* this task depends on (dynamic linking, bookkeeping only — see shared_object.c)
-		// The per-task handle table (handle.h). Handles 0/1/2 are stdin/stdout/
-		// stderr and start out wired to the console; the shell redirects them to
-		// pipe ends when it builds a pipeline. The legacy void* stdin/stdout/
-		// stderr fields above are the OLD (unused) placeholders from the first
-		// OS — this array is the real thing.
-		handle_t handles[TASK_MAX_HANDLES];
+		// The per-task handle table (handle.h; handle_blocks.h says how a
+		// number finds its entry). Handles 0/1/2 are stdin/stdout/stderr and
+		// start out wired to the console; the shell redirects them to pipe
+		// ends when it builds a pipeline. The legacy void* stdin/stdout/stderr
+		// fields above are the OLD (unused) placeholders from the first OS.
+		// `handles` is block 0, the task's own; `handleBlocks` are the blocks
+		// added as the task needed them, NULL until then, each installed once
+		// under handleLock and freed only by task_destroy.
+		handle_t handles[OS64_TASK_HANDLES];
+		handle_t *handleBlocks[TASK_HANDLE_BLOCKS];
+		handle_counts_t handleCounts;
 		// Makes a handle's resolve-and-reference one operation against a
-		// sibling's close (handle.c § The pin). Held for a few instructions
-		// by handle_pin and by handle_close's claim, never across a park or
-		// a release; the object's own lock nests INSIDE it, never outside.
+		// sibling's close (handle.c § The pin), and orders a block's install
+		// against teardown's walk (handle.c § The blocks). Held for a few
+		// instructions, never across a park, a release or an allocation; the
+		// object's own lock nests INSIDE it, never outside.
 		spinlock_t handleLock;
 		// The controlling terminal (tty.h): which virtual terminal this task
 		// reads, writes, and answers Ctrl+C on. Inherited from the parent at

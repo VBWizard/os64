@@ -1176,6 +1176,9 @@ static void task_destroy(task_t *t)
 		       shared_retained, shared_retained / PAGE_SIZE, t->taskID, t->exename);
 	}
 
+	// The handle table's added blocks (handle.h): every thread is gone and
+	// every hold on the task released, so nothing can look in it again.
+	handle_table_free(t);
 	kfree(t);
 
 	// Last act of the funeral, after the final free: everything this corpse
