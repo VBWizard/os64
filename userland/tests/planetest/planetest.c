@@ -27,7 +27,11 @@
 // pixel copied), an overlay strip whose content pixels are translucent (each
 // one blended), and the same strip with content pixels that are wholly
 // opaque or wholly see-through (each one read and found to need no blend,
-// which is what a scrim mostly is). Each phase also prints the worst hold of
+// which is what a scrim mostly is). Before them, with the plane hidden, the
+// window repaints the same hole itself at the same rate, so a plane's
+// copied pixel can be set beside the content pixel it replaces: both are
+// priced the same way, the compositor's hold over the pixels it drew.
+// Each phase also prints the worst hold of
 // kGuiLock by the plane, publish and composite sites: /sys/gui's worst holds
 // start again at every read, and this fixture's own reads bracket a phase.
 //
@@ -375,6 +379,30 @@ static bool composed(uint32_t plane, composed_t *out)
     return true;
 }
 
+// The compositor's work so far: the pixels it drew and its hold of kGuiLock.
+typedef struct {
+    uint64_t pixels, hold_us;
+} compositor_t;
+
+static bool compositor(compositor_t *out)
+{
+    const char *at;
+    if (!find(s_text, "compositor:", &at) || !find(at, "rectangles,", &at))
+        return false;
+    out->pixels = number(&at);
+    if (!find(s_text, "lock composite:", &at) || !find(at, "us waiting,", &at))
+        return false;
+    out->hold_us = number(&at);
+    return true;
+}
+
+// Picoseconds a pixel drawn, from two readings of the compositor.
+static uint64_t compositor_ps(const compositor_t *a, const compositor_t *b)
+{
+    uint64_t px = b->pixels - a->pixels;
+    return px ? (b->hold_us - a->hold_us) * 1000000 / px : 0;
+}
+
 static bool read_pairs(uint64_t *pairs)
 {
     const char *at;
@@ -395,6 +423,8 @@ static const char *const kPhaseSights[] = {
 
 // One phase: placed with `strip`, its time of pictures, the counts' rise
 // and the worst holds, then the glass checked.
+static compositor_t s_comp_a, s_comp_b;   // the last phase's two readings
+
 static bool phase(os64_draw_ctx_t *ctx, uint32_t plane, int strip, composed_t *rise)
 {
     if (L == &kWatch)
@@ -404,16 +434,42 @@ static bool phase(os64_draw_ctx_t *ctx, uint32_t plane, int strip, composed_t *r
     int64_t rc = os64_gui_window_publish_edits(s_win, NULL, &e, 1);
     CHECK(rc == 0);
     composed_t a, b;
-    if (rc != 0 || !read_gui() || !composed(plane, &a))
+    if (rc != 0 || !read_gui() || !composed(plane, &a) || !compositor(&s_comp_a))
         return false;
     os64_sleep(L->phase_ms);
-    if (!read_gui() || !composed(plane, &b))
+    if (!read_gui() || !composed(plane, &b) || !compositor(&s_comp_b))
         return false;
     *rise = (composed_t){b.copied - a.copied, b.blended - a.blended, b.opaque - a.opaque, b.ns - a.ns};
     os64_printf("planetest: %s: worst holds of kGuiLock: plane %lu us, publish %lu us, composite %lu us\n",
                 kPhaseNames[strip], worst_hold("plane"), worst_hold("publish"), worst_hold("composite"));
     bool seen = glass_check(strip, kPhaseNames[strip]);
     CHECK(seen);
+    return true;
+}
+
+// The plane hidden, the window repaints the hole itself with the same
+// pattern at the picture thread's rate: the content's price, through the
+// compositor's ordinary blit.
+static bool content_phase(os64_draw_ctx_t *ctx, uint64_t *ps)
+{
+    compositor_t a, b;
+    os64_gui_rect_t hole = {(int32_t)L->hole_x, (int32_t)L->hole_y, (int32_t)L->pic_w, (int32_t)L->pic_h};
+    if (!read_gui() || !compositor(&a))
+        return false;
+    int64_t until = os64_micros() + (int64_t)L->phase_ms * 1000;
+    for (uint32_t frame = 0; os64_micros() < until; frame++) {
+        os64_gui_surface_t *c = &ctx->surf;
+        for (uint32_t y = 0; y < L->pic_h; y++) {
+            uint32_t *row = c->pixels + (size_t)(L->hole_y + y) * c->pitch_px + L->hole_x;
+            for (uint32_t x = 0; x < L->pic_w; x++)
+                row[x] = 0xFF000000u | picture_px(x, y, frame);
+        }
+        os64_gui_window_publish(s_win, &hole);
+        os64_sleep(16);
+    }
+    if (!read_gui() || !compositor(&b))
+        return false;
+    *ps = compositor_ps(&a, &b);
     return true;
 }
 
@@ -507,9 +563,13 @@ int main(int argc, char **argv)
     os64_gui_plane_edit_t bogus = place(plane + 1, STRIP_NONE);
     CHECK(os64_gui_window_publish_edits(s_win, NULL, &bogus, 1) == OS64_GUI_ERR_NO_PLANE);
 
+    uint64_t content_ps = 0;
+    bool content_priced = content_phase(&ctx, &content_ps);
+    CHECK(content_priced);
     composed_t copy = {0}, blend = {0}, read = {0};
     bool priced = phase(&ctx, plane, STRIP_NONE, &copy);
     CHECK(priced && copy.copied > 0);
+    uint64_t plane_ps = priced ? compositor_ps(&s_comp_a, &s_comp_b) : 0;
     // While placed: neither the window nor the plane may go, the plane not
     // even at its creator's asking.
     CHECK(os64_gui_window_destroy(s_win) == OS64_GUI_ERR_BUSY);
@@ -533,6 +593,10 @@ int main(int argc, char **argv)
                     s_published, copy.copied + blend.copied + read.copied, blend.blended + read.blended,
                     copy.opaque + blend.opaque + read.opaque);
         print_ps("copied (no overlay):", copy_ps);
+        if (content_priced) {
+            print_ps("through the compositor's hold, the window's content repainted:", content_ps);
+            print_ps("through the compositor's hold, the plane copied:", plane_ps);
+        }
         if (blend.blended > 0) {
             uint64_t rest = blend.ns * 1000 > blend.copied * copy_ps ? blend.ns * 1000 - blend.copied * copy_ps : 0;
             print_ps("blended (translucent content):", rest / blend.blended);
