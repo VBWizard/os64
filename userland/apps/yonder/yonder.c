@@ -4566,6 +4566,11 @@ static yonder_tr_list_t tr_list(void)
     return (yonder_tr_list_t){c.live, c.arms, c.walked};
 }
 
+// A turn of the loop this long or longer is a slow one, which the reading
+// names (`slow turns reading N`): a tenth of a second held is a stutter a
+// person sees in a playing video.
+#define TR_SLOW_TURN_MS 100
+
 // The reading starts again now, on while there are page files to write it
 // to (a reading written, a page shown).
 static void tr_restart(void)
@@ -4581,6 +4586,7 @@ static void tr_restart(void)
     s_tr_checked_seen = yonder_scripts_checks_visited(g.page.scripts);
     s_tr_per_ms = counter_per_ms();
     yonder_tr_reset(&s_tr, (int64_t)cycles(), &c, &l);
+    yonder_tr_slow(&s_tr, TR_SLOW_TURN_MS * s_tr_per_ms, TR_SLOW_TURN_MS);
 }
 
 // The records the page's every-turn checks visited this turn, told the
@@ -10510,8 +10516,8 @@ static void diag_paint(Page *p)
 }
 
 // Where the thread went in reading `n` (s_tr): its steps and calls, its
-// timer tasks by site, the collector, and the walks whose size the page
-// sets. A collector or timer list whose page's script is not the one the
+// slow turns, its timer tasks by site, the collector, and the walks whose
+// size the page sets. A collector or timer list whose page's script is not the one the
 // reading began with (the page's script made again) is said from that
 // script's start.
 static void diag_thread_reading(Page *p, uint32_t n)
@@ -10523,6 +10529,10 @@ static void diag_thread_reading(Page *p, uint32_t n)
     yonder_tr_steps_line(&s_tr, (int64_t)cycles(), per_ms, line, sizeof(line));
     os64_snprintf(key, sizeof(key), "thread reading %u", (unsigned)n);
     yonder_diag_reading_fact(p->diag, key, line);
+    static char slow[YONDER_TR_SLOW_LINE];
+    yonder_tr_slow_line(&s_tr, per_ms, slow, sizeof(slow));
+    os64_snprintf(key, sizeof(key), "slow turns reading %u", (unsigned)n);
+    yonder_diag_reading_fact(p->diag, key, slow);
     yonder_tr_timers_line(&s_tr, per_ms, line, sizeof(line));
     os64_snprintf(key, sizeof(key), "timers reading %u", (unsigned)n);
     yonder_diag_reading_fact(p->diag, key, line);
@@ -14800,9 +14810,18 @@ static void task_said(yonder_scripts_t *host, bool was_alive, const char *what,
         yonder_tr_inside(&s_tr, YONDER_TR_IN_TASKS, spent);
         // A timer by the site that set it; the forced layouts' time is the
         // DOM's microseconds, turned into the counter's ticks.
+        uint64_t forced_ticks = forced.elapsed_us * s_tr_per_ms / 1000;
+        const char *site = os64_streq(what, "timer") ? yonder_scripts_timer_site(host) : NULL;
         if (os64_streq(what, "timer"))
-            yonder_tr_timer(&s_tr, yonder_scripts_timer_site(host), spent, forced.layouts,
-                            forced.elapsed_us * s_tr_per_ms / 1000);
+            yonder_tr_timer(&s_tr, site, spent, forced.layouts, forced_ticks);
+        // Any task, for its turn: a timer by its site as the timers line
+        // names it, the rest by kind and script as the timeline does.
+        char named[YONDER_TR_TASK_TEXT];
+        if (site != NULL)
+            os64_snprintf(named, sizeof(named), "a timer set by %s", site);
+        else
+            os64_snprintf(named, sizeof(named), "%s%s%s", what, out->source_name[0] ? " " : "", out->source_name);
+        yonder_tr_task(&s_tr, named, spent, forced.layouts, forced_ticks);
     }
     if (s_lt.on) {
         char named[YONDER_LT_TASK_MAX];

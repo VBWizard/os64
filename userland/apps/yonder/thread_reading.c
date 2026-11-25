@@ -81,6 +81,7 @@ void yonder_tr_reset(yonder_tr_t *t, int64_t now, const yonder_tr_collector_t *c
 {
     yonder_tr_call_t call = t->on ? t->call : YONDER_TR_CALLS;
     yonder_lt_step_t step = t->on ? t->step : YONDER_LT_STEPS;
+    bool turn_open = t->on && t->turn_open;
     zero(t, sizeof(*t));
     t->on = true;
     t->from = now;
@@ -96,12 +97,60 @@ void yonder_tr_reset(yonder_tr_t *t, int64_t now, const yonder_tr_collector_t *c
         t->collector_from = *collector;
     if (list != NULL)
         t->list_from = *list;
+    t->turn_open = turn_open;
+    t->turn.from = now;
 }
 
 void yonder_tr_off(yonder_tr_t *t)
 {
     t->on = false;
     t->call = YONDER_TR_CALLS;
+    t->turn_open = false;
+}
+
+// Text copied into `to` (cut to `cap`, always terminated).
+static void copy_text(char *to, size_t cap, const char *text)
+{
+    size_t n = 0;
+    while (text[n] != '\0' && n + 1 < cap) {
+        to[n] = text[n];
+        n++;
+    }
+    to[n] = '\0';
+}
+
+// The turn under way ends at `now`: a slow one has its start kept while
+// there is room, and joins the longest kept when it is longer than the
+// shortest of them.
+static void turn_end(yonder_tr_t *t, int64_t now)
+{
+    t->turn_open = false;
+    t->turn.ticks = since(t->turn.from, now);
+    t->turns_ended++;
+    if (t->slow_ticks == 0 || t->turn.ticks < t->slow_ticks)
+        return;
+    t->slow_n++;
+    t->slow_all += t->turn.ticks;
+    if (t->nstarts < YONDER_TR_SLOW_STARTS)
+        t->slow_starts[t->nstarts++] = t->turn.from;
+    uint32_t at = t->nslow;
+    if (t->nslow == YONDER_TR_SLOW_KEPT) {
+        at = 0;
+        for (uint32_t i = 1; i < t->nslow; i++)
+            if (t->slow[i].ticks < t->slow[at].ticks)
+                at = i;
+        if (t->slow[at].ticks >= t->turn.ticks)
+            return;
+    } else {
+        t->nslow++;
+    }
+    t->slow[at] = t->turn;
+}
+
+void yonder_tr_slow(yonder_tr_t *t, uint64_t ticks, uint64_t ms)
+{
+    t->slow_ticks = ticks;
+    t->slow_ms = ms;
 }
 
 void yonder_tr_call(yonder_tr_t *t, yonder_tr_call_t call, int64_t now)
@@ -112,8 +161,19 @@ void yonder_tr_call(yonder_tr_t *t, yonder_tr_call_t call, int64_t now)
         t->from = now;
         t->from_first_call = false;
     }
-    if (t->call != YONDER_TR_CALLS)
-        t->call_ticks[t->call] += since(t->call_from, now);
+    if (t->call != YONDER_TR_CALLS) {
+        uint64_t ticks = since(t->call_from, now);
+        t->call_ticks[t->call] += ticks;
+        if (t->turn_open)
+            t->turn.call_ticks[t->call] += ticks;
+    }
+    if (t->turn_open && (call == YONDER_TR_WAIT || call == YONDER_TR_DISPATCH))
+        turn_end(t, now);
+    if (call == YONDER_TR_DISPATCH) {
+        zero(&t->turn, sizeof(t->turn));
+        t->turn.from = now;
+        t->turn_open = true;
+    }
     yonder_lt_step_t step = kCall[call].step;
     if (t->call == YONDER_TR_CALLS || t->step != step)
         t->turns[step]++;
@@ -129,6 +189,20 @@ void yonder_tr_inside(yonder_tr_t *t, yonder_tr_in_t in, uint64_t ticks)
         return;
     t->in_ticks[t->step][in] += ticks;
     t->in_n[t->step][in]++;
+    if (t->turn_open) {
+        t->turn.in_ticks[in] += ticks;
+        t->turn.in_n[in]++;
+    }
+}
+
+void yonder_tr_task(yonder_tr_t *t, const char *what, uint64_t ticks, uint64_t layouts, uint64_t layout_ticks)
+{
+    if (!t->on || (t->turn.task[0] != '\0' && ticks <= t->turn.task_ticks))
+        return;
+    copy_text(t->turn.task, sizeof(t->turn.task), what != NULL && what[0] != '\0' ? what : "a task");
+    t->turn.task_ticks = ticks;
+    t->turn.task_layouts = layouts;
+    t->turn.task_layout_ticks = layout_ticks;
 }
 
 void yonder_tr_intersections(yonder_tr_t *t, uint64_t targets)
@@ -187,13 +261,7 @@ void yonder_tr_timer(yonder_tr_t *t, const char *site, uint64_t ticks, uint64_t 
         cost_add(&t->other, ticks, layouts, layout_ticks);
         return;
     }
-    char *to = t->sites[t->nsites].site;
-    size_t n = 0;
-    while (site[n] != '\0' && n + 1 < YONDER_TR_SITE_TEXT) {
-        to[n] = site[n];
-        n++;
-    }
-    to[n] = '\0';
+    copy_text(t->sites[t->nsites].site, YONDER_TR_SITE_TEXT, site);
     cost_add(&t->sites[t->nsites++].cost, ticks, layouts, layout_ticks);
 }
 
@@ -423,6 +491,131 @@ void yonder_tr_timers_line(const yonder_tr_t *t, uint64_t per_ms, char *out, siz
     if (t->unnamed.n != 0) {
         put(&o, "; with no site known: ");
         put_cost(&o, &t->unnamed, per_ms);
+    }
+}
+
+// One kept slow turn: when it began, its time, its YONDER_TR_TURN_CALLS
+// costliest calls of a millisecond or more by step (the rest summed, so the
+// line's length has a bound whatever the turn held), what ran inside it and
+// its longest task.
+static void put_turn(Out *o, const yonder_tr_t *t, const yonder_tr_turn_t *u, uint64_t per_ms)
+{
+    unsigned named = 0;
+    put_ms(o, u->ticks, per_ms);
+    put(o, " ms from ");
+    put_u(o, per_ms != 0 ? since(t->from, u->from) / per_ms : 0);
+    put(o, " ms: ");
+    bool listed[YONDER_TR_CALLS] = {false};
+    uint64_t rest = 0;
+    const char *sep = "";
+    for (;;) {
+        int c = -1;
+        for (int k = 0; k < YONDER_TR_CALLS; k++)
+            if (!listed[k] && u->call_ticks[k] != 0 && (c < 0 || u->call_ticks[k] > u->call_ticks[c]))
+                c = k;
+        if (c < 0)
+            break;
+        listed[c] = true;
+        if (per_ms == 0 || u->call_ticks[c] < per_ms || named == YONDER_TR_TURN_CALLS) {
+            rest += u->call_ticks[c];
+            continue;
+        }
+        named++;
+        put(o, sep);
+        sep = ", ";
+        put(o, yonder_lt_step_name(kCall[c].step));
+        put(o, ": ");
+        put(o, kCall[c].name);
+        put(o, " ");
+        put_ms(o, u->call_ticks[c], per_ms);
+        put(o, " ms");
+    }
+    if (rest != 0) {
+        put(o, sep);
+        put(o, *sep != '\0' ? "the other calls " : "calls of under a millisecond each, ");
+        put_ms(o, rest, per_ms);
+        put(o, " ms");
+    }
+    const char *isep = "; inside: ";
+    for (int i = 0; i < YONDER_TR_INS; i++) {
+        if (u->in_n[i] == 0)
+            continue;
+        put(o, isep);
+        isep = ", ";
+        put(o, kIn[i]);
+        put(o, " ");
+        put_u(o, u->in_n[i]);
+        put(o, " in ");
+        put_ms(o, u->in_ticks[i], per_ms);
+        put(o, " ms");
+    }
+    if (u->task[0] != '\0') {
+        put(o, "; its longest task ");
+        put(o, u->task);
+        put(o, " ");
+        put_ms(o, u->task_ticks, per_ms);
+        put(o, " ms");
+        if (u->task_layouts != 0) {
+            put(o, ", forcing ");
+            put_u(o, u->task_layouts);
+            put(o, u->task_layouts == 1 ? " layout in " : " layouts in ");
+            put_ms(o, u->task_layout_ticks, per_ms);
+            put(o, " ms");
+        }
+    }
+}
+
+void yonder_tr_slow_line(const yonder_tr_t *t, uint64_t per_ms, char *out, size_t cap)
+{
+    Out o = {out, cap, 0};
+    if (cap == 0)
+        return;
+    out[0] = '\0';
+    if (t->slow_ticks == 0) {
+        put(&o, "not judged: the counter's rate was not known when the reading began");
+        return;
+    }
+    if (t->slow_n == 0) {
+        put(&o, "none of the ");
+        put_u(&o, t->turns_ended);
+        put(&o, t->turns_ended == 1 ? " turn" : " turns");
+        put(&o, " took ");
+        put_u(&o, t->slow_ms);
+        put(&o, " ms or more");
+        return;
+    }
+    put_u(&o, t->slow_n);
+    put(&o, " of ");
+    put_u(&o, t->turns_ended);
+    put(&o, " turns took ");
+    put_u(&o, t->slow_ms);
+    put(&o, " ms or more, ");
+    put_ms(&o, t->slow_all, per_ms);
+    put(&o, " ms in all; they began at");
+    for (uint32_t i = 0; i < t->nstarts; i++) {
+        put(&o, i == 0 ? " " : ", ");
+        put_u(&o, per_ms != 0 ? since(t->from, t->slow_starts[i]) / per_ms : 0);
+    }
+    put(&o, " ms");
+    if (t->slow_n > t->nstarts) {
+        put(&o, " (the first ");
+        put_u(&o, t->nstarts);
+        put(&o, ")");
+    }
+    put(&o, "; the longest");
+    bool shown[YONDER_TR_SLOW_KEPT] = {false};
+    for (uint32_t n = 0; n < t->nslow; n++) {
+        uint32_t k = YONDER_TR_SLOW_KEPT;
+        for (uint32_t i = 0; i < t->nslow; i++)
+            if (!shown[i] && (k == YONDER_TR_SLOW_KEPT || t->slow[i].ticks > t->slow[k].ticks))
+                k = i;
+        shown[k] = true;
+        put(&o, n == 0 ? ": (1) " : "; (");
+        if (n != 0) {
+            put_u(&o, n + 1);
+            put(&o, ") ");
+        }
+        put_turn(&o, t, &t->slow[k], per_ms);
     }
 }
 

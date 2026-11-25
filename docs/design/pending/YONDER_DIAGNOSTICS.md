@@ -555,9 +555,10 @@ The timeline stops after three minutes, and its slices name the loop's
 steps but not the calls inside them. A page that grows heavier video by
 video needs every reading said, however late, and a scripts step whose
 time is more than its tasks' needs the rest named. So while yonder.conf
-names a `diagnostics` directory, each reading adds four lines:
+names a `diagnostics` directory, each reading adds five lines:
 
     thread reading 3: in 4900.0 ms the loop's steps took 4900.0 ms, busy 77%; scripts 1747.1 ms in 980 turns (a task found and run 820.4 ms 980 times, the rendering step after a task 640.2 ms 402 times, the pointer's events 210.0 ms 980 times, the other calls 76.5 ms 1960 times; inside: tasks 402 in 654.0 ms, layouts 3 in 120.0 ms, model rebuilds 402 in 590.1 ms, what tasks said 402 in 80.2 ms); waiting 1130.0 ms in 600 turns; ...
+    slow turns reading 3: 9 of 6200 turns took 100 ms or more, 3900.0 ms in all; they began at 410, 5920, 11430, 16950, 22460, 27980, 33490, 39010, 44520 ms; the longest: (1) 680.2 ms from 16950 ms: scripts: the animations and the animation frames 600.1 ms, paint: the paint 50.0 ms, the other calls 30.1 ms; inside: tasks 2 in 610.0 ms, layouts 1 in 40.0 ms, drawing 1 in 45.0 ms; its longest task animation-frame 580.0 ms, forcing 1 layout in 40.0 ms; (2) ...
     timers reading 3: 380 timer tasks in 590.2 ms, from 12 sites; tick at the page:1:131: 300 tasks, 450.0 ms (each 1.5, the most 9.0); ...
     collector reading 3: 2 runs (2 asked by the allocation threshold) in 160.0 ms, each 80.0 ms on average; walked 600000 objects, 300000 a run, and freed 7000 in cycles; the engine's heap 200.0 MiB before a run and 195.0 MiB after, on average; the next run waits for the engine's heap to reach 300.0 MiB; the script heap now 210.0 MiB of 512.0 MiB; since the script began, the longest run 90.0 ms, the most walked in one 400000
     walks reading 3: 300 intersection steps walked 90000 observed targets, 300 a step, the most 310; the every-turn checks visited 1200 records in 6200 turns, the most in one 40; the timer list: 40 live now, 380 arms walked 7600 entries to find their places, 20 an arm; the binding holds 41000 values for the engine
@@ -581,6 +582,21 @@ names a `diagnostics` directory, each reading adds four lines:
   rebuilds, what the tasks said afterwards (the status line, the record's
   line, the audit) and drawing, each with a count. They may overlap: a
   layout a task forced is inside both.
+- **The slow turns**: a TURN of the loop runs from the dispatcher's call
+  to the next call of the dispatcher or of the wait, so its time is work
+  and never sleep, and one of 100 ms or more (`TR_SLOW_TURN_MS`) is slow.
+  The line gives how many of the turns that ended were slow and their
+  time; when the first 48 began, in ms from the reading's start, so a
+  stall on a beat shows as evenly spaced starts; and the six longest,
+  whole: when each began, its four costliest calls of a millisecond or
+  more by step (the rest summed, so the line's length has a bound), what ran
+  inside it, and its longest task: a timer as
+  `a timer set by` its site, the site as the timers line keeps it, and any
+  other task by its kind and script as the timeline names it. A reading
+  whose counter rate was not known when it began judges no turn and says
+  so. A turn still under way when the
+  line is written is not in it; one under way at a restart goes on as the
+  next reading's.
 - **Timers by site**: the timer tasks by the function that set them
   (libdom's `os64_dom_timer_sites`, on with page files): its name and
   where it is defined, a script by its address and an inline one as `the
