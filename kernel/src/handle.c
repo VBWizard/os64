@@ -125,17 +125,20 @@ void handle_table_free(struct task *t)
 
 // Claim the lowest free entry from 3 up as `as` (CLOSING for an alloc,
 // RESERVED for a reservation), across every block installed: its number,
-// or -1 when every one is taken. CLAIM WITH A CAS, NOT A LOOK-THEN-STORE
+// or -1 when every one is taken, with *walked the added blocks it looked
+// in (a grow needs it: a sibling may install a block after this scan). CLAIM WITH A CAS, NOT A LOOK-THEN-STORE
 // (the file header): a sibling scanning the same table sees NONE and races
 // us for the CAS, exactly one winning, or sees a claimed entry and moves on.
-static int handle_claim(task_t *task, handle_type_t as, handle_t **out)
+static int handle_claim(task_t *task, handle_type_t as, handle_t **out, unsigned *walked)
 {
+	*walked = 0;
 	for (unsigned k = 0; k <= TASK_HANDLE_BLOCKS; k++)
 	{
 		handle_t *entries = k == 0 ? task->handles
 		                           : __atomic_load_n(&task->handleBlocks[k - 1], __ATOMIC_ACQUIRE);
 		if (entries == NULL)
 			return -1;
+		*walked = k;
 		uint32_t size = handle_block_size(k);
 		for (uint32_t i = k == 0 ? 3 : 0; i < size; i++)
 		{
@@ -156,14 +159,17 @@ static int handle_claim(task_t *task, handle_type_t as, handle_t **out)
 	return -1;
 }
 
-// Add the next block: true when the table has more room than before the
-// call (ours installed, or a sibling's), false at the ceiling, when the
-// block could not be had, or once the task is tearing down. The block is
-// allocated outside handleLock and installed under it, where the teardown
-// flag is read (§ The blocks).
-static bool handle_grow(task_t *task)
+// Add the next block after a scan that walked `walked` added blocks and found
+// nothing free: true when the table has more room than that scan saw (ours
+// installed, or a sibling's, before or during this call), false at the
+// ceiling, when the block could not be had, or once the task is tearing
+// down. The block is allocated outside handleLock and installed under it,
+// where the teardown flag is read (§ The blocks).
+static bool handle_grow(task_t *task, unsigned walked)
 {
 	unsigned k = handle_blocks_added(task);
+	if (k > walked)
+		return true;   // a sibling grew the table after our scan: look again
 	if (k == TASK_HANDLE_BLOCKS)
 		return false;
 	handle_t *block = kmalloc_try((uint64_t)handle_block_size(k + 1) * sizeof(handle_t));
@@ -216,17 +222,20 @@ int handle_alloc(struct task *t, handle_type_t type, void *object)
 	// handle_get treats CLOSING as "not operable". Object first, then the
 	// real type with release semantics, so whoever reads the type sees the
 	// object behind it.
-	do
+	for (;;)
 	{
 		handle_t *entry;
-		int n = handle_claim(task, HANDLE_CLOSING, &entry);
+		unsigned walked;
+		int n = handle_claim(task, HANDLE_CLOSING, &entry, &walked);
 		if (n >= 0)
 		{
 			entry->object = object;
 			__atomic_store_n(&entry->type, type, __ATOMIC_RELEASE);
 			return n;
 		}
-	} while (handle_grow(task));
+		if (!handle_grow(task, walked))
+			break;
+	}
 
 	handle_counts_refused(&task->handleCounts);
 	printd(DEBUG_TASK, "handle_alloc: task %s is out of handles (room %u, ceiling %u)\n",
@@ -238,16 +247,19 @@ int handle_reserve(struct task *t)
 {
 	task_t *task = (task_t *)t;
 
-	do
+	for (;;)
 	{
 		handle_t *entry;
-		int n = handle_claim(task, HANDLE_RESERVED, &entry);
+		unsigned walked;
+		int n = handle_claim(task, HANDLE_RESERVED, &entry, &walked);
 		if (n >= 0)
 		{
 			entry->object = NULL;
 			return n;
 		}
-	} while (handle_grow(task));
+		if (!handle_grow(task, walked))
+			break;
+	}
 
 	handle_counts_refused(&task->handleCounts);
 	printd(DEBUG_TASK, "handle_reserve: task %s is out of handles (room %u, ceiling %u)\n",
