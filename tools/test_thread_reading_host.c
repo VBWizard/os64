@@ -169,8 +169,7 @@ static void slow_cases(void)
     yonder_tr_slow_line(&t, MS, line, sizeof(line));
     LINE(line, "1 of 2 turns took 100 ms or more, 207.0 ms in all; they began at 111 ms; the longest: (1) 207.0 ms "
                "from 111 ms: scripts: a task found and run 200.0 ms, paint: the paint 3.0 ms, scripts: the rendering "
-               "step after a task 2.0 ms, input: the dispatcher's turn 1.0 ms, the turn's close: the next moment "
-               "scheduled 1.0 ms; inside: tasks 1 in 199.0 ms, model rebuilds 1 in 1.0 ms, drawing 1 in 2.0 ms");
+               "step after a task 2.0 ms, input: the dispatcher's turn 1.0 ms, the other calls 1.0 ms; inside: tasks 1 in 199.0 ms, model rebuilds 1 in 1.0 ms, drawing 1 in 2.0 ms");
     // With no wait between, the dispatcher's call ends a turn and begins
     // the next; the longest task is the one named, with what it forced.
     at = busy_turn(at + 10 * MS, 150, "a timer set at tick");    // 155 ms
@@ -223,6 +222,39 @@ static void slow_cases(void)
     // A kept turn's start is from the reading's start too (here its first
     // call, 1000 ms after the reset): the 600 ms turn began 8665 ms in.
     CHECK(strstr(line, "(1) 600.0 ms from 8665 ms: ") != NULL);
+    // The longest line fits YONDER_TR_SLOW_LINE whole: six kept turns, each
+    // with many calls of a millisecond or more (four named, the rest summed),
+    // every kind inside, and a task's longest name.
+    memset(&t, 0, sizeof(t));
+    yonder_tr_reset(&t, 0, NULL, NULL);
+    yonder_tr_slow(&t, 100 * MS, 100);
+    char longest[YONDER_TR_TASK_TEXT + 40];
+    memset(longest, 'x', sizeof(longest) - 1);
+    longest[sizeof(longest) - 1] = '\0';
+    at = 0;
+    for (int turn_n = 0; turn_n < YONDER_TR_SLOW_KEPT; turn_n++) {
+        for (int c = YONDER_TR_DISPATCH; c < YONDER_TR_CALLS; c++) {
+            yonder_tr_call(&t, (yonder_tr_call_t)c, at);
+            for (int in = 0; in < YONDER_TR_INS; in++)
+                yonder_tr_inside(&t, (yonder_tr_in_t)in, 1 * MS);
+            yonder_tr_task(&t, longest, 999 * MS, 99, 99 * MS);
+            at += (c + 2) * MS;
+        }
+        yonder_tr_call(&t, YONDER_TR_WAIT, at);
+        at += 1000 * MS;
+    }
+    static char big[YONDER_TR_SLOW_LINE];
+    yonder_tr_slow_line(&t, MS, big, sizeof(big));
+    const char *sixth = strstr(big, "; (6) ");
+    CHECK(t.nslow == YONDER_TR_SLOW_KEPT && strlen(big) + 1 < sizeof(big) && sixth != NULL &&
+          strstr(sixth, "; its longest task ") != NULL && strstr(sixth, ", forcing 99 layouts in 99.0 ms") != NULL);
+    // A kept turn names four calls, then the rest summed: the commas
+    // before its inside are the four calls'.
+    const char *first = strstr(big, "(1) "), *inside = first ? strstr(first, "; inside: ") : NULL;
+    int named = 0;
+    for (const char *c = first ? strstr(first, " ms, ") : NULL; c != NULL && c < inside; c = strstr(c + 1, " ms, "))
+        named++;
+    CHECK(first && inside && named == YONDER_TR_TURN_CALLS && strstr(first, "the other calls ") < inside);
     // Calls under a millisecond are summed as the rest.
     memset(&t, 0, sizeof(t));
     yonder_tr_reset(&t, 0, NULL, NULL);

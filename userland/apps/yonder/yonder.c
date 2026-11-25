@@ -10529,9 +10529,10 @@ static void diag_thread_reading(Page *p, uint32_t n)
     yonder_tr_steps_line(&s_tr, (int64_t)cycles(), per_ms, line, sizeof(line));
     os64_snprintf(key, sizeof(key), "thread reading %u", (unsigned)n);
     yonder_diag_reading_fact(p->diag, key, line);
-    yonder_tr_slow_line(&s_tr, per_ms, line, sizeof(line));
+    static char slow[YONDER_TR_SLOW_LINE];
+    yonder_tr_slow_line(&s_tr, per_ms, slow, sizeof(slow));
     os64_snprintf(key, sizeof(key), "slow turns reading %u", (unsigned)n);
-    yonder_diag_reading_fact(p->diag, key, line);
+    yonder_diag_reading_fact(p->diag, key, slow);
     yonder_tr_timers_line(&s_tr, per_ms, line, sizeof(line));
     os64_snprintf(key, sizeof(key), "timers reading %u", (unsigned)n);
     yonder_diag_reading_fact(p->diag, key, line);

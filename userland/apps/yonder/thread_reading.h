@@ -113,6 +113,11 @@ typedef struct {
 
 #define YONDER_TR_SLOW_KEPT 6
 #define YONDER_TR_SLOW_STARTS 48
+// The calls a kept turn names, its costliest; the rest are summed.
+#define YONDER_TR_TURN_CALLS 4
+// Room enough for yonder_tr_slow_line's longest line: the starts, and six
+// turns each with four calls, five kinds inside and a task's full name.
+#define YONDER_TR_SLOW_LINE 8192
 // Room for "a timer set by " and a site as the timers line keeps it.
 #define YONDER_TR_TASK_TEXT (YONDER_TR_SITE_TEXT + 24)
 
@@ -227,9 +232,10 @@ void yonder_tr_collector_line(const yonder_tr_t *t, const yonder_tr_collector_t 
 
 // The slow turns: how many of the turns that ended, their time, when the
 // kept starts began (ms from the reading's start), and the longest, each
-// with when it began, its calls of a millisecond or more by step (the rest
-// summed), what ran inside it and its longest task. A turn still under way
-// is not in it.
+// with when it began, its YONDER_TR_TURN_CALLS costliest calls of a
+// millisecond or more by step (the rest summed), what ran inside it and its
+// longest task. A turn still under way is not in it. YONDER_TR_SLOW_LINE
+// holds the longest it writes.
 void yonder_tr_slow_line(const yonder_tr_t *t, uint64_t per_ms, char *out, size_t cap);
 
 // The record walks a turn can make whose size the page sets: the

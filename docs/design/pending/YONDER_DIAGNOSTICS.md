@@ -588,8 +588,9 @@ names a `diagnostics` directory, each reading adds five lines:
   The line gives how many of the turns that ended were slow and their
   time; when the first 48 began, in ms from the reading's start, so a
   stall on a beat shows as evenly spaced starts; and the six longest,
-  whole: when each began, its calls of a millisecond or more by step (the
-  rest summed), what ran inside it, and its longest task: a timer as
+  whole: when each began, its four costliest calls of a millisecond or
+  more by step (the rest summed, so the line's length has a bound), what ran
+  inside it, and its longest task: a timer as
   `a timer set by` its site, the site as the timers line keeps it, and any
   other task by its kind and script as the timeline names it. A reading
   whose counter rate was not known when it began judges no turn and says

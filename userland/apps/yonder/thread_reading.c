@@ -494,10 +494,13 @@ void yonder_tr_timers_line(const yonder_tr_t *t, uint64_t per_ms, char *out, siz
     }
 }
 
-// One kept slow turn: when it began, its time, its calls of a millisecond
-// or more by step (the rest summed), what ran inside it and its longest task.
+// One kept slow turn: when it began, its time, its YONDER_TR_TURN_CALLS
+// costliest calls of a millisecond or more by step (the rest summed, so the
+// line's length has a bound whatever the turn held), what ran inside it and
+// its longest task.
 static void put_turn(Out *o, const yonder_tr_t *t, const yonder_tr_turn_t *u, uint64_t per_ms)
 {
+    unsigned named = 0;
     put_ms(o, u->ticks, per_ms);
     put(o, " ms from ");
     put_u(o, per_ms != 0 ? since(t->from, u->from) / per_ms : 0);
@@ -513,10 +516,11 @@ static void put_turn(Out *o, const yonder_tr_t *t, const yonder_tr_turn_t *u, ui
         if (c < 0)
             break;
         listed[c] = true;
-        if (per_ms == 0 || u->call_ticks[c] < per_ms) {
+        if (per_ms == 0 || u->call_ticks[c] < per_ms || named == YONDER_TR_TURN_CALLS) {
             rest += u->call_ticks[c];
             continue;
         }
+        named++;
         put(o, sep);
         sep = ", ";
         put(o, yonder_lt_step_name(kCall[c].step));
