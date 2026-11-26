@@ -64,6 +64,13 @@ static void plane_drop(void)
     probe_drop();
 }
 
+/* A widget that paints a pill the colour of the planes' plain frame. */
+static void plane_pill_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_theme_t *t)
+{
+    (void)t;
+    os64_draw_fill_round_rect(&ctx->surf, w->bounds, w->bounds.h / 2, 0xff204060u);
+}
+
 /* The whole window rendered, as the render after planes_prepare would. */
 static os64_gui_rect_t plane_render(void)
 {
@@ -158,7 +165,7 @@ static void plane_cases(void)
     check(!v->candidate && v->reason == YONDER_PLANE_NOT_LAYER && v->mapped, "planes: no layer, still mapped");
     d = plane_render();
     (void)planes_judge(&d, 0, 1);
-    check(!v->not_layer, "planes: the part painted again is a layer, known");
+    check(!v->not_layer, "planes: the part painted again, nothing over it, known clear again");
     planes_release();
     planes_prepare();
     check(v->candidate, "planes: a candidate again");
@@ -275,6 +282,30 @@ static void plane_cases(void)
     s_plane_check = 0;
     plane_drop();
 
+    /* Three see-through boxes stacked over the picture, each rounding on
+     * its own: the largest difference --plane-check finds is printed, and
+     * must stay within the rule's two (VIDEO_PLANE.md § 5.6). */
+    plane_page("<!doctype html><style>body{margin:0;background:#123}"
+               "#v{position:absolute;left:40px;top:40px;width:320px;height:180px}"
+               "div{position:absolute;left:60px;top:60px;width:200px;height:100px}"
+               "#a{background:rgba(255,40,0,.35)}#b{background:rgba(0,200,90,.45);left:90px}"
+               "#c{background:rgba(30,60,250,.55);left:120px}</style>"
+               "<video id=v></video><div id=a></div><div id=b></div><div id=c></div>");
+    s_plane_check = 1;
+    planes_prepare();
+    d = plane_render();
+    planes_judge(&d, 0, 1);
+    planes_hole(&d, 1);
+    {
+        printf("planes: three stacked see-through boxes: the largest difference %d; off by one %lu, by two "
+               "%lu, wrong %lu\n", (int)v->checked_far_most, (unsigned long)v->checked_near,
+               (unsigned long)v->checked_two, (unsigned long)v->checked_wrong);
+        check(v->place && v->checked > 0 && v->checked_wrong == 0,
+              "planes: three stacked see-through boxes stay within the rule's two");
+    }
+    s_plane_check = 0;
+    plane_drop();
+
     /* More over it than the kernel blends: an opaque box over most of a
      * 640x360 picture needs overlays past the budget, so it is not placed. */
     plane_page("<!doctype html><style>body{margin:0;background:#123}"
@@ -299,24 +330,32 @@ static void plane_cases(void)
           "planes: more over it than the budget: not placed, the budget its reason");
     plane_drop();
 
-    /* A widget libui paints over the clip, after the view: kept opaque,
-     * as painted, inside the overlays. */
+    /* A widget libui paints over the clip, after the view: a pill the very
+     * colour of the frame beneath it. Its coverage comes from the same two
+     * paints as the page's, never from its colour: opaque at its body,
+     * see-through at its corners. */
     plane_page(kPlanePage);
     {
+        static const os64_ui_class_t kPill = {.name = "pill", .paint = plane_pill_paint};
         os64_ui_widget_t root = {0}, over = {0};
         os64_ui_widget_t *saved_root = g.ui.root, *saved_next = g.view.next_sibling;
+        for (uint32_t i = 0; i < 320u * 180u; i++)
+            plane_pic[i] = 0xff204060u;
         root.first_child = &g.view;
         g.view.next_sibling = &over;
-        over.bounds = (os64_gui_rect_t){g.view.bounds.x + 100, g.view.bounds.y + 100, 40, 20};
+        over.cls = &kPill;
+        over.bounds = (os64_gui_rect_t){g.view.bounds.x + 100, g.view.bounds.y + 100, 60, 20};
         g.ui.root = &root;
         planes_prepare();
         d = plane_render();
+        plane_pill_paint(&over, &plane_screen, NULL);     /* the render's widget, after the view */
         planes_judge(&d, 0, 1);
         planes_hole(&d, 1);
-        uint32_t px = plane_screen.surf.pixels[(size_t)(over.bounds.y + 5) * 800 + over.bounds.x + 5];
-        uint32_t pic = plane_pic[(size_t)(over.bounds.y + 5 - v->origin.y) * 320 + over.bounds.x + 5 - v->origin.x];
-        check(v->place && v->noverlays >= 1 && px == (pic | 0xff000000u),
-              "planes: a widget over it kept as painted, opaque, with an overlay");
+        uint32_t body = plane_screen.surf.pixels[(size_t)(over.bounds.y + 10) * 800 + over.bounds.x + 30];
+        uint32_t corner = plane_screen.surf.pixels[(size_t)over.bounds.y * 800 + over.bounds.x];
+        check(v->place && v->noverlays >= 1 && body == 0xff204060u,
+              "planes: a widget the picture's colour, opaque at its body, with an overlay");
+        check(corner == 0, "planes: and see-through at its corners");
         check(plane_screen.surf.pixels[(size_t)(over.bounds.y + 30) * 800 + over.bounds.x + 5] == 0,
               "planes: beside the widget, see-through");
         /* Placed with that overlay; a different overlay next paint is a new
@@ -331,6 +370,23 @@ static void plane_cases(void)
         planes_release();
         g.ui.root = saved_root;
         g.view.next_sibling = saved_next;
+    }
+    plane_drop();
+
+    /* A video wider than its scroll box: the box's bar is drawn over the
+     * picture after the walk (box_bars), and it is in the layer. */
+    plane_page("<!doctype html><style>body{margin:0;background:#123}"
+               "#s{position:absolute;left:40px;top:40px;width:300px;height:180px;overflow:auto}"
+               "#v{display:block;width:320px;height:180px}</style><div id=s><video id=v></video></div>");
+    planes_prepare();
+    d = plane_render();
+    planes_judge(&d, 0, 1);
+    planes_hole(&d, 1);
+    {
+        uint32_t bar = 0;
+        for (int32_t y = v->clip.y + v->clip.h - 12; y < v->clip.y + v->clip.h && v->clip.h > 0; y++)
+            bar |= plane_screen.surf.pixels[(size_t)y * 800 + v->clip.x + 150] >> 24;
+        check(v->mapped && v->place && bar != 0, "planes: a scroll box's bar over the picture is in the layer");
     }
     plane_drop();
 

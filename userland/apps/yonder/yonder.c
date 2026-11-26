@@ -3602,8 +3602,11 @@ typedef struct {
     uint32_t noverlays;                 // a place's overlays at this paint (window coordinates), and their
     os64_gui_rect_t overlays[OS64_GUI_PLANE_OVERLAYS];      // union's area
     uint64_t overlay_area;
-    uint32_t placed_noverlays;          // the kernel's
+    uint32_t placed_noverlays;          // the kernel's, and their union's area
     os64_gui_rect_t placed_overlays[OS64_GUI_PLANE_OVERLAYS];
+    uint64_t placed_overlay_area;
+    uint64_t overlays_refused_area;     // the kernel refused overlays of this union's area (PLANE_OVERLAP):
+                                        // as large again is the budget's reason, not another refusal
     bool place;                         // the place this paint's publish carries
     uint32_t name;
     os64_gui_rect_t origin, clip;       // window coordinates, for a video `mapped`
@@ -3622,7 +3625,8 @@ typedef struct {
     uint64_t layers_made, layer_pixels, layers_refused;     // the two paints, what they covered, and those
                                                             // that were no layer or could not be made
     uint64_t checked, checked_near, checked_two, checked_wrong;     // --plane-check: pixels, off by one, by
-                                                                    // two, wrong
+                                                                    // two, wrong, and the largest difference
+    int32_t checked_far_most;
     // WHAT REACHED THE GLASS (the --video-rate line and the record): the
     // page's paints of a new picture in its box that their publish left off
     // its plane (videos_glass_published), and the plane's pictures
@@ -13613,6 +13617,10 @@ static struct {
     uint64_t asks, edit_publishes, union_area, union_beyond;
     uint64_t refused[18];               // publishes refused, by the GUI's code (index -code)
     uint64_t hides_owed, hides_copied, hides_dropped;
+    // The layer passes (plane_layer_make): how many, their time, the longest;
+    // none of it counted in the paint's own cost.
+    uint64_t layer_passes, layer_us, layer_us_most;
+    uint64_t overlay_retries;           // a refused publish whose places changed only their overlays
 } s_plane_counts;
 
 static void planes_counts_restart(void)
@@ -13693,7 +13701,8 @@ static bool plane_map_on(Video *v, os64_gui_rect_t origin)
     return yonder_plane_map_reset(&v->map, o, v->tiles, v->ntiles);
 }
 
-// WHAT WAS DRAWN OVER A PICTURE AT THIS PAINT, whatever its colours: every
+// WHERE A RENDER DREW OVER A PICTURE AT THIS PAINT, whatever its colours,
+// which is where its layer is made (plane_part_touched): every
 // rectangle a glass verb drew after a video's own box in the paint part's
 // order that meets its clip (plane_note_over: from on_glass for a verb whose
 // rectangle is its drawing, and from the verb itself, with its drawing's own
@@ -13705,16 +13714,16 @@ static bool plane_map_on(Video *v, os64_gui_rect_t origin)
 static struct {
     os64_gui_rect_t r;
     int32_t video;                  // s_videos' index of the video it is over
-    bool widget;                    // a widget's, opaque and none of the page's paint: kept as it is
 } s_plane_over[PLANE_OVER_MAX];
 static uint32_t s_plane_over_n;
-static bool s_plane_over_all;       // more than PLANE_OVER_MAX: all of every clip counts as drawn over
+static bool s_plane_over_all;       // more than PLANE_OVER_MAX: all of every clip counts as drawn over,
+                                    // so a layer is made wherever a render paints a clip
 static bool s_plane_watch;          // a video is mapped at this paint
 
-static void plane_over_add(os64_gui_rect_t r, int32_t video, bool widget)
+static void plane_over_add(os64_gui_rect_t r, int32_t video)
 {
     if (s_plane_over_n < PLANE_OVER_MAX)
-        s_plane_over[s_plane_over_n++] = (__typeof__(s_plane_over[0])){r, video, widget};
+        s_plane_over[s_plane_over_n++] = (__typeof__(s_plane_over[0])){r, video};
     else
         s_plane_over_all = true;
 }
@@ -13741,7 +13750,7 @@ static void planes_note_widgets(os64_ui_widget_t *w, bool *after)
                 os64_gui_rect_t met;
                 if (s_videos[i].node != NULL && s_videos[i].mapped &&
                     os64_rect_intersect(w->bounds, s_videos[i].clip, &met))
-                    plane_over_add(met, i, true);
+                    plane_over_add(met, i);
             }
         if (!w->hidden)
             planes_note_widgets(w->first_child, after);
@@ -13804,18 +13813,12 @@ static uint32_t plane_layer_at(const Video *v, int32_t x, int32_t y)
 }
 
 // Whether something lies over `v`'s picture in `part` (window coordinates,
-// inside the origin), for its map: a widget noted there, or a pixel of a
-// layer with any coverage.
+// inside the origin), for its map: a pixel of this paint's layers with any
+// coverage, the widgets' coverage among them.
 static bool plane_ink(void *ctx, yonder_plane_rect_t part)
 {
     const Video *v = ctx;
-    os64_gui_rect_t r = {part.x, part.y, part.w, part.h}, met;
-    if (s_plane_over_all)
-        return true;
-    for (uint32_t k = 0; k < s_plane_over_n; k++)
-        if (s_plane_over[k].widget && &s_videos[s_plane_over[k].video] == v &&
-            os64_rect_intersect(s_plane_over[k].r, r, &met))
-            return true;
+    os64_gui_rect_t r = {part.x, part.y, part.w, part.h};
     for (int32_t y = r.y; y < r.y + r.h; y++)
         for (int32_t x = r.x; x < r.x + r.w; x++)
             if (plane_layer_at(v, x, y) >> 24)
@@ -13861,14 +13864,19 @@ static void plane_write(os64_gui_rect_t part, const uint32_t *in)
 static bool plane_layer_make(Video *v, os64_gui_rect_t at)
 {
     size_t n = (size_t)at.w * (size_t)at.h;
-    if (s_plane_nlayers == PLANE_LAYERS_MAX)
+    if (s_plane_nlayers == PLANE_LAYERS_MAX) {
+        v->layers_made++;
+        v->layers_refused++;
         return false;
+    }
     uint32_t *kept = os64_malloc(n * 4), *black = os64_malloc(n * 4), *white = os64_malloc(n * 4);
     bool made = kept != NULL && black != NULL && white != NULL;
     yonder_plane_layer_counts_t counts = {0};
     if (made) {
         bool watch = s_plane_watch;
         s_plane_watch = false;      // the passes' draws are no render's
+        uint64_t began = cycles();
+        int64_t began_us = os64_micros();
         plane_read(at, kept);
         made = plane_layer_paint(v, at, 0xff000000u);
         plane_read(at, black);
@@ -13876,6 +13884,15 @@ static bool plane_layer_make(Video *v, os64_gui_rect_t at)
         plane_read(at, white);
         plane_write(at, kept);
         s_plane_watch = watch;
+        // Counted apart, and taken out of the render's open stage, whose
+        // start moves on by what the passes took.
+        uint64_t us = (uint64_t)(os64_micros() - began_us);
+        s_plane_counts.layer_passes++;
+        s_plane_counts.layer_us += us;
+        if (us > s_plane_counts.layer_us_most)
+            s_plane_counts.layer_us_most = us;
+        if (s_cost.depth[PS_RENDER] > 0)
+            s_cost.began[PS_RENDER] += cycles_since(began);
         if (made)
             yonder_plane_layer(black, white, n, black, &counts);
         made = made && counts.disagree == 0;
@@ -14070,16 +14087,18 @@ static void plane_reading(DiagText *t, const Video *v, const os64_media_player_f
     if (v->layers_made > 0)
         dt_put(t, "; layers of what lies over it %lu (%lu pixels), no layer %lu, overlays %u (%lu pixels)",
                (unsigned long)v->layers_made, (unsigned long)v->layer_pixels, (unsigned long)v->layers_refused,
-               v->placed ? v->placed_noverlays : 0u, (unsigned long)(v->placed ? v->overlay_area : 0));
+               v->placed ? v->placed_noverlays : 0u, (unsigned long)(v->placed ? v->placed_overlay_area : 0));
     if (v->checked > 0)
-        dt_put(t, "; plane-check %lu pixels, off by one %lu, by two %lu, wrong %lu", (unsigned long)v->checked,
-               (unsigned long)v->checked_near, (unsigned long)v->checked_two, (unsigned long)v->checked_wrong);
+        dt_put(t, "; plane-check %lu pixels, off by one %lu, by two %lu, wrong %lu, the largest difference %d",
+               (unsigned long)v->checked, (unsigned long)v->checked_near, (unsigned long)v->checked_two,
+               (unsigned long)v->checked_wrong, (int)v->checked_far_most);
 }
 
 // The record's words for the planes of the whole window.
 static void plane_counts_reading(DiagText *t)
 {
-    if (s_plane_counts.asks == 0 && s_plane_counts.edit_publishes == 0 && s_plane_counts.hides_owed == 0)
+    if (s_plane_counts.asks == 0 && s_plane_counts.edit_publishes == 0 && s_plane_counts.hides_owed == 0 &&
+        s_plane_counts.layer_passes == 0)
         return;
     dt_put(t, "; planes: %lu asked, %lu publishes carrying edits (%lu pixels of damage in all, %lu of them past "
            "their rectangles' own area), %lu hides owed by closed sessions (%lu pictures painted back, %lu dropped)",
@@ -14090,6 +14109,12 @@ static void plane_counts_reading(DiagText *t)
     for (size_t c = 1; c < sizeof(s_plane_counts.refused) / sizeof(s_plane_counts.refused[0]); c++)
         if (s_plane_counts.refused[c] > 0)
             dt_put(t, ", publishes refused %d: %lu", -(int)c, (unsigned long)s_plane_counts.refused[c]);
+    if (s_plane_counts.overlay_retries > 0)
+        dt_put(t, ", refused overlay changes kept for the next paint %lu", (unsigned long)s_plane_counts.overlay_retries);
+    if (s_plane_counts.layer_passes > 0)
+        dt_put(t, "; layer passes (what lies over a picture, painted twice, not in the paint's cost) %lu, %s in all, "
+               "the longest %s", (unsigned long)s_plane_counts.layer_passes, dt_ms(s_plane_counts.layer_us).text,
+               dt_ms(s_plane_counts.layer_us_most).text);
 }
 
 // A render's layer of what lies over `v`, over the bounds of the parts of
@@ -14160,15 +14185,16 @@ static bool planes_judge(const os64_gui_rect_t *damage, uint32_t from, uint32_t 
             v->not_layer = false;
         if (!v->candidate)
             continue;
+        // In the reasons' order (plane_place.h): the overlays of what the
+        // map knows are asked before whether it knows all of the clip.
         yonder_plane_reason_t why = YONDER_PLANE_PLACED;
         if (v->not_layer)
             why = YONDER_PLANE_NOT_LAYER;
-        else if (s_plane_over_all)
-            why = YONDER_PLANE_BUDGET;      // more drawn over the pictures than one paint keeps account of
+        else if (plane_over_budget(v, v->clip) ||
+                 (v->noverlays > 0 && v->overlays_refused_area != 0 && v->overlay_area >= v->overlays_refused_area))
+            why = YONDER_PLANE_BUDGET;
         else if (!known)
             why = YONDER_PLANE_UNPAINTED;
-        else if (plane_over_budget(v, v->clip))
-            why = YONDER_PLANE_BUDGET;
         if (why == YONDER_PLANE_PLACED) {
             v->place = true;
             continue;
@@ -14208,6 +14234,8 @@ static void plane_check_row(Video *v, int32_t x, int32_t y, const uint32_t *pain
         // one to the blend's own rounding: two, counted apart.
         bool wrong = (!inside && a != 0) || far > 2 || (far >= 1 && (a == 0 || a == 255));
         v->checked++;
+        if (far > v->checked_far_most)
+            v->checked_far_most = far;
         v->checked_near += !wrong && far == 1;
         v->checked_two += !wrong && far == 2;
         v->checked_wrong += wrong;
@@ -14222,9 +14250,9 @@ static void plane_check_row(Video *v, int32_t x, int32_t y, const uint32_t *pain
 }
 
 // The hole: each video placed by this publish has the pixels of its clip
-// that `damage` painted set to what lies over its picture there — this
-// paint's layer, or zero, see-through, where none — but where a widget is
-// over it, which keeps the pixels it painted, opaque (top byte 255).
+// that `damage` painted set to what lies over its picture there: this
+// paint's layer (the widgets over it included), or zero, see-through,
+// where there is none.
 static void planes_hole(const os64_gui_rect_t *damage, uint32_t count)
 {
     os64_gui_surface_t *s = &g.ui.ctx->surf;
@@ -14233,7 +14261,18 @@ static void planes_hole(const os64_gui_rect_t *damage, uint32_t count)
         check = s_videos[i].node != NULL && s_videos[i].place;
     if (check)
         check = s_plane_check_due++ % s_plane_check == 0;
-    uint32_t *painted = NULL;
+    // A row of the page's pixels, kept for the check, taken before anything
+    // changes: with no memory for it every place of this publish is given
+    // up, while the clips still hold the page's paint of the picture.
+    uint32_t *painted = os64_malloc((size_t)(s->width > 0 ? s->width : 1) * 4);
+    if (painted == NULL) {
+        for (int32_t i = 0; i < VIDEOS_MAX; i++)
+            if (s_videos[i].node != NULL && s_videos[i].place) {
+                s_videos[i].place = s_videos[i].candidate = false;
+                plane_reason_set(&s_videos[i], YONDER_PLANE_NOT_LAYER);
+            }
+        return;
+    }
     for (int32_t i = 0; i < VIDEOS_MAX; i++) {
         Video *v = &s_videos[i];
         if (v->node == NULL || !v->place)
@@ -14243,16 +14282,6 @@ static void planes_hole(const os64_gui_rect_t *damage, uint32_t count)
             os64_gui_rect_t met;
             if (!os64_rect_intersect(damage[k], v->clip, &met))
                 continue;
-            uint32_t *grown = os64_realloc(painted, (size_t)met.w * 4);
-            if (grown == NULL) {
-                // No room for a row of the page's pixels: the widgets' are
-                // lost, so the place is given up and its clip painted again.
-                v->place = v->candidate = false;
-                plane_reason_set(v, YONDER_PLANE_NOT_LAYER);
-                plane_mark_window(v->clip);
-                break;
-            }
-            painted = grown;
             for (int32_t y = met.y; y < met.y + met.h; y++) {
                 uint32_t *row = s->pixels + (size_t)y * s->pitch_px + met.x;
                 os64_memcpy(painted, row, (size_t)met.w * 4);
@@ -14264,15 +14293,6 @@ static void planes_hole(const os64_gui_rect_t *damage, uint32_t count)
                         continue;
                     os64_memcpy(row + (x0 - met.x), s_plane_layers[l].px + (size_t)(y - a->y) * a->w + (x0 - a->x),
                                 (size_t)(x1 - x0) * 4);
-                }
-                for (uint32_t w = 0; w < s_plane_over_n; w++) {
-                    const os64_gui_rect_t *r = &s_plane_over[w].r;
-                    int32_t x0 = r->x > met.x ? r->x : met.x, x1 = r->x + r->w < met.x + met.w ? r->x + r->w : met.x + met.w;
-                    if (!s_plane_over[w].widget || &s_videos[s_plane_over[w].video] != v || y < r->y ||
-                        y >= r->y + r->h)
-                        continue;
-                    for (int32_t x = x0; x < x1; x++)
-                        row[x - met.x] = painted[x - met.x] | 0xff000000u;
                 }
                 if (check && v->view.pixels != NULL)
                     plane_check_row(v, met.x, y, painted, row, met.w, &said);
@@ -14359,6 +14379,9 @@ static void planes_commit(void)
             v->placed_clip = v->clip;
             v->placed_noverlays = v->noverlays;
             os64_memcpy(v->placed_overlays, v->overlays, sizeof(v->overlays));
+            v->placed_overlay_area = v->overlay_area;
+            if (v->noverlays > 0)
+                v->overlays_refused_area = 0;   // taken: the kernel's budget is not what it was thought
             if (v->reason != YONDER_PLANE_PLACED)
                 plane_reason_set(v, YONDER_PLANE_PLACED);
         }
@@ -14422,17 +14445,33 @@ static void planes_publish(os64_gui_rect_t *damage, uint32_t *count)
     }
     // Refused whole: the kernel holds every place as it did. A clip an edit
     // made a hole is painted again with the picture (a new place's, a
-    // move's new clip) before the damage is published plain; a new place is
-    // held off a while; and the clips of refused hides and moves are marked
-    // after the publish, for the next paint to try again.
+    // move's new clip) before the damage is published plain, but for a
+    // place whose overlays alone changed, whose clip the kernel keeps; a new
+    // place is held off a while; and the clips of refused hides, moves and
+    // overlay changes are marked after the publish, for the next paint to
+    // try again. Overlays the kernel refused as too large are remembered,
+    // so the next paint takes the video off its plane for the budget
+    // instead of asking again.
     if (rc < 0 && -rc < (int64_t)(sizeof(s_plane_counts.refused) / sizeof(s_plane_counts.refused[0])))
         s_plane_counts.refused[-rc]++;
-    bool repaint = false, retry[VIDEOS_MAX] = {false};
+    bool repaint = false, retry[VIDEOS_MAX] = {false}, overlays_kept[VIDEOS_MAX] = {false};
     for (int32_t i = 0; i < VIDEOS_MAX; i++) {
         Video *v = &s_videos[i];
         if (v->node == NULL || (!v->place && !v->placed) || (v->place && plane_place_same(v)))
             continue;
-        if (v->place) {
+        if (v->place && v->noverlays > 0 && rc == OS64_GUI_ERR_PLANE_OVERLAP)
+            v->overlays_refused_area = v->overlay_area;     // asked again, it would be refused again
+        bool overlays_only = v->place && v->placed && v->placed_name == v->name &&
+                             os64_memcmp(&v->placed_origin, &v->origin, sizeof(v->origin)) == 0 &&
+                             os64_memcmp(&v->placed_clip, &v->clip, sizeof(v->clip)) == 0;
+        if (overlays_only) {
+            // The kernel keeps the same clip with the old overlays: the new
+            // hole stays (cut again below where a render paints it), the old
+            // overlays blending what lies over the picture now, and the
+            // change is asked for again.
+            s_plane_counts.overlay_retries++;
+            overlays_kept[i] = true;
+        } else if (v->place) {
             plane_mark_window(v->clip);
             repaint = true;
             if (!v->placed) {
@@ -14444,14 +14483,16 @@ static void planes_publish(os64_gui_rect_t *damage, uint32_t *count)
         v->place = v->placed;   // what the kernel holds
     }
     if (repaint) {
-        // That render may meet a place the kernel keeps unchanged: its hole
-        // is cut again (planes_hole cuts where `place` stands, which is now
-        // what the kernel holds; a refused move's new clip is no longer a
-        // place, and a placed one's old clip is marked for the next paint).
+        // That render may meet a place the kernel keeps: its hole is cut
+        // again (planes_hole cuts where `place` stands, which is now what
+        // the kernel holds, with this paint's layers; a refused move's new
+        // clip is no longer a place, and a placed one's old clip is marked
+        // for the next paint).
         uint32_t from = *count;
         *count += os64_ui_render_list(&g.ui, damage + *count);
         for (int32_t i = 0; i < VIDEOS_MAX; i++)
-            if (s_videos[i].node != NULL && s_videos[i].place && !plane_place_same(&s_videos[i]))
+            if (s_videos[i].node != NULL && s_videos[i].place && !plane_place_same(&s_videos[i]) &&
+                !overlays_kept[i])
                 s_videos[i].place = false;
         planes_hole(damage + from, *count - from);
         for (int32_t i = 0; i < VIDEOS_MAX; i++)
@@ -20544,7 +20585,7 @@ static void plane_note_over(const Glass *gl, os64_gui_rect_t r)
         os64_gui_rect_t met;
         if (s_videos[i].node != NULL && s_videos[i].mapped && s_videos[i].drawn &&
             os64_rect_intersect(r, s_videos[i].clip, &met))
-            plane_over_add(met, i, false);
+            plane_over_add(met, i);
     }
 }
 
@@ -21394,7 +21435,8 @@ static void plane_closed_paint(GlassPane *gp, const flow_box_t *b, os64_gui_rect
             os64_memcpy(gl->surf->pixels + (size_t)y * gl->surf->pitch_px + met.x,
                         h->copy + (size_t)(y - h->origin.y) * h->copy_w + (met.x - h->origin.x),
                         (size_t)met.w * sizeof(uint32_t));
-        s_plane_counts.hides_copied++;
+        if (s_layer.video == NULL)
+            s_plane_counts.hides_copied++;
     }
 }
 
@@ -21474,7 +21516,7 @@ static void pane_video(GlassPane *gp, const flow_box_t *b, os64_gui_rect_t c, os
     s_cost.video_draw_us += (uint64_t)(os64_micros() - began);
     v->drawn = true;    // what this paint part draws from here is over it
     uint32_t serial = v->view.frame != NULL ? v->view.serial : v->frame.serial;
-    if (drew && serial != v->glass_serial) {
+    if (drew && s_layer.video == NULL && serial != v->glass_serial) {   // a layer pass's draw reaches no glass
         v->glass_serial = serial;
         v->painted_new = true;      // on the glass with this render's publish, unless placed (videos_glass_published)
     }
@@ -21520,7 +21562,8 @@ static void pane_canvas(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_
                                             gl->surf->pixels, gl->surf->pitch_px, cut, box,
                                             !b->style->pixelated, &source);
     }
-    if (consumed) yonder_scripts_canvas_painted(g.page.scripts, b->node);
+    // A layer pass's draw is thrown away: the canvas's damage is the render's to take.
+    if (consumed && s_layer.video == NULL) yonder_scripts_canvas_painted(g.page.scripts, b->node);
 }
 
 static void pane_control(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip)
@@ -22843,9 +22886,24 @@ static void view_damage_check(os64_ui_widget_t *w, os64_draw_ctx_t *ctx)
     yonder_scratch_paint_end(g.paint_scratch);
 }
 
+// The verbs a layer pass paints with: the panes' own, not view_verbs' timed
+// ones, so a pass counts nothing of a paint's (its effects, its canvases
+// drawn, its videos' costs); what it costs is counted apart (plane_layer_make).
+static yonder_verbs_t layer_verbs(GlassPane *pane)
+{
+    return (yonder_verbs_t){pane,        pane_fill,    pane_text,       pane_image,
+                            pane_control, pane_backdrop, pane_group_open, pane_group_close,
+                            pane_mask,   pane_pixels,  pane_stand_in,  pane_keep, pane_through_open,
+                            pane_through_close, pane_clip_open, pane_clip_fill, pane_clip_close,
+                            g.page.modern ? pane_canvas : NULL,
+                            pane_layer_open, pane_layer_close, pane_backdrop_filter,
+                            pane_layer_take};
+}
+
 // `part` (window coordinates, inside `v`'s clip) filled with `paper` and
-// painted from `v`'s box up, as the render painted it but for the picture.
-// False when the walk never handed the box over.
+// painted from `v`'s box up as the render painted it, but for the picture:
+// the walk from the box, the scroll boxes' bars, and the widgets painted
+// after the view. False when the walk never handed the box over.
 static bool plane_layer_paint(const Video *v, os64_gui_rect_t part, uint32_t paper)
 {
     const flow_box_t *b = g.page.tree != NULL ? flow_box_for(g.page.tree, v->node) : NULL;
@@ -22856,7 +22914,7 @@ static bool plane_layer_paint(const Video *v, os64_gui_rect_t part, uint32_t pap
     GlassGroups groups = {.depth = 0};
     Glass gl = {surf, g.view.bounds.x - g.sx, g.view.bounds.y - g.sy, {0, 0, 0, 0}, &groups, g.view.bounds};
     GlassPane pane = {{&gl, NULL}, 1, {NULL}, 0, NULL, {NULL, 0, 0}, false, {0}, 0};
-    yonder_verbs_t verbs = view_verbs(&pane);
+    yonder_verbs_t verbs = layer_verbs(&pane);
     os64_gui_rect_t view = {part.x - gl.dx, part.y - gl.dy, part.w, part.h};
     os64_gui_rect_t whole = {g.view.bounds.x - gl.dx, g.view.bounds.y - gl.dy, g.view.bounds.w, g.view.bounds.h};
     s_layer = (__typeof__(s_layer)){v, part, false};
@@ -22864,6 +22922,13 @@ static bool plane_layer_paint(const Video *v, os64_gui_rect_t part, uint32_t pap
                                    g.paint_cache, g.paint_scratch, &verbs, b);
     bool reached = s_layer.reached;
     s_layer = (__typeof__(s_layer)){0};
+    if (found && reached) {
+        // Over everything the walk paints: the scroll boxes' bars, as
+        // view_paint draws them, and then the widgets libui paints after
+        // the view, each cut to the part.
+        box_bars(&gl, view);
+        os64_ui_paint_after(&g.ui, &g.view, part);
+    }
     if (pane.canvas_label.run != NULL)
         os64_text_run_release(pane.canvas_label.run);
     return found && reached;

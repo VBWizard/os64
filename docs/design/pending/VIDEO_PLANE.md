@@ -392,25 +392,30 @@ of § 3.5's rules.
   twice more from the video up (`plane_layer_paint`: `yonder_paint_from`
   with the glass's clip empty until `pane_video` for that video, which puts
   it back and draws nothing, so the box's own background beneath the
-  picture is skipped) over black and over white, and `yonder_plane_layer`
-  takes the layer apart; the map is inked from the layer's coverage and the
-  widgets noted over the clip, and gives the overlays
+  picture is skipped; then the scroll boxes' bars and the widgets libui
+  paints after the view, `os64_ui_paint_after`, each cut to the part) over
+  black and over white, with the panes' own verbs so a pass counts nothing
+  of a paint's, and `yonder_plane_layer` takes the layer apart; the passes'
+  time is a clause of its own in the reading, taken out of the render's
+  cost. The map is inked from the layer's coverage and gives the overlays
   (`yonder_plane_map_overlays`: rows of inked tiles as runs, grown down,
-  joined by least added area to eight). The hole holds the layer, zero where
-  there is none, and a widget's pixels as painted with the top byte 255. The
-  place's edit carries the overlays, and a change of them is a change of
-  place. New reasons: not a layer (a pixel's channels disagreeing by more
-  than one, or a layer that could not be made: the part is forgotten in the
-  map until a paint can say), the overlays' budget (the kernel's 98,304
-  pixels; or more drawn over the pictures than one paint keeps account of),
-  not yet painted. The non-source-over readers (a backdrop filter, a blend
+  joined by least added area to eight). The hole holds the layer, zero
+  where there is none. The place's edit carries the overlays, and a change
+  of them is a change of place; a refused publish whose places changed only
+  their overlays keeps its holes and asks again, counted, and overlays the
+  kernel refused as too large take the video off its plane for the budget
+  instead of asking again. New reasons: not a layer (a pixel's channels
+  disagreeing by more than one, or a layer that could not be made: the part
+  is forgotten in the map until a paint can say), the overlays' budget (the
+  kernel's 98,304 pixels), not yet painted. The non-source-over readers (a backdrop filter, a blend
   other than normal) were already P3a's "a backdrop reader"; every other
   verb composes source over. `--plane-check[=N]` composes the hole with the
   kernel's own `plane_blend` (built into yonder by `plane_blend.c`) against
   the page's pixels, counted per video in the record. Proof: the host cases
   in `tools/test_yonder_planes.inc` (an opaque box, black over black, a
-  filtered box, half-red controls and a caption, a widget, the budget, a
-  layer that cannot be made, a wrong layer the check finds) with hand
+  filtered box, half-red controls and a caption, a pill-shaped widget the
+  picture's colour, a scroll box's bar, the budget, a layer that cannot be
+  made, a wrong layer the check finds) with hand
   mutants, the core's in `tools/test_plane_place_host.sh` (the layer
   arithmetic against a reference, the overlays against a per-pixel count,
   the union's area, forgetting); on QEMU `video-controls.html`,
@@ -538,8 +543,8 @@ older picture, and the glass would step back one for a frame. Otherwise the
 page's thread paints it as now, plain or general, from `shown`.
 
 Each reason is counted, in this order (`plane_place.h`): out of view, not a
-cover, a backdrop reader, another plane's clip, something over it (the
-overlay budget, from P3b), not ready, a refused publish. The plane is
+cover, a backdrop reader, another plane's clip, not a layer, the
+overlays' budget, not yet painted, not ready, a refused publish. The plane is
 **wanted** (`os64_media_player_plane_want`) for every reason but out of
 view, so the picture is current when the reason goes; that costs the show
 thread a copy and a publish of every picture to a plane nobody sees, for as
@@ -571,11 +576,15 @@ the page from `shown`.
   part is, pixel by pixel, content plus what lies beneath times (1 − a).
   Anything else that meets a clip (a backdrop filter, a blend mode, any
   filter or group whose result at a pixel depends on what lies beneath its
-  neighbours) is a reason of its own, counted with the element named; and a
-  pixel whose a, taken from each of the three channels, disagrees by more
-  than 1 makes that part no layer, the video painted by the page for that
-  paint, the element named in the record. `--plane-check` stays the proof on
-  real pages.
+  neighbours) is a reason of its own, counted: P3a's "a backdrop reader",
+  since the backdrop filter and a blend other than normal are the only verbs
+  that read what lies beneath; every other composes source over. A pixel
+  whose a, taken from each of the three channels, disagrees by more than 1
+  makes that part no layer, as does a layer that cannot be made: the part
+  is forgotten in the map, so the video is painted by the page, counted as
+  not a layer, until a paint of that part can say what lies there.
+  `--plane-check` stays the proof on real pages; it names the video and the
+  pixel, not the element over it.
 - Each area with coverage is an overlay rectangle, from **ink, not boxes'
   rectangles**: a 16-pixel tile map per video says which tiles the page
   painted over the picture, kept across partial repaints (a tile a paint
@@ -584,9 +593,12 @@ the page from `shown`.
   the whole video to take clicks paints nothing, and costs nothing. More
   than 8 rectangles are joined.
 - **Every in-window toolkit widget over a clip** (yonder's `<video controls>`
-  strip, a form control placed over a box) is opaque: its rectangle is an
-  overlay rectangle and yonder sets the top byte to 255 over it after the
-  toolkit paints.
+  strip, a form control placed over a box) is in the same two paints: the
+  layer pass paints, after the page's walk and the scroll boxes' bars, the
+  widgets libui paints after the view, each cut to the part
+  (`os64_ui_paint_after`), so a widget's coverage comes from the two
+  backdrops like the page's, never from its colours. A rounded strip is
+  opaque at its body and see-through at its corners.
 - The place is the fitted box as the origin rectangle, and that box cut by
   the ancestors' clip and the view as the clip. It is an edit of the publish
   that paints the hole: one `window_publish_edits` whose damage covers every
@@ -662,8 +674,13 @@ plane does not prevent.
   that channel's own (the disagreement § 5.2 allows), whose share of the
   picture is then one off at most. Differences of 1 and of 2 are counted
   apart; anything more, or coverage outside every overlay, is wrong, and the
-  first wrong pixel of a paint is said with where it is. (Measured on QEMU:
-  the 2s are a few in a million, all at partial coverage.)
+  first wrong pixel of a paint is said with where it is. Why the two: the
+  coverage is measured from one channel, and each blend rounds on its own.
+  It is measured, not proven: on QEMU's fixtures the 2s are a few in a
+  million, all at partial coverage, but each see-through layer nested in a
+  stack adds a rounding of its own, so a deep enough stack may exceed it
+  (the host case of three stacked see-through boxes over a video prints the
+  largest difference it finds).
 - Fixtures: a video while a script holds the page's thread
   (`video-held.html`); a video's session closed while its page stays, and a
   navigation that takes seconds to arrive (`video-leave.html`,
