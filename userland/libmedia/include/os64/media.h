@@ -120,6 +120,8 @@ typedef struct {
 #define OS64_MEDIA_CANNOT_SEEK  (-8)   // the source cannot seek, or refused the place asked for
 #define OS64_MEDIA_NO_PICTURE   (-9)   // media with no picture in it, when a picture was wanted and no sound
                                        // was, or both were and neither is there
+#define OS64_MEDIA_NO_PLANE     (-10)  // a plane could not be had (os64/media_player.h says why in its facts)
+#define OS64_MEDIA_BUSY         (-11)  // the call's resource is taken (each call says which)
 
 // Probe the source, find its sound, and get ready to decode it. On success
 // *out is the media and *info (if not NULL) describes it. The picture, if

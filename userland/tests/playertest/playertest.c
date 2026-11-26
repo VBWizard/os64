@@ -36,6 +36,16 @@
 //   7. a seek asked while the player is still OPENING (its source's reads
 //      held back) is carried out once it is open, under the generation it
 //      answered: it plays from there
+//   8. A PLANE (os64/media_player.h § A plane), with a window (skipped
+//      without a desktop): the plane is made and the caller's `frame` is
+//      refused; the first picture is published while hidden; placed and
+//      wanted, pictures are published at the display's pace; `shown` gives
+//      a picture whose pixels do not change while the pace moves on, and a
+//      third view at once is BUSY; a new size past the plane's class goes
+//      STALE while placed and READY after a hide, on a new plane; closed
+//      with its plane still placed, the player finishes after the closing
+//      bound and the kernel has taken the plane out; a plane refused (the
+//      window's four slots taken) leaves `frame` the caller's
 //   (2 also counts `look`: a sound alone playing on rings it for its
 //   position)
 //
@@ -48,6 +58,8 @@
 #include "os64/media_output.h"
 #include "os64/media_player.h"
 #include "os64/thread.h"
+#include "os64/gui.h"
+#include "os64/media_show.h"
 #include "../avtest/sine_mp3.h"
 
 #include <math.h>
@@ -496,6 +508,240 @@ static int step_picture_loop(const char *path)
     return 0;
 }
 
+// /sys/gui's count of planes in the machine.
+static int64_t gui_planes(void)
+{
+    static char text[32768];
+    int64_t h = os64_open("/sys/gui", "r");
+    if (h < 0)
+        return -1;
+    int64_t n = 0, got;
+    while (n < (int64_t)sizeof(text) - 1 && (got = os64_read((int32_t)h, text + n, sizeof(text) - 1 - (size_t)n)) > 0)
+        n += got;
+    os64_close((int32_t)h);
+    text[n] = 0;
+    for (int64_t i = 0; i + 8 <= n; i++)
+        if (os64_memcmp(text + i, "planes: ", 8) == 0)
+            return os64_atoi(text + i + 8);
+    return -1;
+}
+
+static uint64_t view_sum(const os64_media_player_view_t *v)
+{
+    uint64_t sum = 0;
+    for (uint32_t i = 0; i < v->w * 8 && i < v->w * v->h; i++)
+        sum = sum * 31 + v->pixels[i];
+    return sum;
+}
+
+typedef struct {
+    rig_t r;
+    clip_t clip;
+} plane_rig_t;
+
+static bool plane_rig_open(plane_rig_t *pr)
+{
+    os64_memset(pr, 0, sizeof(*pr));
+    pr->clip.file = (int32_t)os64_open("/tests/pages/loop-sound-short.mp4", "r");
+    if (pr->clip.file < 0)
+        return false;
+    int64_t size = os64_seek(pr->clip.file, 0, OS64_SEEK_END);
+    os64_seek(pr->clip.file, 0, OS64_SEEK_SET);
+    s_finished = false;
+    if (os64_media_output_create(&pr->r.output) != 0)
+        return false;
+    os64_media_player_config_t cfg = {
+        .source = {&pr->clip, clip_read, clip_seek, size, false, NULL},
+        .want = OS64_MEDIA_WANT_SOUND | OS64_MEDIA_WANT_PICTURE,
+        .output = pr->r.output,
+        .refused = OS64_MEDIA_VOICE_PLAY_ON,
+        .loaded = true,
+        .look = counted_look,
+        .finished = finished,
+        .ctx = &pr->r};
+    if (os64_media_player_create(&cfg, &pr->r.player) != 0)
+        return false;
+    os64_media_player_size(pr->r.player, 320, 240);
+    os64_media_player_loop(pr->r.player, true);
+    return true;
+}
+
+static void plane_rig_close(plane_rig_t *pr)
+{
+    rig_close(&pr->r);
+    os64_close(pr->clip.file);
+}
+
+// Waits up to `ms` for a fact the test names.
+#define WAIT_FACT(pr, ms, cond)                                                           ({                                                                                        os64_media_player_facts_t f_;                                                         int64_t until_ = os64_micros() + (int64_t)(ms) * 1000;                                do {                                                                                      f_ = facts(&(pr)->r);                                                                 if (cond)                                                                                 break;                                                                            os64_sleep(10);                                                                   } while (os64_micros() < until_);                                                     f_;                                                                               })
+
+static int64_t place(int64_t win, uint32_t plane, os64_gui_rect_t origin, os64_gui_rect_t clip)
+{
+    os64_gui_plane_edit_t e = {0};
+    e.plane = plane;
+    e.origin = origin;
+    e.clip = clip;
+    return os64_gui_window_publish_edits(win, NULL, &e, 1);
+}
+
+static int64_t hide(int64_t win, uint32_t plane)
+{
+    os64_gui_plane_edit_t e = {.plane = plane, .hide = 1};
+    return os64_gui_window_publish_edits(win, NULL, &e, 1);
+}
+
+static int step_plane(void)
+{
+    int64_t win = os64_gui_window_create("playertest", 80, 80, 400, 300, OS64_GUI_CREATE_CONTENT_SIZE);
+    if (win == OS64_GUI_ERR_NOT_RUNNING) {
+        os64_printf("playertest: step 8 skipped: no desktop\n");
+        return 0;
+    }
+    if (win <= 0)
+        return die(8, "the window would not open", win);
+    os64_gui_surface_t surf;
+    if (os64_gui_window_get_surface(win, &surf) == 0) {
+        for (uint32_t y = 0; y < surf.height; y++)
+            for (uint32_t x = 0; x < surf.width; x++)
+                surf.pixels[(size_t)y * surf.pitch_px + x] =
+                    x >= 40 && x < 360 && y >= 30 && y < 270 ? 0 : 0xFF202830u;   // a see-through hole
+        os64_gui_window_publish(win, NULL);
+    }
+    int64_t planes_before = gui_planes();
+    plane_rig_t pr;
+    if (!plane_rig_open(&pr))
+        return die(8, "the clip or its player would not open", 0);
+    int code = 0;
+    os64_media_player_frame_t fr;
+    int rc = os64_media_player_plane(pr.r.player, win);
+    os64_media_player_facts_t f = facts(&pr.r);
+    if (rc != 0 || f.plane_state != OS64_MEDIA_PLANE_ON || f.plane_name == 0) {
+        code = die(8, "the plane was not made (the call)", rc);
+        goto out;
+    }
+    if (os64_media_player_frame(pr.r.player, os64_micros(), 16667, &fr) || facts(&pr.r).frame_refused == 0) {
+        code = die(8, "the caller's frame was not refused with a plane on", 0);
+        goto out;
+    }
+    os64_media_player_play(pr.r.player);
+    f = WAIT_FACT(&pr, 3000, f_.plane_published > 0 && f_.plane_ready);
+    if (f.plane_published == 0 || f.plane_pic_w != 320 || f.plane_pic_h != 240) {
+        code = die(8, "the first picture was not published while hidden (published)", (int64_t)f.plane_published);
+        goto out;
+    }
+    os64_gui_rect_t hole = {40, 30, 320, 240};
+    if (place(win, f.plane_name, hole, hole) != 0) {
+        code = die(8, "the plane would not be placed", place(win, f.plane_name, hole, hole));
+        goto out;
+    }
+    os64_media_player_plane_want(pr.r.player, true);
+    uint64_t published = f.plane_published;
+    os64_sleep(1000);
+    f = facts(&pr.r);
+    os64_printf("playertest: plane %u: %lu published in a second placed, %lu display frames missed\n", f.plane_name,
+                (unsigned long)(f.plane_published - published), (unsigned long)f.frames_missed);
+    if (f.plane_published < published + 10) {
+        code = die(8, "placed and playing, pictures were not published at the display's pace", (int64_t)(f.plane_published - published));
+        goto out;
+    }
+
+    // `shown`: pinned pixels while the pace moves on; two views at most.
+    os64_media_player_view_t a, b, c;
+    if (os64_media_player_shown(pr.r.player, &a) != 0) {
+        code = die(8, "shown gave nothing while playing", 0);
+        goto out;
+    }
+    uint64_t sum = view_sum(&a);
+    os64_sleep(300);
+    rc = os64_media_player_shown(pr.r.player, &b);
+    int third = rc == 0 ? os64_media_player_shown(pr.r.player, &c) : 0;
+    bool kept = view_sum(&a) == sum, moved = rc == 0 && b.serial != a.serial;
+    if (third == 0)
+        os64_media_player_shown_done(pr.r.player, &c);
+    if (rc == 0)
+        os64_media_player_shown_done(pr.r.player, &b);
+    os64_media_player_shown_done(pr.r.player, &a);
+    if (!kept || !moved || third != OS64_MEDIA_BUSY) {
+        code = die(8, "shown: pixels kept, the pace moved on, a third view BUSY (the third's answer)", third);
+        goto out;
+    }
+
+    // A new size past the plane's class: stale while placed, ready after a
+    // hide, on a new plane.
+    os64_media_player_size(pr.r.player, 960, 540);
+    f = WAIT_FACT(&pr, 3000, f_.plane_stale);
+    if (!f.plane_stale || f.plane_ready) {
+        code = die(8, "a new size while placed did not go stale", f.plane_ready);
+        goto out;
+    }
+    uint32_t old_name = f.plane_name;
+    if (hide(win, old_name) != 0) {
+        code = die(8, "the plane would not be hidden", hide(win, old_name));
+        goto out;
+    }
+    f = WAIT_FACT(&pr, 3000, f_.plane_ready);   // ready means the size asked: 960 x 540
+    if (!f.plane_ready || f.plane_pic_w != 960 || f.plane_recreates != 1 || f.plane_cap_w < 960 ||
+        f.plane_name == old_name) {
+        code = die(8, "hidden, the new size did not come ready on a new plane (recreates)", (int64_t)f.plane_recreates);
+        goto out;
+    }
+    if (place(win, f.plane_name, (os64_gui_rect_t){0, 0, 960, 540}, (os64_gui_rect_t){0, 0, 400, 300}) != 0) {
+        code = die(8, "the new plane would not be placed", 0);
+        goto out;
+    }
+    os64_sleep(300);
+
+    // Closed with the plane placed: finished after the closing bound, the
+    // plane taken out by the kernel as the show thread ends.
+    int64_t t0 = os64_micros();
+    os64_media_player_close(pr.r.player);
+    for (int i = 0; i < 1000 && !__atomic_load_n(&s_finished, __ATOMIC_ACQUIRE); i++)
+        os64_sleep(10);   // up to ten seconds: past the closing bound
+    int64_t took = (os64_micros() - t0) / 1000;
+    pr.r.player = NULL;     // closed (and freed, once finished)
+    plane_rig_close(&pr);   // it only lets the output go
+    int64_t planes_after = gui_planes();
+    os64_printf("playertest: closed with the plane placed: finished after %ld ms, planes %ld then %ld\n", took,
+                planes_before, planes_after);
+    if (!__atomic_load_n(&s_finished, __ATOMIC_ACQUIRE) || took < OS64_MEDIA_SHOW_CLOSE_BOUND_US / 1000 ||
+        planes_after != planes_before) {
+        code = die(8, "closed placed: no finish after the bound, or the plane left behind (ms)", took);
+        goto destroy;
+    }
+
+    // Refused: the window's four slots are taken, so the player has none,
+    // and `frame` is the caller's again.
+    int64_t mine[4];
+    for (int i = 0; i < 4; i++)
+        mine[i] = os64_gui_plane_create(win, 64, 48);
+    if (!plane_rig_open(&pr)) {
+        code = die(8, "the second player would not open", 0);
+        goto release;
+    }
+    rc = os64_media_player_plane(pr.r.player, win);
+    f = facts(&pr.r);
+    os64_media_player_play(pr.r.player);
+    bool framed = false;
+    for (int i = 0; i < 200 && !framed; i++) {
+        framed = os64_media_player_frame(pr.r.player, os64_micros() + 16667, 16667, &fr);
+        os64_sleep(10);
+    }
+    plane_rig_close(&pr);
+    if (rc != OS64_MEDIA_NO_PLANE || f.plane_state != OS64_MEDIA_PLANE_REFUSED || f.plane_refusal == 0 || !framed)
+        code = die(8, "with no slot: refused, its reason, and frame the caller's again (the call)", rc);
+release:
+    for (int i = 0; i < 4; i++)
+        if (mine[i] > 0)
+            os64_gui_plane_destroy(win, (uint32_t)mine[i]);
+destroy:
+    if (os64_gui_window_destroy(win) != 0 && code == 0)
+        code = die(8, "the window would not go after its planes", 0);
+    return code;
+out:
+    plane_rig_close(&pr);
+    goto destroy;
+}
+
 // An MP3 with no header naming its length, from a source that does not
 // know its size: the probe cannot say how long it is, and the end does.
 typedef struct {
@@ -618,6 +864,8 @@ int main(void)
         code = step_length_at_end();
     if (code == 0)
         code = step_seek_while_opening();
+    if (code == 0)
+        code = step_plane();
     if (s_tap >= 0)
         os64_close(s_tap);
     if (volume >= 0)
