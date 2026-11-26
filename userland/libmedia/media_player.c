@@ -144,7 +144,7 @@ struct os64_media_player {
     bool plane_poke;                      // a poke owed: unlock gives it, after the lock
     bool show_paces;                      // the show thread owns the pace: `frame` is refused
     bool show_quit;                       // the plane call's tripwire: the show thread is to end
-    int plane_refusal;                    // the GUI's answer when the plane could not be had
+    int plane_refusal;                    // the GUI's answer when the plane could not be had, or that ended it
     int64_t show_thread;
     os64_bell_t show_bell;                // the show thread's first verdict, to the plane call
     os64_media_show_t show;
@@ -152,14 +152,14 @@ struct os64_media_player {
     // What reached the glass from the plane: pictures published while it was
     // placed and shown (the pass's wait answered a display frame) and the
     // clock ran; how many runs of them there have been; when the first of
-    // the current run of them was and the last
+    // the current run of them was, the last of the run before it, and the last
     // (kept after the run ends, for the caller to read); the run's anchor,
     // the last of them while the run lasts and 0 once it ends (not placed,
     // the clock still, or a wait whose patience ended: not shown); and the
     // longest time between two of them in one run since the last
     // os64_media_player_plane_gap_take.
     uint64_t placed_published, placed_runs;
-    int64_t placed_first_us, placed_last_us, placed_anchor_us, placed_gap_max_us;
+    int64_t placed_first_us, placed_last_us, placed_prev_last_us, placed_anchor_us, placed_gap_max_us;
     uint32_t pinned;                      // frames pinned by `shown` (at most two)
 
     os64_bell_t decode_bell, picture_bell;   // picture_bell only with a picture asked for
@@ -921,6 +921,7 @@ static int64_t show_thread(void *arg)
                 int64_t at = now_us();
                 p->placed_published++;
                 if (p->placed_anchor_us == 0) {
+                    p->placed_prev_last_us = p->placed_last_us;     // the run before ended there
                     p->placed_first_us = at;
                     p->placed_runs++;
                 } else if (at - p->placed_anchor_us > p->placed_gap_max_us)
@@ -936,6 +937,7 @@ static int64_t show_thread(void *arg)
         if (act.end) {
             os64_lock_acquire(&p->lock);
             p->plane_state = OS64_MEDIA_PLANE_ENDED;
+            p->plane_refusal = gone ? (int)rc : 0;  // the frame wait's answer that ended it; 0 for a close
             p->show_paces = false;
             p->plane_name = 0;
             look(p);
@@ -950,11 +952,35 @@ int os64_media_player_plane(os64_media_player_t *p, int64_t win)
     if (p == NULL || win <= 0 || (p->cfg.want & OS64_MEDIA_WANT_PICTURE) == 0)
         return OS64_MEDIA_BAD_ARGS;
     os64_lock_acquire(&p->lock);
-    if (p->plane_state != OS64_MEDIA_PLANE_NONE) {
+    bool again = false;
+    if (p->plane_state == OS64_MEDIA_PLANE_ENDED && !p->quit && p->show_thread > 0) {
+        // A plane that ended while the player plays may be asked for again:
+        // its show thread has returned, so it is joined and a new one
+        // starts as the first did. STARTING across the join, so another
+        // call meanwhile is answered BUSY.
+        int64_t ended = p->show_thread;
+        p->show_thread = 0;
+        p->plane_state = OS64_MEDIA_PLANE_STARTING;
+        p->show_quit = false;
+        os64_lock_release(&p->lock);
+        (void)os64_thread_join((int32_t)ended, NULL);
+        os64_close((int32_t)ended);
+        os64_lock_acquire(&p->lock);
+        if (p->quit) {
+            // Closed during the join: no new plane for a closing player.
+            p->plane_state = OS64_MEDIA_PLANE_ENDED;
+            os64_lock_release(&p->lock);
+            return OS64_MEDIA_BUSY;
+        }
+        again = true;
+    }
+    if (!again && p->plane_state != OS64_MEDIA_PLANE_NONE) {
         os64_lock_release(&p->lock);
         return OS64_MEDIA_BUSY;
     }
     if (os64_bell_make(&p->show_bell) < 0) {
+        if (again)
+            p->plane_state = OS64_MEDIA_PLANE_ENDED;    // as it was before the ask
         os64_lock_release(&p->lock);
         return OS64_MEDIA_NO_MEMORY;
     }
@@ -1743,6 +1769,7 @@ void os64_media_player_facts(os64_media_player_t *p, os64_media_player_facts_t *
     f.plane_placed_published = p->placed_published;
     f.plane_placed_runs = p->placed_runs;
     f.plane_placed_first_us = p->placed_first_us;
+    f.plane_placed_prev_last_us = p->placed_prev_last_us;
     f.plane_placed_last_us = p->placed_last_us;
     f.waits_patience = p->waits_patience;
     f.frame_refused = p->frame_refused;

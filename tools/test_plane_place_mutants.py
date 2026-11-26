@@ -47,8 +47,8 @@ mutants = [
     # The layer.
     ('coverage-from-red', '        if (a[1] > 0)\n            counts->inked++;\n        out[i] = (uint32_t)a[1] << 24',
      '        if (a[0] > 0)\n            counts->inked++;\n        out[i] = (uint32_t)a[0] << 24'),
-    ('disagreement-not-counted', '        if (hi - lo > 1)\n', '        if (hi - lo > 255)\n'),
-    ('disagreement-too-strict', '        if (hi - lo > 1)\n', '        if (hi - lo > 0)\n'),
+    ('disagreement-not-counted', '        if (hi - lo > 1) {', '        if (hi - lo > 255) {'),
+    ('disagreement-too-strict', '        if (hi - lo > 1) {', '        if (hi - lo > 0) {'),
     ('colour-from-the-white-pass', '    out[i] = (uint32_t)a[1] << 24 | (b[i] & 0x00ffffffu);', '    out[i] = (uint32_t)a[1] << 24 | (w[i] & 0x00ffffffu);'),
     ('coverage-not-clamped-high', '            a[c] = v < 0 ? 0 : v > 255 ? 255 : v;', '            a[c] = v < 0 ? 0 : v;'),
     # The overlays.
@@ -62,6 +62,12 @@ mutants = [
      '    *area = n ? (uint64_t)all.w * (uint64_t)all.h : 0;\n    return n;'),
     ('forget-forgets-nothing', '            m->tiles[(size_t)r * m->cols + c] = YONDER_PLANE_TILE_UNKNOWN;',
      '            (void)0;'),
+    ('whole-tiles-not-grown', '    yonder_plane_rect_t in_origin;\n    return cut(tiles, m->origin, &in_origin) && cut(in_origin, clip, out);',
+     '    yonder_plane_rect_t in_origin;\n    (void)tiles;\n    return cut(in, m->origin, &in_origin) && cut(in_origin, clip, out);'),
+    ('join-past-the-cap', '    while (n > max) {\n        uint32_t bi = 0, bj = 1;', '    while (n > max + 1) {\n        uint32_t bi = 0, bj = 1;'),
+    ('join-the-dearest', '                if (cost < best) {', '                if (cost > best || best == INT64_MAX) {'),
+    ('spread-off-by-one', '            counts->spread[hi - lo >= 5 ? 3 : hi - lo - 2]++;', '            counts->spread[hi - lo >= 5 ? 3 : hi - lo - 1 > 3 ? 3 : hi - lo - 1]++;'),
+    ('first-not-the-first', '            if (counts->disagree == 0) {', '            if (1) {'),
     ('a-cell-counted-twice', '                    area += (uint64_t)(xs[i + 1] - xs[i]) * (uint64_t)(ys[j + 1] - ys[j]);\n                    break;',
      '                    area += (uint64_t)(xs[i + 1] - xs[i]) * (uint64_t)(ys[j + 1] - ys[j]);'),
     ('a-partial-paint-clears', '            else if (whole)\n', '            else if (whole || 1)\n'),
