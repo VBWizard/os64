@@ -1425,9 +1425,14 @@ bool yonder_media_plane_ask(yonder_media_t *m, int64_t win)
     if (p == NULL)
         return false;
     os64_lock_acquire(&m->lock);
-    bool ask = !m->plane_asked && !m->player_closed;
+    // Once a session, or again once the last ask's helper is done (the
+    // caller asks again for a plane that ended; the player answers BUSY to
+    // any other). The done flag goes back down before the new helper
+    // starts, so the session's free waits for it.
+    bool ask = (!m->plane_asked || m->plane_helper_done) && !m->player_closed;
     if (ask) {
         m->plane_asked = true;
+        m->plane_helper_done = false;
         m->plane_win = win;
         // Started before the thread runs, and kept even when the start
         // fails: a failed start may still be running (thread_start).
