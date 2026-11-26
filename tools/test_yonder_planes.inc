@@ -358,8 +358,10 @@ static void glass_plane_publishes(int n, int64_t step, bool fresh)
     for (int k = 0; k < n; k++) {
         clock_us += step;
         fake_plane.facts.plane_placed_published++;
-        if (fresh && k == 0)
+        if (fresh && k == 0) {
             fake_plane.facts.plane_placed_first_us = clock_us;
+            fake_plane.facts.plane_placed_runs++;
+        }
         fake_plane.facts.plane_placed_last_us = clock_us;
     }
 }
@@ -460,12 +462,33 @@ static void glass_cases(void)
     clock_us += 10000;
     video_glass_open_gap(v, os64_micros());
     check(v->glass_gap_us == 10000, "glass: the plane's pictures from before a pause are not the new watch's");
+    /* Two runs begun between folds: the time before the latest holds the
+     * earlier run's pictures, so no bridge is counted from the last fold. */
+    v->glass_gap_us = 0;
+    uint64_t runs = fake_plane.facts.plane_placed_runs;
+    glass_plane_publishes(30, 33000, true);
+    clock_us += 100000;
+    glass_plane_publishes(30, 33000, true);
+    check(fake_plane.facts.plane_placed_runs == runs + 2, "glass: two runs begun");
+    video_glass_open_gap(v, os64_micros());
+    check(v->glass_gap_us == 0, "glass: two runs between folds bridge nothing");
+    /* The player's gap inside a watch survives the watch's end. */
+    v->glass_gap_us = 0;
+    fake_plane.gap = 2000000;
+    v->playing = false;
+    videos_glass_watch();
+    check(v->glass_gap_us == 2000000 && v->glass_watch_from_us == 0,
+          "glass: a stall the player saw before a pause is counted as the watch ends");
+    v->playing = true;
+    videos_glass_watch();
+    v->glass_gap_us = v->glass_gap_reading_us = 0;
+    clock_us += 10000;
     /* The record's reading says the same, and starts again. */
     f = fake_plane.facts;
     DiagText t = {0};
     video_glass_reading(&t, v, &f);
-    check(t.s != NULL && strstr(t.s, "reached the glass 181 pictures since the last reading, the longest without a "
-                                     "new one 700 ms") != NULL,
+    check(t.s != NULL && strstr(t.s, "reached the glass 241 pictures since the last reading, the longest without a "
+                                     "new one 10 ms") != NULL,
           "glass: the record's words");
     os64_free(t.s);
     videos_glass_reading_restart();
@@ -476,5 +499,22 @@ static void glass_cases(void)
           "glass: a reading starts the words again, the open gap still counted");
     os64_free(t.s);
     v->placed = false;
+    plane_drop();
+
+    /* A paint of only the box's letterboxing draws none of the picture: no
+     * picture reaches the glass, and the next paint that draws it counts. */
+    plane_page("<!doctype html><style>body{margin:0;background:#123}"
+               "#v{position:absolute;left:40px;top:40px;width:320px;height:320px}</style><video id=v></video>");
+    v->playing = true;
+    videos_glass_watch();
+    planes_prepare();       /* `shown` pinned, the picture the paint draws */
+    g.ui.dirty = (os64_gui_rect_t){g.view.bounds.x + 40, g.view.bounds.y + 40, 320, 40};
+    view_paint(&g.view, &plane_screen, NULL);
+    check(v->view.frame != NULL && !v->painted_new && v->glass_serial == 0,
+          "glass: a paint of the letterboxing alone draws no picture");
+    (void)plane_render();
+    check(v->painted_new && v->glass_serial == fake_plane.serial, "glass: the paint that draws it does");
+    planes_release();
+    v->painted_new = false;
     plane_drop();
 }

@@ -655,11 +655,13 @@ plane does not prevent.
   without a new picture of that video while it was WATCHED: its clock
   running, its box on the view, the window not covered, judged at every turn
   of the loop, so a pause or a scroll away is no gap while a page thread
-  held for seconds (which runs no turn) is. The gaps come from the page's
-  paints, from the player's own gaps between placed publishes
-  (`os64_media_player_plane_gap_take`), from the page's last picture to a
-  plane run's first, and from a gap still open when a line or a reading is
-  written. An open gap is never cut: each line and each reading counts the
+  held for seconds (which runs no turn) is; a watch's end counts what it
+  saw before it closes. The gaps come from the page's paints that drew some
+  of the picture, from the player's own gaps between placed publishes
+  (`os64_media_player_plane_gap_take`), from the glass's last picture to a
+  plane run's first when that run is the only one begun since the last fold
+  (the plane is folded every turn), and from a gap still open when a line
+  or a reading is written. An open gap is never cut: each line and each reading counts the
   longest gap that ended or is open in its interval, and the picture ending
   a hold counts it whole. The picks keep columns of their own, named as
   picks, and the line's legend prints once.
