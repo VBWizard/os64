@@ -47,8 +47,8 @@ mutants = [
     # The layer.
     ('coverage-from-red', '        if (a[1] > 0)\n            counts->inked++;\n        out[i] = (uint32_t)a[1] << 24',
      '        if (a[0] > 0)\n            counts->inked++;\n        out[i] = (uint32_t)a[0] << 24'),
-    ('disagreement-not-counted', '        if (hi - lo > 1)\n', '        if (hi - lo > 255)\n'),
-    ('disagreement-too-strict', '        if (hi - lo > 1)\n', '        if (hi - lo > 0)\n'),
+    ('disagreement-not-counted', '        if (hi - lo > 1) {', '        if (hi - lo > 255) {'),
+    ('disagreement-too-strict', '        if (hi - lo > 1) {', '        if (hi - lo > 0) {'),
     ('colour-from-the-white-pass', '    out[i] = (uint32_t)a[1] << 24 | (b[i] & 0x00ffffffu);', '    out[i] = (uint32_t)a[1] << 24 | (w[i] & 0x00ffffffu);'),
     ('coverage-not-clamped-high', '            a[c] = v < 0 ? 0 : v > 255 ? 255 : v;', '            a[c] = v < 0 ? 0 : v;'),
     # The overlays.
