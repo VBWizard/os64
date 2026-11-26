@@ -6,6 +6,7 @@
  * make). */
 
 static uint32_t plane_pic[320 * 180];
+static uint32_t *plane_budget_pic;      /* plane_budget_page's picture, let go by plane_drop */
 static os64_gui_rect_t edit_clips[PLANE_EDIT_CLIPS];  /* planes_edits' clips, which the cases do not read */
 static uint32_t nedit_clips;
 static os64_draw_ctx_t plane_screen;
@@ -61,6 +62,8 @@ static void plane_drop(void)
     yonder_canvas_keeps_free(g.canvas_keeps);       /* made at a paint, as the window's close frees them */
     g.canvas_keeps = NULL;
     os64_free(plane_screen.surf.pixels);
+    os64_free(plane_budget_pic);
+    plane_budget_pic = NULL;
     g.ui.ctx = plane_saved_ctx;
     fake_plane = (__typeof__(fake_plane)){0};
     planes_counts_restart();
@@ -82,6 +85,35 @@ static uint32_t plane_damage_now(os64_gui_rect_t *out)
     for (uint32_t k = 0; k < n; k++)
         out[k] = g.ui.damage[k];
     return n;
+}
+
+/* A page whose box over the picture needs more overlay than the kernel
+ * blends, whatever the budget is: a picture W wide and 360 tall under a box
+ * W wide and 300 tall, W from PLANE_OVERLAY_BUDGET, in a window widened to
+ * hold it. plane_drop lets the picture go. */
+static void plane_budget_page(void)
+{
+    int32_t w = (int32_t)(PLANE_OVERLAY_BUDGET / 300u) + 64;
+    char html[512];
+    snprintf(html, sizeof(html),
+             "<!doctype html><style>body{margin:0;background:#123}"
+             "#v{position:absolute;left:40px;top:40px;width:%dpx;height:360px}"
+             "#o{position:absolute;left:40px;top:40px;width:%dpx;height:300px;background:red}</style>"
+             "<video id=v></video><div id=o></div>", (int)w, (int)w);
+    plane_page(html);
+    os64_free(plane_screen.surf.pixels);
+    plane_screen.surf.width = plane_screen.surf.pitch_px = (uint32_t)w + 80;
+    plane_screen.surf.height = 600;
+    plane_screen.surf.pixels = os64_calloc((size_t)(w + 80) * 600u, sizeof(uint32_t));
+    g.view.bounds = (os64_gui_rect_t){0, 0, w + 80, 600};
+    plane_budget_pic = os64_malloc((size_t)w * 360u * sizeof(uint32_t));
+    for (size_t i = 0; i < (size_t)w * 360u; i++)
+        plane_budget_pic[i] = 0xff204060u;
+    fake_plane.pixels = plane_budget_pic;
+    fake_plane.w = s_videos[0].width = s_videos[0].asked_w = (uint32_t)w;
+    fake_plane.h = s_videos[0].height = s_videos[0].asked_h = 360;
+    fake_plane.facts.plane_pic_w = (uint32_t)w;
+    fake_plane.facts.plane_pic_h = 360;
 }
 
 /* The whole window rendered, as the render after planes_prepare would. */
@@ -320,22 +352,9 @@ static void plane_cases(void)
     plane_drop();
 
     /* More over it than the kernel blends: an opaque box over most of a
-     * 640x360 picture needs overlays past the budget, so it is not placed. */
-    plane_page("<!doctype html><style>body{margin:0;background:#123}"
-               "#v{position:absolute;left:40px;top:40px;width:640px;height:360px}"
-               "#o{position:absolute;left:40px;top:40px;width:640px;height:300px;background:red}</style>"
-               "<video id=v></video><div id=o></div>");
-    {
-        /* The page's picture made larger than the budget's worth: 640x360. */
-        static uint32_t big[640 * 360];
-        for (uint32_t i = 0; i < 640u * 360u; i++)
-            big[i] = 0xff204060u;
-        fake_plane.pixels = big;
-        fake_plane.w = s_videos[0].width = s_videos[0].asked_w = 640;
-        fake_plane.h = s_videos[0].height = s_videos[0].asked_h = 360;
-        fake_plane.facts.plane_pic_w = 640;
-        fake_plane.facts.plane_pic_h = 360;
-    }
+     * picture sized from the budget needs overlays past it, so it is not
+     * placed. */
+    plane_budget_page();
     planes_prepare();
     d = plane_render();
     planes_judge(&d, 0, 1);
@@ -481,19 +500,8 @@ static void plane_cases(void)
     /* Off its plane for the budget: at most one pass a quarter second for
      * changes over it, the rest waited for and counted, their parts owed
      * and marked again once the wait is over (videos_tick). */
-    plane_page("<!doctype html><style>body{margin:0;background:#123}"
-               "#v{position:absolute;left:40px;top:40px;width:640px;height:360px}"
-               "#o{position:absolute;left:40px;top:40px;width:640px;height:300px;background:red}</style>"
-               "<video id=v></video><div id=o></div>");
+    plane_budget_page();
     {
-        static uint32_t big[640 * 360];
-        for (uint32_t i = 0; i < 640u * 360u; i++)
-            big[i] = 0xff204060u;
-        fake_plane.pixels = big;
-        fake_plane.w = s_videos[0].width = s_videos[0].asked_w = 640;
-        fake_plane.h = s_videos[0].height = s_videos[0].asked_h = 360;
-        fake_plane.facts.plane_pic_w = 640;
-        fake_plane.facts.plane_pic_h = 360;
         planes_prepare();
         os64_gui_rect_t dd[OS64_UI_DAMAGE_MAX];
         uint32_t nd = plane_damage_now(dd);
