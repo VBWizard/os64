@@ -618,6 +618,7 @@ static void glass_cases(void)
     glass_paint_once();
     v->glass_gap_us = 0;
     v->placed = true;
+    fake_plane.facts.plane_shown = true;    /* its waits answered by frames */
     glass_plane_publishes(1, 400000, true);
     glass_plane_publishes(89, 33000, false);
     fake_plane.gap = 34000;
@@ -650,6 +651,18 @@ static void glass_cases(void)
     clock_us += 10000;
     video_glass_open_gap(v, os64_micros());
     check(v->glass_gap_us == 10000, "glass: the plane's pictures from before a pause are not the new watch's");
+    /* Placed but not shown (behind another window): the watch ends, and
+     * the time the plane is hidden is no gap. */
+    v->glass_gap_us = 0;
+    fake_plane.facts.plane_shown = false;
+    videos_glass_watch();
+    check(v->glass_watch_from_us == 0, "glass: a placed plane not shown is not watched");
+    clock_us += 4000000;
+    fake_plane.facts.plane_shown = true;
+    videos_glass_watch();
+    clock_us += 10000;
+    video_glass_open_gap(v, os64_micros());
+    check(v->glass_gap_us == 10000, "glass: four seconds hidden are no gap");
     /* Two runs begun between folds: the time before the latest holds the
      * earlier run's pictures, so no bridge is counted from the last fold. */
     v->glass_gap_us = 0;
