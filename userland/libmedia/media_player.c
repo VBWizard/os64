@@ -151,13 +151,14 @@ struct os64_media_player {
     uint64_t frames_missed, waits_patience, frame_refused, start_tripwires, last_number;
     // What reached the glass from the plane: pictures published while it was
     // placed and shown (the pass's wait answered a display frame) and the
-    // clock ran; when the first of the current run of them was and the last
+    // clock ran; how many runs of them there have been; when the first of
+    // the current run of them was and the last
     // (kept after the run ends, for the caller to read); the run's anchor,
     // the last of them while the run lasts and 0 once it ends (not placed,
     // the clock still, or a wait whose patience ended: not shown); and the
     // longest time between two of them in one run since the last
     // os64_media_player_plane_gap_take.
-    uint64_t placed_published;
+    uint64_t placed_published, placed_runs;
     int64_t placed_first_us, placed_last_us, placed_anchor_us, placed_gap_max_us;
     uint32_t pinned;                      // frames pinned by `shown` (at most two)
 
@@ -919,9 +920,10 @@ static int64_t show_thread(void *arg)
             if (done && placed && frame && p->state == OS64_MEDIA_PLAYER_PLAYING) {
                 int64_t at = now_us();
                 p->placed_published++;
-                if (p->placed_anchor_us == 0)
+                if (p->placed_anchor_us == 0) {
                     p->placed_first_us = at;
-                else if (at - p->placed_anchor_us > p->placed_gap_max_us)
+                    p->placed_runs++;
+                } else if (at - p->placed_anchor_us > p->placed_gap_max_us)
                     p->placed_gap_max_us = at - p->placed_anchor_us;
                 p->placed_anchor_us = p->placed_last_us = at;
             }
@@ -1739,6 +1741,7 @@ void os64_media_player_facts(os64_media_player_t *p, os64_media_player_facts_t *
     f.plane_ended_placed = p->show.ended_placed;
     f.frames_missed = p->frames_missed;
     f.plane_placed_published = p->placed_published;
+    f.plane_placed_runs = p->placed_runs;
     f.plane_placed_first_us = p->placed_first_us;
     f.plane_placed_last_us = p->placed_last_us;
     f.waits_patience = p->waits_patience;
