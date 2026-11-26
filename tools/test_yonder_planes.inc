@@ -532,6 +532,21 @@ static void plane_cases(void)
         planes_prepare();
         check(!v->candidate && v->reason == YONDER_PLANE_UNPAINTED, "changes: forgotten tiles hold it off, not yet painted");
         planes_release();
+        /* And not yet painted waits a quarter second too. */
+        uint64_t capped = v->layers_capped, before = s_plane_counts.layer_passes;
+        for (int k = 0; k < 2; k++) {
+            g.ui.damage_count = 0;
+            g.ui.any_dirty = false;
+            mark_part((os64_gui_rect_t){100, 100, 40, 20});
+            planes_prepare();
+            os64_gui_rect_t dd[OS64_UI_DAMAGE_MAX];
+            uint32_t nd = plane_damage_now(dd);
+            (void)plane_render();
+            planes_judge(dd, 0, nd);
+            planes_release();
+        }
+        check(v->layers_capped == capped + 1 && s_plane_counts.layer_passes == before + 1,
+              "changes: not yet painted, one pass a quarter second too");
         now_ms = at;
     }
     plane_drop();
@@ -569,6 +584,38 @@ static void plane_cases(void)
         planes_release();
         check(!v->not_layer && yonder_plane_map_known(&v->map, to_plane_rect(v->clip)),
               "changes: the change after it is layered with what the failure left forgotten, and the map knows the clip again");
+    }
+    plane_drop();
+
+    /* A change with nothing over it, in a tile that also holds part of an
+     * overlay: the map is told of the change's own rectangle alone, so the
+     * tile stays inked and the overlays stay as they were. */
+    plane_page("<!doctype html><style>body{margin:0;background:#123}"
+               "#v{position:absolute;left:40px;top:40px;width:320px;height:180px}"
+               "#o{position:absolute;left:60px;top:60px;width:50px;height:20px;background:red}</style>"
+               "<video id=v></video><div id=o></div>");
+    planes_prepare();
+    d = plane_render();
+    planes_judge(&d, 0, 1);
+    planes_hole(&d, 1);
+    all = d;
+    (void)planes_edits(edits, &all, true, edit_clips, &nedit_clips);
+    planes_commit();
+    planes_release();
+    {
+        uint32_t before_n = v->placed_noverlays;
+        g.ui.damage_count = 0;
+        g.ui.any_dirty = false;
+        mark_part((os64_gui_rect_t){40 + 17, 40 + 44, 2, 2});   /* the tile below the box's foot, the box not in it */
+        planes_prepare();
+        os64_gui_rect_t dd[OS64_UI_DAMAGE_MAX];
+        uint32_t nd = plane_damage_now(dd);
+        (void)plane_render();
+        planes_judge(dd, 0, nd);
+        yonder_plane_rect_t tile = {v->origin.x + 16, v->origin.y + 32, 16, 16};
+        check(v->place && yonder_plane_map_inked(&v->map, tile) && plane_place_same(v) && v->noverlays == before_n,
+              "changes: nothing over a change in a tile that holds part of the box: the tile stays inked");
+        planes_release();
     }
     plane_drop();
 

@@ -14431,8 +14431,9 @@ static uint32_t plane_changed_parts(const Video *v, const os64_gui_rect_t *damag
 // Whether a pass for `v` waits (VIDEO_PLANE.md § 5.2): it cannot be placed
 // at this paint for a reason no layer cures (out of view, a backdrop
 // reader, another plane's clip; relearned whole at the paint that places
-// it), or it is off its plane for no layer or the budget and asked less
-// than PLANE_LAYER_WAIT_MS ago, which a change at the display's rate would
+// it), or it is off its plane for no layer, the budget or not yet painted
+// (where forgotten tiles leave the other two) and asked less than
+// PLANE_LAYER_WAIT_MS ago, which a change at the display's rate would
 // otherwise ask at its own (`*capped`: the parts are owed, marked again
 // when the wait is over). A placed video never waits.
 #define PLANE_LAYER_WAIT_MS 250
@@ -14444,8 +14445,9 @@ static bool plane_layers_wait(Video *v, bool *capped)
     if (v->reason == YONDER_PLANE_OUT_OF_VIEW || v->reason == YONDER_PLANE_BACKDROP ||
         v->reason == YONDER_PLANE_CLIP_MEETS)
         return true;
-    if (v->reason != YONDER_PLANE_NOT_LAYER && v->reason != YONDER_PLANE_BUDGET)
-        return false;
+    if (v->reason != YONDER_PLANE_NOT_LAYER && v->reason != YONDER_PLANE_BUDGET &&
+        v->reason != YONDER_PLANE_UNPAINTED)
+        return false;   // not yet painted waits too: it is where forgetting leaves the other two
     uint64_t now = yonder_now_ms();
     if (now < v->layer_next_ms) {
         v->layers_capped++;
@@ -14493,10 +14495,12 @@ static bool planes_judge(const os64_gui_rect_t *damage, uint32_t from, uint32_t 
         // the map knew. A pass that waits leaves the changed parts
         // forgotten, as one that fails does, since a part the render
         // painted with no layer would read as nothing over the picture.
-        // A part is layered and told to the map on all of the tiles it
-        // meets (yonder_plane_map_whole_tiles): a layer pass paints what it
-        // is asked, so no tile is left half known, which only a later paint
-        // of all of it could settle.
+        // A part that gets a layer is layered and told to the map on all of
+        // the tiles it meets (yonder_plane_map_whole_tiles): a layer pass
+        // paints what it is asked, so no tile is left half known, which only
+        // a later paint of all of it could settle. A part with nothing over
+        // it tells the map only its own rectangle, since nothing was looked
+        // at beyond it.
         yonder_plane_rect_t parts[PLANE_PARTS_MAX], layers[PLANE_PARTS_MAX];
         uint32_t nparts = plane_changed_parts(v, damage, from, count, parts);
         bool capped = false;
@@ -14517,11 +14521,14 @@ static bool planes_judge(const os64_gui_rect_t *damage, uint32_t from, uint32_t 
             for (uint32_t k = 0; k < nparts; k++) {
                 os64_gui_rect_t r = {parts[k].x, parts[k].y, parts[k].w, parts[k].h}, met;
                 meets_unlearned |= v->unlearned_any && os64_rect_intersect(r, v->unlearned, &met);
+                if (v->view.pixels != NULL && !plane_part_touched(v, r))
+                    continue;   // nothing over it here: the map is told of this rectangle alone
+                // A layered part is grown to the tiles it meets, the layer
+                // saying what lies over all of them.
                 yonder_plane_rect_t whole;
                 if (yonder_plane_map_whole_tiles(&v->map, parts[k], to_plane_rect(v->clip), &whole))
                     parts[k] = whole;
-                if (v->view.pixels == NULL || plane_part_touched(v, r))
-                    layers[nlayers++] = parts[k];
+                layers[nlayers++] = parts[k];
             }
             if (meets_unlearned && nparts < PLANE_PARTS_MAX) {
                 // A change over what a failed layer left forgotten: all of it
