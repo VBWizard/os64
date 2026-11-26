@@ -683,7 +683,12 @@ virtio because its drain waits for the tick.
   the box (VIDEO.md § 5, as built in V.5.3 and V.5.4:
   `apps/yonder/yonder.c`'s videos section feeds the frame planner and
   paints the plain path or the general one, counted in yonder's `d`
-  reading; `/tests/pages/video*.html`)
+  reading; `/tests/pages/video*.html`; and a video with nothing drawn over
+  its picture is shown on a plane of the window by its player's show
+  thread, the page painting a see-through hole there, so a script holding
+  the page's thread holds the picture not at all: VIDEO_PLANE.md § 5, the
+  section Videos on planes, `--plane=off` or `planes = off` to compare,
+  `/tests/pages/video-held.html`)
   (`apps/yonder/media.c`: an opener thread and a player per element, a
   loader thread for a network address,
   and a VOICE each on libmedia's output, `os64/media_output.h`: one audio

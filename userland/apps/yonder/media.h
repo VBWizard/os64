@@ -107,6 +107,20 @@ void yonder_media_size(yonder_media_t *m, uint32_t width, uint32_t height);
 // A session's player's own facts (its pace, clock and counts), for the
 // record's reading; false for one with no player yet.
 bool yonder_media_player_facts(yonder_media_t *m, os64_media_player_facts_t *out);
+// A <video>'s player given a plane of `win` (os64/media_player.h § A
+// plane), asked once, from a thread of its own: the ask waits for the
+// plane to be made, the window does not. The verdict is the player's facts'
+// `plane_state`, read at the window's next turn. False when not asked (an
+// <audio>, no player yet, asked before, closed) or when its thread may not
+// have started.
+bool yonder_media_plane_ask(yonder_media_t *m, int64_t win);
+// os64_media_player_plane_want, for a <video> with a player.
+void yonder_media_plane_want(yonder_media_t *m, bool want);
+// The picture its player's pace last picked, pinned until
+// yonder_media_shown_done (os64_media_player_shown). False, `out` empty,
+// with none. Every view goes back before the session's close.
+bool yonder_media_shown(yonder_media_t *m, os64_media_player_view_t *out);
+void yonder_media_shown_done(yonder_media_t *m, os64_media_player_view_t *view);
 // canPlayType's answer (0, 1 or 2; dom/media.h), libmedia's.
 int yonder_media_can_play(const char *type);
 // The window's turn: frees the closed sessions whose threads have ended.

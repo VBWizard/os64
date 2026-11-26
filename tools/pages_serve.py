@@ -5,10 +5,12 @@ does not.
 
     tools/pages_serve.py [--port 8731] [--root DIR] [--rate BYTES_PER_S] [--no-ranges] [--part BYTES]
 
-Two questions on an address change the answer, for a page's failures:
-`?status=N` answers status N with a short HTML body whatever the path, and
-`?truncate=N` serves the file cut to its first N bytes, as if that were all
-of it (its length and its ranges are the cut file's).
+Three questions on an address change the answer, for a page's failures and
+slow arrivals: `?status=N` answers status N with a short HTML body whatever
+the path, `?truncate=N` serves the file cut to its first N bytes, as if that
+were all of it (its length and its ranges are the cut file's), and
+`?delay=MS` answers only after MS milliseconds (a navigation that takes
+seconds to arrive, the page before it still shown meanwhile).
 
 --rate sends every body at most that fast, so a seek in a sound can land past
 what has arrived; --no-ranges answers every request whole and says nothing of
@@ -36,6 +38,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def do_GET(self):
         asks = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+        if 'delay' in asks:
+            time.sleep(int(asks['delay'][0]) / 1000.0)
         if 'status' in asks:
             status = int(asks['status'][0])
             body = f'<!doctype html><title>{status}</title><p>answered {status}</p>\n'.encode()

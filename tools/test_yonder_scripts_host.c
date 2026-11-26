@@ -60,8 +60,44 @@ void yonder_media_settings(yonder_media_t *m, double gain, bool muted, bool loop
 bool yonder_media_frame(yonder_media_t *m, int64_t blank, int64_t period, os64_media_player_frame_t *out)
 { (void)m; (void)blank; (void)period; memset(out, 0, sizeof(*out)); return false; }
 void yonder_media_size(yonder_media_t *m, uint32_t width, uint32_t height) { (void)m; (void)width; (void)height; }
+/* A player with a plane, for the planes' cases (test_yonder_planes.inc):
+ * its facts, and `shown` a picture of its own. Off, there is no player. */
+static struct {
+    bool on;
+    os64_media_player_facts_t facts;
+    const uint32_t *pixels;
+    uint32_t w, h, serial;
+    int pins, asks;
+    bool want;
+} fake_plane;
 bool yonder_media_player_facts(yonder_media_t *m, os64_media_player_facts_t *out)
-{ (void)m; memset(out, 0, sizeof(*out)); return false; }
+{
+    (void)m;
+    memset(out, 0, sizeof(*out));
+    if (!fake_plane.on)
+        return false;
+    *out = fake_plane.facts;
+    return true;
+}
+bool yonder_media_plane_ask(yonder_media_t *m, int64_t win) { (void)m; (void)win; fake_plane.asks++; return true; }
+void yonder_media_plane_want(yonder_media_t *m, bool want) { (void)m; fake_plane.want = want; }
+bool yonder_media_shown(yonder_media_t *m, os64_media_player_view_t *out)
+{
+    (void)m;
+    memset(out, 0, sizeof(*out));
+    if (!fake_plane.on || fake_plane.pixels == NULL)
+        return false;
+    *out = (os64_media_player_view_t){fake_plane.pixels, fake_plane.w, fake_plane.h, fake_plane.serial, &fake_plane};
+    fake_plane.pins++;
+    return true;
+}
+void yonder_media_shown_done(yonder_media_t *m, os64_media_player_view_t *view)
+{
+    (void)m;
+    if (view->frame != NULL)
+        fake_plane.pins--;
+    memset(view, 0, sizeof(*view));
+}
 void yonder_media_facts(yonder_media_t *m, os64_dom_media_facts_t *out)
 {
     memset(out, 0, sizeof(*out));
@@ -6776,6 +6812,7 @@ static uint32_t *stand_in_shot(void) {
     return screen.surf.pixels;
 }
 #include "test_yonder_cover.inc"
+#include "test_yonder_planes.inc"
 #include "test_yonder_svg_images.inc"
 #include "test_yonder_canvas.inc"
 #include "test_yonder_animation.inc"
@@ -13833,6 +13870,7 @@ int main(void)
     }
     if(getenv("YONDER_COVER_ONLY")) {
         cover_cases();
+        plane_cases();
         os64_text_font_release(probe_font);
         check(os64_text_destroy(probe_text)==OS64_FONT_OK,"cover: text released");
         check(live==0,"cover: heap empty");
@@ -13894,6 +13932,7 @@ int main(void)
     svg_radial_window_cases();
     svg_partial_window_cases();
     cover_cases();
+    plane_cases();
     custom_census_cases();
     custom_element_parse_case();
     svg_cache_window_cases();

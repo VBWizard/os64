@@ -50,6 +50,7 @@
 #include "keys.h"
 #include "os64/mediakeys.h"
 #include "media.h"
+#include "plane_place.h"
 #include "paint.h"
 #include "player.h"
 #include "keep.h"
@@ -3579,6 +3580,34 @@ typedef struct {
     os64_dom_media_facts_t seen;        // the facts at the last turn, to see them move
     os64_media_player_frame_t frame;    // the picture to draw: pixels valid until the next frame
                                         // call answering changed (os64/media_player.h)
+    // ON A PLANE (VIDEO_PLANE.md § 5; the Videos on planes section). Its
+    // player's plane is asked for at its first cover; while it is on,
+    // `frame` is refused and the page paints `shown` instead.
+    bool plane_asked;
+    int plane_state;                    // the player's (OS64_MEDIA_PLANE_*), at the last read
+    os64_media_player_view_t view;      // `shown`, pinned for one paint; pixels NULL for none
+    uint32_t polled_serial;             // `shown`'s serial when the box was last marked for it
+    // What the kernel holds: the place of the last publish it took.
+    bool placed;
+    uint32_t placed_name;
+    os64_gui_rect_t placed_origin, placed_clip;     // window coordinates
+    // This paint's plan, from planes_prepare to planes_publish.
+    bool candidate;                     // every reason allows the place but what lies over the picture
+    bool place;                         // the place this paint's publish carries
+    uint32_t name;
+    os64_gui_rect_t origin, clip;       // window coordinates
+    yonder_plane_reason_t reason;       // why it is not placed (YONDER_PLANE_PLACED when it is)
+    bool want, want_told;               // told to the player (os64_media_player_plane_want)
+    uint64_t held_until_ms;             // a refused publish holds placing off until then
+    yonder_plane_map_t map;             // what the page paints over the picture
+    uint8_t *tiles;                     // the map's, os64_malloc'd
+    size_t ntiles;
+    // The record: time in each reason while the plane is on (PLACED being
+    // the time placed), the moves each way, and the page's paints of its
+    // clip while it was placed.
+    uint64_t reason_since_us;
+    uint64_t reason_us[YONDER_PLANE_REASONS];
+    uint64_t moves_on, moves_off, placed_paints;
 } Video;
 
 static Video s_videos[VIDEOS_MAX];
@@ -3589,6 +3618,24 @@ static Video *video_of(const os64_html_node_t *node)
         if (s_videos[i].node == node && node != NULL)
             return &s_videos[i];
     return NULL;
+}
+
+// The picture `v`'s box shows: with its plane on, the `shown` view pinned
+// for the paint under way (its player refuses `frame` then, and outside a
+// paint no view is pinned); otherwise the last frame call's. False with
+// none.
+static bool video_picture(const Video *v, const uint32_t **pixels, uint32_t *w, uint32_t *h)
+{
+    if (v->plane_state == OS64_MEDIA_PLANE_ON) {
+        *pixels = v->view.pixels;
+        *w = v->view.w;
+        *h = v->view.h;
+    } else {
+        *pixels = v->frame.pixels;
+        *w = v->frame.w;
+        *h = v->frame.h;
+    }
+    return *pixels != NULL && *w > 0 && *h > 0;
 }
 
 static bool is_video_node(const os64_html_node_t *node)
@@ -4824,6 +4871,12 @@ static bool s_effects_past_video;
 // asks for every paint to be painted the ordinary way, to compare.
 static bool s_covers = true;
 
+// VIDEOS ON PLANES (VIDEO_PLANE.md § 5), on unless `--plane=off` or
+// yonder.conf's `planes = off` asks for every video to be painted by the
+// page, to compare.
+static bool s_planes = true;
+static bool s_planes_off_asked;
+
 // `--paint-check[=N]`: every Nth covered paint (10 unless said) is painted
 // the ordinary way too and the two compared to the pixel, with the groups
 // open at the cover's draw held to flow_paint_path's (none, for a cover);
@@ -4960,10 +5013,13 @@ static void effect_filters(char *out, size_t cap, const flow_filter_t *filter, i
         os64_snprintf(out, cap, "%s(%ld)%s", name, amount, reduced);
 }
 
+static void planes_counts_restart(void);
+
 static void cost_reset(void)
 {
     tr_restart();
     effects_reset();
+    planes_counts_restart();
     os64_memset(&s_cost, 0, sizeof(s_cost));
     os64_memset(&s_needed_reading, 0, sizeof(s_needed_reading));
     os64_memset(&s_sizes_reading, 0, sizeof(s_sizes_reading));
@@ -9804,6 +9860,8 @@ typedef struct {
     size_t n, cap;
     bool short_of_memory;
 } DiagText;
+static void plane_reading(DiagText *t, const Video *v, const os64_media_player_facts_t *f);
+static void plane_counts_reading(DiagText *t);
 
 static void dt_put(DiagText *t, const char *fmt, ...) OS64_PRINTF(2, 3);
 static void dt_put(DiagText *t, const char *fmt, ...)
@@ -10125,7 +10183,9 @@ static bool paint_lines(DiagText *t, DiagText *u)
                (unsigned long)vf.pace.dropped, (unsigned long)vf.pace.skipped, (unsigned long)vf.pace.starved,
                (unsigned long)vf.pace.resyncs, (unsigned long)vf.sound_written, (unsigned long)vf.sound_dropped,
                (unsigned long)vf.buffers);
+        plane_reading(t, &s_videos[i], &vf);
     }
+    plane_counts_reading(t);
 
     // The bells the loop took, then the ticker's own counts: its rings —
     // more than the bells when rings were made before the loop took one —
@@ -11263,6 +11323,7 @@ static void deadline_offer(NextDeadline *d, uint64_t due, PastDeadline from);
 static uint64_t resizes_next(void);
 static uint64_t resizes_due(void);
 static uint64_t videos_next(void);
+static uint64_t plane_rate_due(void);
 
 // The earliest frame work the shown page has: a layout or a tick for its
 // CSS animations, the Web Animations step and requestAnimationFrame's
@@ -11424,6 +11485,9 @@ static void pictures_schedule(void)
     deadline_offer(&d, exit_due(), PAST_TIMERS);
     // A held Back or Forward's list, which the loop opens (step_hold_turn).
     deadline_offer(&d, step_hold_due(), PAST_TIMERS);
+    // `--video-rate`'s next line while a video is placed on its plane: it
+    // asks for no frames, so no frame brings the loop round for it.
+    deadline_offer(&d, plane_rate_due(), PAST_TIMERS);
     // The shown page's next idle period, when only an idle callback that
     // asked for another waits for it (script_turn runs it).
     uint64_t idle = yonder_scripts_idle_next(g.page.scripts);
@@ -11841,11 +11905,26 @@ static void backdrop_damage(void)
 }
 
 static void view_damage_check(os64_ui_widget_t *w, os64_draw_ctx_t *ctx);
+static void planes_prepare(void);
+static bool planes_judge(const os64_gui_rect_t *damage, uint32_t from, uint32_t count);
+static void planes_hole(const os64_gui_rect_t *damage, uint32_t count);
+static void planes_hides_paint(void);
+static void planes_publish(os64_gui_rect_t *damage, uint32_t *count);
+static void planes_release(void);
+
+// The renders a paint may make: its own, up to PLANE_RENDERS_AGAIN more
+// for videos leaving their planes (planes_judge), and one for a refused
+// publish's holes painted back (planes_publish), each at most
+// OS64_UI_DAMAGE_MAX rectangles.
+#define PLANE_RENDERS_AGAIN 2
+#define PAINT_DAMAGE_MAX ((PLANE_RENDERS_AGAIN + 2) * OS64_UI_DAMAGE_MAX)
 
 // libui's paint, timed (s_cost): its render, then each dirty rectangle
 // handed to the compositor, as os64_ui_paint does both, then counted
 // (paint_counted). What marked the view is this paint's, so it starts
-// again here. Each part is first widened to the backdrops it reaches.
+// again here. Each part is first widened to the backdrops it reaches. The
+// videos on planes decide their places around the render (the Videos on
+// planes section), and the publish carries them.
 static void glass_paint(void)
 {
     // The load's timeline and the thread reading time the whole of it as
@@ -11854,7 +11933,7 @@ static void glass_paint(void)
     int64_t drawn_from = s_lt.on ? os64_micros() : 0;
     uint64_t tr_drawn = tr_now();
     backdrop_damage();
-    os64_gui_rect_t damage[OS64_UI_DAMAGE_MAX];
+    os64_gui_rect_t damage[PAINT_DAMAGE_MAX];
     WholeBy by = s_whole_by;
     os64_gui_rect_t reach = s_parts_reach;
     s_whole_by = WHOLE_PARTS;
@@ -11868,22 +11947,33 @@ static void glass_paint(void)
         g.keeps = yonder_keeps_new(KEEPS_BUDGET);
     yonder_keeps_paint(g.keeps, flow_tree_serial(g.page.tree));
     yonder_canvas_keeps_paint(g.canvas_keeps);
+    planes_prepare();
     cost_begin(PS_RENDER);
     uint32_t count = os64_ui_render_list(&g.ui, damage);
     if (count > 0)
         view_damage_check(&g.view, g.ui.ctx);
+    // A video found with something over its picture leaves its plane: its
+    // old clip, marked by the judge, is painted again with the picture.
+    for (uint32_t from = 0, pass = 0; count > 0 && pass < PLANE_RENDERS_AGAIN && planes_judge(damage, from, count);
+         pass++) {
+        from = count;
+        count += os64_ui_render_list(&g.ui, damage + count);
+    }
     cost_end(PS_RENDER);
     if (count == 0) {
+        planes_release();
         os64_memset(s_cost.now, 0, sizeof(s_cost.now));
         if (s_lt.on)
             yonder_lt_inside(&s_lt, YONDER_LT_IN_DRAWING, (uint64_t)(os64_micros() - drawn_from));
         tr_inside(YONDER_TR_IN_DRAWING, tr_drawn);
         return;
     }
+    planes_hole(damage, count);
+    planes_hides_paint();
     cost_begin(PS_PUBLISH);
-    for (uint32_t i = 0; i < count; i++)
-        os64_draw_publish(g.ui.ctx, &damage[i]);
+    planes_publish(damage, &count);
     cost_end(PS_PUBLISH);
+    planes_release();
     lt_mark(g.page.diag, YONDER_LT_MARK_PAINT);
     paint_counted(damage, count, by, reach);
     cost_fold(PS_RENDER, PS_PUBLISH);
@@ -13016,13 +13106,19 @@ static void video_add(const os64_html_node_t *node, yonder_media_t *session)
         }
 }
 
+static void plane_close(Video *v);
+static void plane_mark_window(os64_gui_rect_t r);
+
 // Its session closed: the slot, and the pixels the session's player held,
-// go with it.
+// go with it; a plane it left placed is hidden by the next publish
+// (plane_close).
 static void video_remove(const yonder_media_t *session)
 {
     for (int32_t i = 0; i < VIDEOS_MAX; i++)
-        if (s_videos[i].node != NULL && s_videos[i].session == session)
+        if (s_videos[i].node != NULL && s_videos[i].session == session) {
+            plane_close(&s_videos[i]);
             s_videos[i] = (Video){0};
+        }
 }
 
 // The part of the shown page's view `v`'s box shows, page coordinates;
@@ -13038,13 +13134,14 @@ static bool video_on_view(const Video *v, os64_gui_rect_t *out)
 
 // Whether `v` wants the display's frames: it has a picture, plays or its
 // facts moved while paused (a seek's picture, the first one) or a new size
-// waits for its picture, and is seen. A sound given to a <video> has no
+// waits for its picture, and is seen, and it is not placed on its plane,
+// whose pictures are the show thread's. A sound given to a <video> has no
 // picture to ask for.
 static bool video_wants_frames(const Video *v)
 {
     os64_gui_rect_t part;
     return v->node != NULL && v->seen.picture && (v->playing || v->poked || v->sizing > 0) && !g.covered &&
-           video_on_view(v, &part);
+           !v->placed && video_on_view(v, &part);
 }
 
 // The media turn's follow-up: each shown video's facts read for the size
@@ -13069,6 +13166,17 @@ static void videos_turn(void)
         v->poked |= f.seeked != v->seen.seeked || f.current != v->seen.current || f.probed != v->seen.probed ||
                     f.ended != v->seen.ended || f.running != v->seen.running;
         v->seen = f;
+        // Its plane's verdict, or a placed plane gone stale or gone: a paint
+        // decides again (planes_prepare), so the box is marked for one.
+        os64_media_player_facts_t pf;
+        if (yonder_media_player_facts(v->session, &pf) &&
+            (pf.plane_state != v->plane_state || (v->placed && (pf.plane_stale || !pf.plane_ready)))) {
+            os64_gui_rect_t part;
+            if (video_on_view(v, &part))
+                mark_part(part);
+            if (v->placed)
+                plane_mark_window(v->placed_clip);
+        }
     }
 }
 
@@ -13083,11 +13191,14 @@ static uint64_t videos_next(void)
 
 // `--video-rate[=S]`: every S seconds (5 unless said) while a video on the
 // view asks for frames, one line on the console per video, comma-separated:
-// `video-rate,<ms since boot>,<video>,<shown>,<dropped>,<painted>,<fps>,<dropped a second>`,
-// the player's counts since it began and the plain and general paints of
-// videos since yonder began, then the pictures shown and dropped a second
-// since that video's last line, in tenths (`-` on its first line, or when
-// its counts started again).
+// `video-rate,<ms since boot>,<video>,<shown>,<dropped>,<painted>,<fps>,<dropped a second>,<plane published>,<placed>`,
+// the player's counts since it began and the page's plain and general
+// paints of videos since yonder began, then the pictures shown and dropped
+// a second since that video's last line, in tenths (`-` on its first line,
+// or when its counts started again), then the pictures its plane's show
+// thread published and whether the plane is placed (1) or not (0). A
+// placed video's pictures are the plane's, so `painted` does not grow with
+// them: the page paints its box only when something else there changes.
 static uint32_t s_video_rate_s;
 static uint64_t s_video_rate_next_ms, s_video_rate_painted;
 static struct {
@@ -13119,14 +13230,16 @@ static void video_rate_say(void)
             video_rate_tenths(drops, sizeof(drops), vf.pace.dropped - last->dropped, now - last->ms);
         }
         *last = (__typeof__(*last)){now, vf.pace.shown, vf.pace.dropped, true};
-        os64_printf("video-rate,%lu,%d,%lu,%lu,%lu,%s,%s\n", (unsigned long)now, (int)i,
+        os64_printf("video-rate,%lu,%d,%lu,%lu,%lu,%s,%s,%lu,%d\n", (unsigned long)now, (int)i,
                     (unsigned long)vf.pace.shown, (unsigned long)vf.pace.dropped,
-                    (unsigned long)s_video_rate_painted, fps, drops);
+                    (unsigned long)s_video_rate_painted, fps, drops, (unsigned long)vf.plane_published,
+                    s_videos[i].placed ? 1 : 0);
     }
 }
 
 static bool video_cover_rect(const Video *v, const flow_box_t *b, os64_gui_rect_t *out);
 static bool backdrop_read_meets(os64_gui_rect_t r);
+static bool video_fitted(const Video *v, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t *at);
 
 // What a new frame of `v` marks, its box's visible part being `part`: only
 // the pixels its copy writes when it is a cover, since nothing else
@@ -13146,10 +13259,15 @@ static os64_gui_rect_t video_frame_mark(const Video *v, os64_gui_rect_t part)
 // blank plus one period), and its box marked when the picture changed —
 // only the part its copy writes, when the video is a cover and no backdrop
 // reader may read the box (backdrop_read_meets).
+static bool planes_placed_any(void);
+
 static void videos_tick(void)
 {
-    if (!s_frames.open)
+    if (!s_frames.open) {
+        if (planes_placed_any())
+            video_rate_say();
         return;
+    }
     int64_t period = s_frames.period_us > 0 ? (int64_t)s_frames.period_us : 16667;
     int64_t blank = (int64_t)s_frames.blank_us + period;
     bool asked = false;
@@ -13162,6 +13280,26 @@ static void videos_tick(void)
         v->poked = false;
         if (v->sizing > 0)
             v->sizing--;
+        if (v->plane_state == OS64_MEDIA_PLANE_ON) {
+            // The show thread paces (`frame` is refused): the page paints
+            // its box from `shown`, marked when `shown` moves on.
+            os64_media_player_view_t now;
+            if (!yonder_media_shown(v->session, &now))
+                continue;
+            uint32_t serial = now.serial, w = now.w, h = now.h;
+            yonder_media_shown_done(v->session, &now);
+            if (serial == v->polled_serial)
+                continue;
+            if (w == v->asked_w && h == v->asked_h)
+                v->sizing = 0;
+            v->polled_serial = serial;
+            s_cost.video_pictures++;
+            lt_mark(g.page.diag, YONDER_LT_MARK_PICTURE);
+            s_video_marking = true;
+            mark_part(part);
+            s_video_marking = false;
+            continue;
+        }
         os64_media_player_frame_t fr;
         s_cost.video_frames++;
         int64_t began = os64_micros();
@@ -13179,8 +13317,570 @@ static void videos_tick(void)
         mark_part(part);
         s_video_marking = false;
     }
-    if (asked)
+    if (asked || planes_placed_any())
         video_rate_say();
+}
+
+// ── Videos on planes (VIDEO_PLANE.md § 5, P3a) ─────────────────────────
+//
+// A video whose player has a plane is shown by the kernel from the
+// player's own show thread, and the page paints a hole where its picture
+// goes: a new picture then costs the page's thread nothing, and a script
+// holding that thread no longer holds the picture. The plane is asked for
+// at the video's first cover, from a thread of its own (the ask waits for
+// the plane to be made: yonder_media_plane_ask), and kept until its
+// session closes.
+//
+// EACH PAINT DECIDES each video's place (plane_place.h; the reasons, in
+// order, are its yonder_plane_reason_t), and the publish that paints it
+// carries the place or the hide (one publish, VIDEO_PLANE.md § 3.5):
+// - planes_prepare, before the render: the facts read, `shown` pinned, the
+//   reasons asked with what the map knew so far; a video that may be
+//   placed has its whole clip marked, so the render paints all of it, and
+//   one leaving its plane has its old clip marked, so the picture is
+//   painted back where the hole was;
+// - planes_judge, after the render: the render painted the picture from
+//   `shown` wherever it painted the box, so each pixel of the clip it
+//   painted that differs from `shown` is something the page drew over the
+//   picture (the map, plane_place.h). A video is placed only with nothing
+//   over its picture: planes_hole then sets the clip's pixels to zero, see-
+//   through (§ 3.3). A placed video found with something over it leaves,
+//   its clip painted again with the picture before the publish;
+// - planes_publish: the edits, with damage covering every rectangle
+//   rendered and every clip they change (the kernel's rule 2), or the
+//   plain publishes when there are none. A refused publish is published
+//   again plain, the newly placed clips painted back with the picture,
+//   and placing that video is held off a while.
+//
+// A PLANE IS PLACED ONLY ON THE PICTURE THE PAGE WOULD SHOW: ready at the
+// fitted size, and holding `shown`'s picture (facts.plane_serial), or the
+// glass would step back to an older one.
+//
+// NO BLACK HOLE WHERE A VIDEO WAS (plane_close, planes_hides_paint): a
+// session that closes with its plane placed leaves a hide owed, a copy of
+// its last picture and its clip marked; the next publish, in the same turn
+// of the loop, paints that copy back into the clip when the page that held
+// it is still the one shown, unchanged, and hides the plane. The player's
+// close waits for that hide (os64/media_player.h § A plane, CLOSING).
+
+#define PLANE_HIDES_MAX OS64_GUI_PLANES
+#define PLANE_HOLD_OFF_MS 1000
+
+static struct {
+    bool owed;
+    bool sent;                          // in the publish under way (planes_edits)
+    uint32_t name;
+    os64_gui_rect_t origin, clip;       // window coordinates at the close
+    uint32_t *copy;                     // the last picture, origin-sized; NULL none
+    uint32_t copy_w, copy_h;
+    const os64_html_document_t *doc;    // the page it was on, and its tree's serial then
+    uint64_t tree_serial;
+} s_plane_hides[PLANE_HIDES_MAX];
+
+// The window's counts for the record, started again with every other
+// count at each reading (cost_reset).
+static struct {
+    uint64_t asks, edit_publishes, union_area, union_beyond;
+    uint64_t refused[18];               // publishes refused, by the GUI's code (index -code)
+    uint64_t hides_owed, hides_copied, hides_dropped;
+} s_plane_counts;
+
+static void planes_counts_restart(void)
+{
+    os64_memset(&s_plane_counts, 0, sizeof(s_plane_counts));
+}
+
+// A window rectangle marked for the render, as a part of the page view.
+static void plane_mark_window(os64_gui_rect_t r)
+{
+    if (r.w <= 0 || r.h <= 0)
+        return;
+    const os64_gui_rect_t vb = g.view.bounds;
+    s_video_marking = true;
+    mark_part((os64_gui_rect_t){r.x - vb.x + g.sx, r.y - vb.y + g.sy, r.w, r.h});
+    s_video_marking = false;
+}
+
+// The time spent in `v`'s reason so far, then `r` its reason from now.
+static void plane_reason_set(Video *v, yonder_plane_reason_t r)
+{
+    uint64_t now = (uint64_t)os64_micros();
+    if (v->reason_since_us != 0 && (unsigned)v->reason < YONDER_PLANE_REASONS)
+        v->reason_us[v->reason] += now - v->reason_since_us;
+    v->reason_since_us = now;
+    v->reason = r;
+}
+
+// `v`'s origin (the fitted picture) and clip (the part of it the box shows
+// inside the view) in window coordinates, from its box `b`; false when the
+// paint would not copy the picture plain (video_cover_rect).
+static bool plane_geometry(const Video *v, const flow_box_t *b, os64_gui_rect_t *origin, os64_gui_rect_t *clip)
+{
+    os64_gui_rect_t covered;
+    if (!video_cover_rect(v, b, &covered))
+        return false;
+    os64_gui_rect_t content = yonder_content_rect(b), at;
+    flow_point_t off = flow_box_doc_offset(b, scroll_now());
+    content.x += off.x;
+    content.y += off.y;
+    (void)video_fitted(v, b, content, &at);
+    const os64_gui_rect_t vb = g.view.bounds;
+    int32_t dx = vb.x - g.sx, dy = vb.y - g.sy;
+    *origin = (os64_gui_rect_t){at.x + dx, at.y + dy, at.w, at.h};
+    os64_gui_rect_t win = {covered.x + dx, covered.y + dy, covered.w, covered.h};
+    return os64_rect_intersect(win, vb, clip);
+}
+
+static yonder_plane_rect_t to_plane_rect(os64_gui_rect_t r)
+{
+    return (yonder_plane_rect_t){r.x, r.y, r.w, r.h};
+}
+
+// The map laid on `origin`, kept when it already is.
+static bool plane_map_on(Video *v, os64_gui_rect_t origin)
+{
+    yonder_plane_rect_t o = to_plane_rect(origin);
+    if (v->map.tiles != NULL && v->map.origin.x == o.x && v->map.origin.y == o.y && v->map.origin.w == o.w &&
+        v->map.origin.h == o.h)
+        return true;
+    size_t need = yonder_plane_map_tiles(o);
+    if (need > v->ntiles) {
+        uint8_t *grown = os64_realloc(v->tiles, need);
+        if (grown == NULL)
+            return false;
+        v->tiles = grown;
+        v->ntiles = need;
+    }
+    return yonder_plane_map_reset(&v->map, o, v->tiles, v->ntiles);
+}
+
+// Whether the window's pixels in `part` (window coordinates, inside the
+// origin) differ from `shown`'s: something the page drew over the picture.
+static bool plane_ink(void *ctx, yonder_plane_rect_t part)
+{
+    const Video *v = ctx;
+    const os64_gui_surface_t *s = &g.ui.ctx->surf;
+    for (int32_t y = part.y; y < part.y + part.h; y++) {
+        const uint32_t *row = s->pixels + (size_t)y * s->pitch_px;
+        const uint32_t *pic = v->view.pixels + (size_t)(y - v->origin.y) * v->view.w;
+        for (int32_t x = part.x; x < part.x + part.w; x++)
+            if ((row[x] ^ pic[x - v->origin.x]) & 0x00ffffffu)
+                return true;
+    }
+    return false;
+}
+
+static void planes_release(void)
+{
+    for (int32_t i = 0; i < VIDEOS_MAX; i++)
+        if (s_videos[i].node != NULL && s_videos[i].view.frame != NULL)
+            yonder_media_shown_done(s_videos[i].session, &s_videos[i].view);
+}
+
+// Before the render: each video's facts, its plane asked for at its first
+// cover, `shown` pinned for the paint, and the reasons asked with what the
+// map knew so far.
+static void planes_prepare(void)
+{
+    if (g.page.tree == NULL)
+        return;
+    for (int32_t i = 0; i < VIDEOS_MAX; i++) {
+        Video *v = &s_videos[i];
+        v->candidate = v->place = false;
+        if (v->node == NULL)
+            continue;
+        os64_media_player_facts_t f;
+        if (!yonder_media_player_facts(v->session, &f))
+            continue;
+        if (f.plane_state != OS64_MEDIA_PLANE_ON && v->plane_state == OS64_MEDIA_PLANE_ON) {
+            // The plane went (ended, or refused at a new size): the player
+            // is gone from it and so is the kernel's place; the box is the
+            // page's again, painted from `frame`.
+            if (v->placed)
+                plane_mark_window(v->placed_clip);
+            v->placed = false;
+            plane_reason_set(v, v->reason);
+            v->reason_since_us = 0;
+        }
+        if (f.plane_state == OS64_MEDIA_PLANE_ON && v->plane_state != OS64_MEDIA_PLANE_ON) {
+            // Its first paint with the plane on: no reason yet, so the
+            // first verdict, placed or not, starts its clock.
+            v->reason = YONDER_PLANE_REASONS;
+            v->reason_since_us = 0;
+        }
+        v->plane_state = f.plane_state;
+        const flow_box_t *b = flow_box_for(g.page.tree, v->node);
+        os64_gui_rect_t part;
+        bool on_view = video_on_view(v, &part);
+        if (f.plane_state == OS64_MEDIA_PLANE_NONE) {
+            os64_gui_rect_t c;
+            if (s_planes && !v->plane_asked && on_view && v->seen.picture && b != NULL && video_cover_rect(v, b, &c)) {
+                v->plane_asked = true;
+                s_plane_counts.asks++;
+                (void)yonder_media_plane_ask(v->session, g.win);
+            }
+            continue;
+        }
+        if (f.plane_state != OS64_MEDIA_PLANE_ON)
+            continue;
+        if (v->view.frame == NULL)
+            (void)yonder_media_shown(v->session, &v->view);
+        os64_gui_rect_t origin = {0}, clip = {0};
+        bool cover = b != NULL && plane_geometry(v, b, &origin, &clip);
+        bool meets = false;
+        for (int32_t k = 0; k < i && cover; k++)
+            meets |= s_videos[k].candidate && os64_rect_intersect(s_videos[k].clip, clip, &part);
+        os64_gui_rect_t box = b != NULL ? flow_box_doc_rect(b, scroll_now()) : (os64_gui_rect_t){0, 0, 0, 0};
+        bool mapped = cover && plane_map_on(v, origin);
+        yonder_plane_input_t in = {
+            .on_view = on_view,
+            .cover = cover && mapped,
+            .backdrop = cover && backdrop_read_meets(box),
+            .clip_meets = meets,
+            .over = mapped && yonder_plane_map_inked(&v->map, to_plane_rect(clip)),
+            .ready = f.plane_ready && f.plane_pic_w == (uint32_t)origin.w && f.plane_pic_h == (uint32_t)origin.h,
+            .shown = v->view.frame != NULL && f.plane_serial != 0 && f.plane_serial == v->view.serial,
+            .held_off = yonder_now_ms() < v->held_until_ms,
+        };
+        yonder_plane_verdict_t verdict = yonder_plane_decide(&in);
+        if (!v->want_told || verdict.want != v->want) {
+            v->want = verdict.want;
+            v->want_told = true;
+            yonder_media_plane_want(v->session, v->want);
+        }
+        v->candidate = verdict.reason == YONDER_PLANE_PLACED;
+        if (v->candidate) {
+            v->origin = origin;
+            v->clip = clip;
+            v->name = f.plane_name;
+            bool same = v->placed && v->placed_name == v->name &&
+                        os64_memcmp(&v->placed_origin, &v->origin, sizeof(v->origin)) == 0 &&
+                        os64_memcmp(&v->placed_clip, &v->clip, sizeof(v->clip)) == 0;
+            if (!same) {
+                // All of the clip painted at this render, so the map knows
+                // all of it and the hole is all of it.
+                plane_mark_window(v->clip);
+                if (v->placed)
+                    plane_mark_window(v->placed_clip);
+            }
+        } else {
+            if (v->placed)
+                plane_mark_window(v->placed_clip);
+            if (verdict.reason != v->reason)
+                plane_reason_set(v, verdict.reason);
+        }
+    }
+}
+
+// The record's words for `v`'s plane (P3's design state § 10): its state,
+// what its show thread published and missed, and the time placed against
+// the time wanted and not placed, by reason (out of view is not wanted).
+static void plane_reading(DiagText *t, const Video *v, const os64_media_player_facts_t *f)
+{
+    static const char *const kState[] = {"none", "starting", "on", "refused", "ended"};
+    if (f->plane_state == OS64_MEDIA_PLANE_NONE)
+        return;
+    dt_put(t, ", its plane %s", (unsigned)f->plane_state < 5 ? kState[f->plane_state] : "?");
+    if (f->plane_state == OS64_MEDIA_PLANE_REFUSED)
+        dt_put(t, " (the GUI's answer %d)", f->plane_refusal);
+    dt_put(t, " %u %ux%u: published %lu, display frames missed %lu, recreates %lu, waits ended by patience %lu, %s",
+           f->plane_name, f->plane_cap_w, f->plane_cap_h, (unsigned long)f->plane_published,
+           (unsigned long)f->frames_missed, (unsigned long)f->plane_recreates, (unsigned long)f->waits_patience,
+           v->placed ? "placed" : "not placed");
+    uint64_t now = (uint64_t)os64_micros();
+    bool first = true;
+    for (int32_t r = 0; r < YONDER_PLANE_REASONS; r++) {
+        uint64_t us = v->reason_us[r];
+        if (r == (int32_t)v->reason && v->reason_since_us != 0 && f->plane_state == OS64_MEDIA_PLANE_ON)
+            us += now - v->reason_since_us;
+        if (us == 0)
+            continue;
+        if (r == YONDER_PLANE_PLACED)
+            dt_put(t, "; placed %lu ms", (unsigned long)(us / 1000));
+        else {
+            dt_put(t, "%s%s %lu ms", first ? (r == YONDER_PLANE_OUT_OF_VIEW ? "; " : "; wanted and not placed: ")
+                                           : ", ",
+                   yonder_plane_reason_name((yonder_plane_reason_t)r), (unsigned long)(us / 1000));
+            first = false;
+        }
+    }
+    dt_put(t, "; moves onto the plane %lu, off %lu; the page's paints of its clip while placed %lu",
+           (unsigned long)v->moves_on, (unsigned long)v->moves_off, (unsigned long)v->placed_paints);
+}
+
+// The record's words for the planes of the whole window.
+static void plane_counts_reading(DiagText *t)
+{
+    if (s_plane_counts.asks == 0 && s_plane_counts.edit_publishes == 0 && s_plane_counts.hides_owed == 0)
+        return;
+    dt_put(t, "; planes: %lu asked, %lu publishes carrying edits (%lu pixels of damage in all, %lu of them past "
+           "their rectangles' own area), %lu hides owed by closed sessions (%lu pictures painted back, %lu dropped)",
+           (unsigned long)s_plane_counts.asks, (unsigned long)s_plane_counts.edit_publishes,
+           (unsigned long)s_plane_counts.union_area, (unsigned long)s_plane_counts.union_beyond,
+           (unsigned long)s_plane_counts.hides_owed, (unsigned long)s_plane_counts.hides_copied,
+           (unsigned long)s_plane_counts.hides_dropped);
+    for (size_t c = 1; c < sizeof(s_plane_counts.refused) / sizeof(s_plane_counts.refused[0]); c++)
+        if (s_plane_counts.refused[c] > 0)
+            dt_put(t, ", publishes refused %d: %lu", -(int)c, (unsigned long)s_plane_counts.refused[c]);
+}
+
+// After a render that painted `damage[from..count)`: each candidate's map
+// told what the render painted of its clip, and a candidate with something
+// over its picture (or a part not yet painted) is not placed. True when a
+// placed video must leave, its old clip marked to be painted again.
+static bool planes_judge(const os64_gui_rect_t *damage, uint32_t from, uint32_t count)
+{
+    bool again = false;
+    for (int32_t i = 0; i < VIDEOS_MAX; i++) {
+        Video *v = &s_videos[i];
+        if (v->node == NULL)
+            continue;
+        if (v->placed)
+            for (uint32_t k = from; k < count; k++) {
+                os64_gui_rect_t met;
+                if (os64_rect_intersect(damage[k], v->placed_clip, &met)) {
+                    v->placed_paints++;
+                    break;
+                }
+            }
+        if (!v->candidate)
+            continue;
+        for (uint32_t k = from; k < count; k++)
+            yonder_plane_map_paint(&v->map, to_plane_rect(damage[k]), to_plane_rect(v->clip), plane_ink, v);
+        yonder_plane_rect_t clip = to_plane_rect(v->clip);
+        if (yonder_plane_map_known(&v->map, clip) && !yonder_plane_map_inked(&v->map, clip)) {
+            v->place = true;
+            continue;
+        }
+        v->candidate = v->place = false;
+        plane_reason_set(v, YONDER_PLANE_OVER);
+        if (v->placed) {
+            plane_mark_window(v->placed_clip);
+            again = true;
+        }
+    }
+    return again;
+}
+
+// The hole: each video placed by this publish has the pixels of its clip
+// that `damage` painted set to zero, see-through.
+static void planes_hole(const os64_gui_rect_t *damage, uint32_t count)
+{
+    os64_gui_surface_t *s = &g.ui.ctx->surf;
+    for (int32_t i = 0; i < VIDEOS_MAX; i++) {
+        const Video *v = &s_videos[i];
+        if (v->node == NULL || !v->place)
+            continue;
+        for (uint32_t k = 0; k < count; k++) {
+            os64_gui_rect_t met;
+            if (!os64_rect_intersect(damage[k], v->clip, &met))
+                continue;
+            for (int32_t y = met.y; y < met.y + met.h; y++)
+                os64_memset(s->pixels + (size_t)y * s->pitch_px + met.x, 0, (size_t)met.w * sizeof(uint32_t));
+        }
+    }
+}
+
+// The hides owed by closed sessions: each one's last picture painted back
+// into its clip when the page it was on is still the one shown and laid out
+// as it was, so the place shows that picture, as it showed before the
+// plane, and not a hole.
+static void planes_hides_paint(void)
+{
+    os64_gui_surface_t *s = &g.ui.ctx->surf;
+    for (int32_t i = 0; i < PLANE_HIDES_MAX; i++) {
+        __typeof__(s_plane_hides[0]) *h = &s_plane_hides[i];
+        if (!h->owed || h->copy == NULL || h->doc != page_doc(&g.page) || g.page.tree == NULL ||
+            flow_tree_serial(g.page.tree) != h->tree_serial)
+            continue;
+        os64_gui_rect_t met;
+        if (!os64_rect_intersect(h->clip, g.view.bounds, &met))
+            continue;
+        for (int32_t y = met.y; y < met.y + met.h; y++)
+            os64_memcpy(s->pixels + (size_t)y * s->pitch_px + met.x,
+                        h->copy + (size_t)(y - h->origin.y) * h->copy_w + (met.x - h->origin.x),
+                        (size_t)met.w * sizeof(uint32_t));
+        s_plane_counts.hides_copied++;
+    }
+}
+
+static void plane_hide_free(int32_t i)
+{
+    os64_free(s_plane_hides[i].copy);
+    s_plane_hides[i] = (__typeof__(s_plane_hides[0])){0};
+}
+
+// The edits this publish carries: the places that change, then the hides
+// owed by closed sessions. Their clips, old and new, grow `*all`. A window
+// has at most OS64_GUI_PLANES planes, so the live videos' edits always fit;
+// a hide owed for a plane the kernel has already taken out could make one
+// edit too many, and it is the one that waits for the next publish, never
+// a place whose hole is already painted.
+static uint32_t planes_edits(os64_gui_plane_edit_t *edits, os64_gui_rect_t *all)
+{
+    uint32_t n = 0;
+    for (int32_t i = 0; i < VIDEOS_MAX && n < OS64_GUI_PLANE_EDITS_MAX; i++) {
+        const Video *v = &s_videos[i];
+        if (v->node == NULL)
+            continue;
+        if (v->place) {
+            bool same = v->placed && v->placed_name == v->name &&
+                        os64_memcmp(&v->placed_origin, &v->origin, sizeof(v->origin)) == 0 &&
+                        os64_memcmp(&v->placed_clip, &v->clip, sizeof(v->clip)) == 0;
+            if (same)
+                continue;
+            edits[n++] = (os64_gui_plane_edit_t){.plane = v->name, .origin = v->origin, .clip = v->clip};
+            *all = os64_rect_union(*all, v->clip);
+            if (v->placed)
+                *all = os64_rect_union(*all, v->placed_clip);
+        } else if (v->placed) {
+            edits[n++] = (os64_gui_plane_edit_t){.plane = v->placed_name, .hide = 1};
+            *all = os64_rect_union(*all, v->placed_clip);
+        }
+    }
+    for (int32_t i = 0; i < PLANE_HIDES_MAX; i++) {
+        s_plane_hides[i].sent = s_plane_hides[i].owed && n < OS64_GUI_PLANE_EDITS_MAX;
+        if (s_plane_hides[i].sent) {
+            edits[n++] = (os64_gui_plane_edit_t){.plane = s_plane_hides[i].name, .hide = 1};
+            *all = os64_rect_union(*all, s_plane_hides[i].clip);
+        }
+    }
+    return n;
+}
+
+// What the kernel took: each video's place, the moves counted, the hides
+// owed that it carried done.
+static void planes_commit(void)
+{
+    for (int32_t i = 0; i < PLANE_HIDES_MAX; i++)
+        if (s_plane_hides[i].sent)
+            plane_hide_free(i);
+    for (int32_t i = 0; i < VIDEOS_MAX; i++) {
+        Video *v = &s_videos[i];
+        if (v->node == NULL || v->plane_state != OS64_MEDIA_PLANE_ON)
+            continue;
+        if (v->place && !v->placed)
+            v->moves_on++;
+        if (!v->place && v->placed)
+            v->moves_off++;
+        v->placed = v->place;
+        if (v->place) {
+            v->placed_name = v->name;
+            v->placed_origin = v->origin;
+            v->placed_clip = v->clip;
+            if (v->reason != YONDER_PLANE_PLACED)
+                plane_reason_set(v, YONDER_PLANE_PLACED);
+        }
+    }
+}
+
+// The render's damage published: with the planes' edits when there are
+// any, in one publish whose damage covers every rectangle rendered and
+// every clip the edits change; plainly otherwise.
+static void planes_publish(os64_gui_rect_t *damage, uint32_t *count)
+{
+    os64_gui_plane_edit_t edits[OS64_GUI_PLANE_EDITS_MAX];
+    os64_gui_rect_t all = *count > 0 ? damage[0] : (os64_gui_rect_t){0, 0, 0, 0};
+    int64_t plain_area = 0;
+    for (uint32_t k = 0; k < *count; k++) {
+        all = os64_rect_union(all, damage[k]);
+        plain_area += (int64_t)damage[k].w * damage[k].h;
+    }
+    uint32_t n = planes_edits(edits, &all);
+    if (n == 0) {
+        for (uint32_t k = 0; k < *count; k++)
+            os64_draw_publish(g.ui.ctx, &damage[k]);
+        return;
+    }
+    int64_t rc = os64_gui_window_publish_edits(g.win, &all, edits, n);
+    if (rc == 0) {
+        s_plane_counts.edit_publishes++;
+        s_plane_counts.union_area += (uint64_t)all.w * (uint64_t)all.h;
+        if ((int64_t)all.w * all.h > plain_area)
+            s_plane_counts.union_beyond++;
+        planes_commit();
+        return;
+    }
+    // Refused whole: nothing changed in the kernel. The clips just made
+    // holes get the picture back, a refused hide owed by a gone plane is
+    // dropped, and the damage is published plain.
+    if (rc < 0 && -rc < (int64_t)(sizeof(s_plane_counts.refused) / sizeof(s_plane_counts.refused[0])))
+        s_plane_counts.refused[-rc]++;
+    for (int32_t i = 0; i < PLANE_HIDES_MAX; i++)
+        if (s_plane_hides[i].sent && rc == OS64_GUI_ERR_NO_PLANE) {
+            s_plane_counts.hides_dropped++;
+            plane_hide_free(i);
+        }
+    bool repaint = false;
+    for (int32_t i = 0; i < VIDEOS_MAX; i++) {
+        Video *v = &s_videos[i];
+        if (v->node == NULL || !v->place)
+            continue;
+        v->place = false;
+        if (!v->placed) {
+            v->held_until_ms = yonder_now_ms() + PLANE_HOLD_OFF_MS;
+            plane_reason_set(v, YONDER_PLANE_REFUSED);
+            plane_mark_window(v->clip);
+            repaint = true;
+        } else {
+            v->place = true;    // still placed as the kernel holds it
+        }
+    }
+    if (repaint) {
+        uint32_t more = os64_ui_render_list(&g.ui, damage + *count);
+        *count += more;
+    }
+    for (uint32_t k = 0; k < *count; k++)
+        os64_draw_publish(g.ui.ctx, &damage[k]);
+}
+
+static bool planes_placed_any(void)
+{
+    for (int32_t i = 0; i < VIDEOS_MAX; i++)
+        if (s_videos[i].node != NULL && s_videos[i].placed)
+            return true;
+    return false;
+}
+
+static uint64_t plane_rate_due(void)
+{
+    return s_video_rate_s != 0 && planes_placed_any() ? s_video_rate_next_ms : YONDER_NEVER;
+}
+
+// A video's session closing (video_remove) with its plane placed: the hide
+// is owed to the next publish, with a copy of its last picture to paint
+// back where the page still shows its box.
+static void plane_close(Video *v)
+{
+    if (v->view.frame != NULL)
+        yonder_media_shown_done(v->session, &v->view);
+    if (v->placed) {
+        int32_t at = -1;
+        for (int32_t i = 0; i < PLANE_HIDES_MAX && at < 0; i++)
+            if (!s_plane_hides[i].owed)
+                at = i;
+        if (at >= 0) {
+            __typeof__(s_plane_hides[0]) *h = &s_plane_hides[at];
+            *h = (__typeof__(*h)){.owed = true, .name = v->placed_name, .origin = v->placed_origin,
+                                  .clip = v->placed_clip, .doc = page_doc(&g.page),
+                                  .tree_serial = g.page.tree != NULL ? flow_tree_serial(g.page.tree) : 0};
+            os64_media_player_view_t last;
+            if (yonder_media_shown(v->session, &last)) {
+                if (last.w == (uint32_t)v->placed_origin.w && last.h == (uint32_t)v->placed_origin.h) {
+                    h->copy = os64_malloc((size_t)last.w * last.h * sizeof(uint32_t));
+                    if (h->copy != NULL) {
+                        os64_memcpy(h->copy, last.pixels, (size_t)last.w * last.h * sizeof(uint32_t));
+                        h->copy_w = last.w;
+                        h->copy_h = last.h;
+                    }
+                }
+                yonder_media_shown_done(v->session, &last);
+            }
+            s_plane_counts.hides_owed++;
+            plane_mark_window(v->placed_clip);
+        }
+    }
+    os64_free(v->tiles);
 }
 
 // Each player shows its element as it stands now.
@@ -19991,13 +20691,15 @@ static bool video_fitted(const Video *v, const flow_box_t *b, os64_gui_rect_t c,
 {
     *at = yonder_object_rect(b->style, c, zoomed_px(v->width, g.page.laid_zoom),
                              zoomed_px(v->height, g.page.laid_zoom));
-    const os64_media_player_frame_t *fr = &v->frame;
-    return fr->pixels != NULL && fr->w > 0 && fr->h > 0 && fr->w == (uint32_t)at->w && fr->h == (uint32_t)at->h;
+    const uint32_t *px;
+    uint32_t w, h;
+    return video_picture(v, &px, &w, &h) && w == (uint32_t)at->w && h == (uint32_t)at->h;
 }
 
 // The paint of a video's box (the painter's retained-pixels verb): the
-// latest picture, fitted by object-fit and object-position, the rest of the
-// box the element's own background, and nothing before the first picture.
+// latest picture (video_picture), fitted by object-fit and object-position,
+// the rest of the box the element's own background, and nothing before the
+// first picture.
 // THE PLAIN PATH copies the picture's rows into the window: taken when the
 // pane paints straight to the window (no group's sheets: no opacity,
 // transform, filter, mask or blend above the box) and the picture was
@@ -20029,8 +20731,9 @@ static void pane_video(GlassPane *gp, const flow_box_t *b, os64_gui_rect_t c, os
         // it comes, a second's worth at most.
         v->sizing = 60;
     }
-    const os64_media_player_frame_t *fr = &v->frame;
-    if (fr->pixels == NULL || fr->w == 0 || fr->h == 0)
+    const uint32_t *pixels;
+    uint32_t pw, ph;
+    if (!video_picture(v, &pixels, &pw, &ph))
         return;
     int64_t began = os64_micros();
     for (int32_t k = 0; k < gp->n; ++k) {
@@ -20045,12 +20748,12 @@ static void pane_video(GlassPane *gp, const flow_box_t *b, os64_gui_rect_t c, os
             s_video_rate_painted++;
             for (int32_t y = cut.y; y < cut.y + cut.h; y++)
                 os64_memcpy(gl->surf->pixels + (size_t)y * gl->surf->pitch_px + cut.x,
-                            fr->pixels + (size_t)(y - box.y) * fr->w + (cut.x - box.x), (size_t)cut.w * 4);
+                            pixels + (size_t)(y - box.y) * pw + (cut.x - box.x), (size_t)cut.w * 4);
         } else {
             s_cost.video_general++;
             s_video_rate_painted++;
-            yonder_draw_picture(gl->surf->pixels, gl->surf->pitch_px, cut, box, !b->style->pixelated, fr->pixels,
-                                fr->w, fr->h);
+            yonder_draw_picture(gl->surf->pixels, gl->surf->pitch_px, cut, box, !b->style->pixelated, pixels, pw,
+                                ph);
         }
     }
     s_cost.video_draw_us += (uint64_t)(os64_micros() - began);
@@ -23934,6 +24637,8 @@ int main(int argc, char **argv)
         }
         else if (os64_streq(argv[arg], "--cover=off"))
             s_covers = false;
+        else if (os64_streq(argv[arg], "--plane=off"))
+            s_planes_off_asked = true;
         else if (os64_streq(argv[arg], "--paint-check"))
             s_paint_check = 10;
         else if (os64_strlen(argv[arg]) > 14 && os64_memcmp(argv[arg], "--paint-check=", 14) == 0) {
@@ -23964,6 +24669,7 @@ int main(int argc, char **argv)
     s_reduce_motion = yonder_settings_saved_reduce_motion();
     s_shadow_dom = yonder_settings_saved_shadow_dom();
     s_ranges = yonder_settings_saved_ranges();
+    s_planes = !s_planes_off_asked && yonder_settings_saved_planes();
     s_ledger = yonder_settings_saved_ledger();
     s_started_cycles = os64_js_ledger_now();
     s_started_us = os64_micros();
