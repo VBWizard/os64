@@ -382,6 +382,15 @@ static void glass_cases(void)
     clock_us += 2000000;
     video_glass_open_gap(v, os64_micros());
     check(v->glass_last_us == 0 && v->glass_gap_us == 33000, "glass: paused, no gap");
+    /* Placed, a page paint that renders its box with a newer picture puts
+     * none of the page's on the glass: the box is a hole. */
+    v->playing = true;
+    uint64_t page = v->page_pictures;
+    v->placed = true;
+    fake_plane.serial++;
+    glass_paint_once();
+    check(v->page_pictures == page, "glass: placed, the page's render of its box is no picture on the glass");
+    v->placed = false;
     plane_drop();
 
     /* On its plane: the show thread publishes every 33 ms while the page

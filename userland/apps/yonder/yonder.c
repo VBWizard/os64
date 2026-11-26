@@ -13280,8 +13280,10 @@ static void video_glass_fold(Video *v, int64_t now)
         v->glass_last_us = now;
 }
 
-// After a publish: each video whose box it painted with a new picture has
-// that picture on the glass now, the time since its last one a gap.
+// After a publish: each video whose box it painted with a new picture, and
+// which the publish left off its plane, has that picture on the glass now,
+// the time since its last one a gap. A placed video's box is rendered too,
+// but the publish cuts it to a hole, and what shows there is the plane's.
 static void videos_glass_published(void)
 {
     int64_t now = os64_micros();
@@ -13290,6 +13292,8 @@ static void videos_glass_published(void)
         if (v->node == NULL || !v->painted_new)
             continue;
         v->painted_new = false;
+        if (v->placed)
+            continue;
         v->page_pictures++;
         video_glass_fold(v, now);
         if (v->glass_last_us != 0) {
@@ -21107,7 +21111,7 @@ static void pane_video(GlassPane *gp, const flow_box_t *b, os64_gui_rect_t c, os
     uint32_t serial = v->view.frame != NULL ? v->view.serial : v->frame.serial;
     if (serial != v->glass_serial) {
         v->glass_serial = serial;
-        v->painted_new = true;      // on the glass with this render's publish (videos_glass_published)
+        v->painted_new = true;      // on the glass with this render's publish, unless placed (videos_glass_published)
     }
 }
 
