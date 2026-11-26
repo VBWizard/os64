@@ -497,3 +497,22 @@ matter one day.
   departed pages leave memory behind, which lengthens HEAP_BINS.md's
   first-fit walk. Proof needs an allocation count or the walk's length for
   a first load against a third reload of one page.
+
+## Added 2026-11-26, from Chris's video runs
+
+Not for now, on Chris's word; for the list.
+
+- **Dark pages darken a page that is already dark by its own design.**
+  With `appearance = dark` yonder answers `prefers-color-scheme: dark`, in
+  style sheets and to script, so a page set to follow the device's theme
+  sends its own dark design (confirmed on the P5: the page goes light and
+  dark with yonder's setting). The painter then still moves what is left
+  (paint.h's `yonder_dark_t`: paper brighter than mid grey goes dark), and
+  a part such a page keeps light on purpose is lost. Seen on a media
+  player's seek bar: its light, see-through "loaded this far" and "seek to
+  here" strips no longer show, while its red line and the graph above it
+  do. The row to design: a page that took the dark answer, or whose own
+  canvas is already dark, keeps its colours as it sent them. How yonder
+  knows the page took the answer (a media query that matched, a
+  `color-scheme` it declared, the canvas's own colour) is the design's
+  question.
