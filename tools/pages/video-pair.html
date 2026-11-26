@@ -1,0 +1,28 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Two videos that overlap</title>
+<!--
+  VIDEO_PLANE.md § 5.2, P3b's fixture for two pictures that meet. The
+  second video overlaps the first, and a see-through band lies over both.
+  A plane's clip may not meet another's, so the first is on its plane and
+  the second is painted by the page (the record's reason: another plane's
+  clip), its picture over the first's corner in the first's layer, the
+  band over both.
+
+  What to read: the record's video lines (`d`), and under
+  `--plane-check=1` the first video's plane-check counts.
+-->
+<style>
+  body { font: 16px sans-serif; margin: 16px; background: #223; color: #ddd; }
+  #box { position: relative; width: 640px; height: 360px; }
+  video { position: absolute; width: 400px; height: 225px; background: #000; }
+  #a { left: 0; top: 0; }
+  #b { left: 220px; top: 120px; }
+  #band { position: absolute; left: 0; top: 160px; width: 640px; height: 40px; background: rgba(255, 255, 255, .35); }
+</style>
+<h1>Two videos that overlap</h1>
+<div id="box">
+  <video id="a" src="bbb-480p-3s-av.mp4" autoplay muted loop></video>
+  <video id="b" src="bbb-480p-3s-av.mp4" autoplay muted loop></video>
+  <div id="band"></div>
+</div>

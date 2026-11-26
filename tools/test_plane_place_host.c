@@ -36,7 +36,7 @@ static uint32_t rnd(uint32_t n)
 
 // ---------------------------------------------------------------- the decision
 
-static const yonder_plane_input_t kAllGood = {true, true, false, false, false, true, true, false};
+static const yonder_plane_input_t kAllGood = {true, true, false, false, false, false, false, true, true, false};
 
 static void decide_cases(void)
 {
@@ -56,9 +56,15 @@ static void decide_cases(void)
     in = kAllGood; in.clip_meets = true;
     v = yonder_plane_decide(&in);
     CHECK(v.reason == YONDER_PLANE_CLIP_MEETS && v.want, "another plane's clip: wanted");
-    in = kAllGood; in.over = true;
+    in = kAllGood; in.not_layer = true;
     v = yonder_plane_decide(&in);
-    CHECK(v.reason == YONDER_PLANE_OVER && v.want, "something over it: wanted");
+    CHECK(v.reason == YONDER_PLANE_NOT_LAYER && v.want, "not a layer: wanted");
+    in = kAllGood; in.over_budget = true;
+    v = yonder_plane_decide(&in);
+    CHECK(v.reason == YONDER_PLANE_BUDGET && v.want, "the overlays' budget: wanted");
+    in = kAllGood; in.unpainted = true;
+    v = yonder_plane_decide(&in);
+    CHECK(v.reason == YONDER_PLANE_UNPAINTED && v.want, "not yet painted: wanted");
     in = kAllGood; in.ready = false;
     v = yonder_plane_decide(&in);
     CHECK(v.reason == YONDER_PLANE_NOT_READY && v.want, "not ready: wanted");
@@ -70,16 +76,18 @@ static void decide_cases(void)
     CHECK(v.reason == YONDER_PLANE_REFUSED && v.want, "a refused publish's hold-off: wanted");
 
     // The order: with every reason true, each one masks the ones after it.
-    for (int first = 0; first < 8; first++) {
-        in = (yonder_plane_input_t){false, false, true, true, true, false, false, true};
+    for (int first = 0; first < 10; first++) {
+        in = (yonder_plane_input_t){false, false, true, true, true, true, true, false, false, true};
         yonder_plane_reason_t want = YONDER_PLANE_OUT_OF_VIEW;
         if (first >= 1) { in.on_view = true; want = YONDER_PLANE_NOT_COVER; }
         if (first >= 2) { in.cover = true; want = YONDER_PLANE_BACKDROP; }
         if (first >= 3) { in.backdrop = false; want = YONDER_PLANE_CLIP_MEETS; }
-        if (first >= 4) { in.clip_meets = false; want = YONDER_PLANE_OVER; }
-        if (first >= 5) { in.over = false; want = YONDER_PLANE_NOT_READY; }
-        if (first >= 6) { in.ready = true; in.shown = true; want = YONDER_PLANE_REFUSED; }
-        if (first >= 7) { in.held_off = false; want = YONDER_PLANE_PLACED; }
+        if (first >= 4) { in.clip_meets = false; want = YONDER_PLANE_NOT_LAYER; }
+        if (first >= 5) { in.not_layer = false; want = YONDER_PLANE_BUDGET; }
+        if (first >= 6) { in.over_budget = false; want = YONDER_PLANE_UNPAINTED; }
+        if (first >= 7) { in.unpainted = false; want = YONDER_PLANE_NOT_READY; }
+        if (first >= 8) { in.ready = true; in.shown = true; want = YONDER_PLANE_REFUSED; }
+        if (first >= 9) { in.held_off = false; want = YONDER_PLANE_PLACED; }
         v = yonder_plane_decide(&in);
         CHECK(v.reason == want, "order %d: %s, wanted %s", first, yonder_plane_reason_name(v.reason),
               yonder_plane_reason_name(want));
@@ -87,7 +95,7 @@ static void decide_cases(void)
     // The record's words, each its own.
     static const char *const kWords[YONDER_PLANE_REASONS] = {
         "placed", "out of view", "not a cover", "a backdrop reader", "another plane's clip",
-        "something over it", "not ready", "a refused publish",
+        "not a layer", "the overlays' budget", "not yet painted", "not ready", "a refused publish",
     };
     for (int r = 0; r < YONDER_PLANE_REASONS; r++)
         CHECK(strcmp(yonder_plane_reason_name((yonder_plane_reason_t)r), kWords[r]) == 0, "reason %d is called %s",
@@ -286,15 +294,189 @@ static void map_properties(void)
     }
 }
 
+// ---------------------------------------------------------------- the layer
+
+static void layer_cases(void)
+{
+    enum { N = 4096 };
+    static uint32_t b[N], w[N], out[N];
+    uint8_t want_a[N];
+    for (int i = 0; i < N; i++) {
+        uint32_t a = rnd(256), px = 0, pw = 0;
+        if (i < 4)
+            a = (uint32_t)(i == 0 ? 0 : i == 1 ? 255 : i == 2 ? 1 : 254);
+        for (int c = 0; c < 3; c++) {
+            uint32_t col = rnd(256);
+            // Source over black and over white, rounded as a blend does.
+            uint32_t over_b = (col * a + 127) / 255, over_w = (col * a + 255 * (255 - a) + 127) / 255;
+            px |= over_b << (8 * c);
+            pw |= over_w << (8 * c);
+        }
+        b[i] = 0xff000000u | px;
+        w[i] = 0xff000000u | pw;
+        want_a[i] = (uint8_t)a;
+    }
+    yonder_plane_layer_counts_t counts;
+    yonder_plane_layer(b, w, N, out, &counts);
+    int far = 0, wrong_colour = 0;
+    size_t inked = 0;
+    for (int i = 0; i < N; i++) {
+        int got = (int)(out[i] >> 24), d = got - want_a[i];
+        far += d > 1 || d < -1;
+        wrong_colour += (out[i] & 0xffffffu) != (b[i] & 0xffffffu);
+        inked += got > 0;
+    }
+    CHECK(far == 0, "layer: a within 1 of the coverage (%d far)", far);
+    CHECK((out[0] >> 24) == 0 && (out[1] >> 24) == 255, "layer: clear is 0 and opaque is 255, exactly");
+    CHECK(wrong_colour == 0, "layer: the colour is the paint over black");
+    CHECK(counts.disagree == 0 && counts.inked == inked, "layer: one coverage agrees; inked counted (%zu)",
+          counts.disagree);
+    // A pixel whose channels say different coverages is no layer's.
+    uint32_t bd = 0xff000000u, wd = 0xff00ff80u, o;
+    yonder_plane_layer(&bd, &wd, 1, &o, &counts);
+    CHECK(counts.disagree == 1, "layer: channels that disagree are counted");
+    // Channels one apart agree; past one they do not, and the layer's
+    // coverage is green's. A white pass darker than the black one (no
+    // paint makes it) reads as opaque.
+    uint32_t b1[2] = {0xff000000u, 0xff808080u}, w1[2] = {0xff373736u, 0xff707070u}, o1[2];
+    yonder_plane_layer(b1, w1, 2, o1, &counts);
+    CHECK(counts.disagree == 0 && (o1[0] >> 24) == 255 - 0x37, "layer: one apart agrees; the coverage is green's");
+    CHECK((o1[1] >> 24) == 255, "layer: a coverage past opaque is opaque");
+    // Out in place.
+    yonder_plane_layer(b, w, N, b, &counts);
+    CHECK(memcmp(b, out, sizeof(out)) == 0, "layer: written over the black pass gives the same");
+}
+
+// ---------------------------------------------------------------- overlays
+
+static uint64_t brute_area(const yonder_plane_rect_t *r, uint32_t n)
+{
+    uint64_t area = 0;
+    for (int y = 0; y < H; y++)
+        for (int x = 0; x < W; x++) {
+            yonder_plane_rect_t px = {x, y, 1, 1};
+            for (uint32_t k = 0; k < n; k++)
+                if (inside(px, r[k])) {
+                    area++;
+                    break;
+                }
+        }
+    return area;
+}
+
+static void forget_cases(void)
+{
+    yonder_plane_map_t m;
+    yonder_plane_rect_t origin = {10, 6, 100, 50};
+    CHECK(yonder_plane_map_reset(&m, origin, s_tiles, 1024), "forget: reset");
+    for (uint32_t i = 0; i < m.cols * m.rows; i++)
+        s_tiles[i] = YONDER_PLANE_TILE_CLEAR;
+    CHECK(yonder_plane_map_known(&m, origin), "forget: all clear is known");
+    yonder_plane_rect_t part = {10 + 20, 6 + 3, 2, 2};     // inside tile (1, 0)
+    yonder_plane_map_forget(&m, part);
+    CHECK(s_tiles[1] == YONDER_PLANE_TILE_UNKNOWN && s_tiles[0] == YONDER_PLANE_TILE_CLEAR &&
+              s_tiles[2] == YONDER_PLANE_TILE_CLEAR && s_tiles[m.cols + 1] == YONDER_PLANE_TILE_CLEAR,
+          "forget: the tile the part meets, and only it");
+    CHECK(!yonder_plane_map_known(&m, origin), "forget: the clip no longer known");
+    yonder_plane_rect_t across = {10 + 15, 6 + 15, 2, 2};  // the corner of four tiles
+    yonder_plane_map_forget(&m, across);
+    CHECK(s_tiles[0] == YONDER_PLANE_TILE_UNKNOWN && s_tiles[m.cols] == YONDER_PLANE_TILE_UNKNOWN &&
+              s_tiles[m.cols + 1] == YONDER_PLANE_TILE_UNKNOWN && s_tiles[2] == YONDER_PLANE_TILE_CLEAR,
+          "forget: a part across four tiles forgets all four");
+}
+
+static void overlay_cases(void)
+{
+    yonder_plane_map_t m;
+    yonder_plane_rect_t origin = {10, 6, 100, 50}, out[8];
+    uint64_t area;
+    CHECK(yonder_plane_map_reset(&m, origin, s_tiles, 1024), "overlays: reset");
+    CHECK(yonder_plane_map_overlays(&m, origin, out, 8, &area) == 0 && area == 0, "overlays: nothing inked, none");
+    // One tile inked: its part, cut to the clip.
+    s_tiles[1 * m.cols + 2] = YONDER_PLANE_TILE_INKED;
+    yonder_plane_rect_t clip = {10, 6, 100, 30};
+    uint32_t n = yonder_plane_map_overlays(&m, clip, out, 8, &area);
+    CHECK(n == 1 && out[0].x == 10 + 32 && out[0].y == 6 + 16 && out[0].w == 16 && out[0].h == 14 && area == 16 * 14,
+          "overlays: one tile, cut to the clip (%u: %d,%d %dx%d)", n, out[0].x, out[0].y, out[0].w, out[0].h);
+    // A block of tiles joins into one rectangle.
+    yonder_plane_map_reset(&m, origin, s_tiles, 1024);
+    for (uint32_t r = 0; r < 3; r++)
+        for (uint32_t c = 1; c < 4; c++)
+            s_tiles[r * m.cols + c] = YONDER_PLANE_TILE_INKED;
+    n = yonder_plane_map_overlays(&m, origin, out, 8, &area);
+    CHECK(n == 1 && out[0].w == 48 && out[0].h == 48 && area == 48 * 48, "overlays: a block is one rectangle (%u)", n);
+    // Two tiles apart, the cap eight: two rectangles, not joined.
+    yonder_plane_map_reset(&m, origin, s_tiles, 1024);
+    s_tiles[0] = s_tiles[2 * m.cols + 5] = YONDER_PLANE_TILE_INKED;
+    n = yonder_plane_map_overlays(&m, origin, out, 8, &area);
+    CHECK(n == 2 && area == 2 * 16 * 16, "overlays: under the cap, nothing joined (%u)", n);
+    // Random maps: at most the cap, inside the clip, every inked part
+    // covered, the area the union's.
+    for (int round = 0; round < 400; round++) {
+        yonder_plane_rect_t o = {(int)rnd(40), (int)rnd(30), (int)rnd(150) + 1, (int)rnd(80) + 1};
+        yonder_plane_rect_t cl = {o.x + (int)rnd(10), o.y + (int)rnd(10), 0, 0};
+        cl.w = (int)rnd((uint32_t)(W - cl.x)) + 1;     // inside the test's W x H, where the area is counted
+        cl.h = (int)rnd((uint32_t)(H - cl.y)) + 1;
+        if (!yonder_plane_map_reset(&m, o, s_tiles, sizeof(s_tiles)))
+            continue;
+        uint32_t density = rnd(100) + 1;
+        for (uint32_t i = 0; i < m.cols * m.rows; i++)
+            s_tiles[i] = rnd(100) < density ? YONDER_PLANE_TILE_INKED : YONDER_PLANE_TILE_CLEAR;
+        uint32_t cap = 1 + rnd(8);
+        n = yonder_plane_map_overlays(&m, cl, out, cap, &area);
+        CHECK(n <= cap, "overlays round %d: %u past the cap %u", round, n, cap);
+        bool in_clip = true, covered = true;
+        for (uint32_t k = 0; k < n; k++)
+            in_clip &= inside(out[k], cl);
+        for (uint32_t r = 0; r < m.rows; r++)
+            for (uint32_t c = 0; c < m.cols; c++) {
+                if (s_tiles[r * m.cols + c] != YONDER_PLANE_TILE_INKED)
+                    continue;
+                yonder_plane_rect_t t = {o.x + (int)c * 16, o.y + (int)r * 16, 16, 16}, part;
+                yonder_plane_rect_t t2;
+                if (!meets(t, o) || !meets(t, cl))
+                    continue;
+                // The tile's part inside the origin and the clip.
+                int x0 = t.x > o.x ? t.x : o.x, y0 = t.y > o.y ? t.y : o.y;
+                int x1 = t.x + t.w < o.x + o.w ? t.x + t.w : o.x + o.w, y1 = t.y + t.h < o.y + o.h ? t.y + t.h : o.y + o.h;
+                t2 = (yonder_plane_rect_t){x0, y0, x1 - x0, y1 - y0};
+                if (!meets(t2, cl))
+                    continue;
+                x0 = t2.x > cl.x ? t2.x : cl.x; y0 = t2.y > cl.y ? t2.y : cl.y;
+                x1 = t2.x + t2.w < cl.x + cl.w ? t2.x + t2.w : cl.x + cl.w;
+                y1 = t2.y + t2.h < cl.y + cl.h ? t2.y + t2.h : cl.y + cl.h;
+                part = (yonder_plane_rect_t){x0, y0, x1 - x0, y1 - y0};
+                bool in = false;
+                for (uint32_t k = 0; k < n && !in; k++)
+                    in = inside(part, out[k]);
+                covered &= in;
+            }
+        CHECK(in_clip, "overlays round %d: a rectangle leaves the clip", round);
+        CHECK(covered, "overlays round %d: an inked part left out", round);
+        CHECK(area == brute_area(out, n), "overlays round %d: the area is not the union's", round);
+    }
+    // The union's area against counting.
+    for (int round = 0; round < 300; round++) {
+        yonder_plane_rect_t r[8];
+        uint32_t k = 1 + rnd(8);
+        for (uint32_t i = 0; i < k; i++)
+            r[i] = (yonder_plane_rect_t){(int)rnd(W - 60), (int)rnd(H - 40), (int)rnd(60), (int)rnd(40)};
+        CHECK(yonder_plane_union_area(r, k) == brute_area(r, k), "union area round %d", round);
+    }
+}
+
 int main(void)
 {
     decide_cases();
     map_scenarios();
     map_properties();
+    layer_cases();
+    forget_cases();
+    overlay_cases();
     if (s_failed) {
         printf("plane_place: %d failed\n", s_failed);
         return 1;
     }
-    printf("PASS plane_place: decisions, map scenarios, 3000 random paint sequences\n");
+    printf("PASS plane_place: decisions, map scenarios, 3000 random paint sequences, the layer, overlays\n");
     return 0;
 }

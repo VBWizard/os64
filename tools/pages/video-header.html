@@ -1,0 +1,27 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>A video under a fixed header</title>
+<!--
+  VIDEO_PLANE.md § 5.2, P3b's fixture for a scroll under something fixed.
+  A see-through header is fixed to the top of the view. Scroll the page
+  (the arrow keys): the video moves up under the header, which is over its
+  top for as long as it passes, and the video stays on its plane, the
+  header's part a layer over the picture.
+
+  What to read: the record's video line (`d`) while the header is over the
+  picture: placed, the layers, the overlays; under `--plane-check=1` its
+  plane-check counts.
+-->
+<style>
+  body { font: 16px sans-serif; margin: 0; background: #223; color: #ddd; }
+  header { position: fixed; top: 0; left: 0; right: 0; height: 60px; background: rgba(20, 40, 80, .75);
+           color: #fff; font-size: 22px; padding: 16px; box-sizing: border-box; }
+  main { padding: 80px 16px 16px; }
+  video { display: block; width: 480px; background: #000; }
+</style>
+<header>A header fixed to the top of the view</header>
+<main>
+  <p>Scroll down: the video passes under the header.</p>
+  <video id="v" src="bbb-480p-3s-av.mp4" autoplay muted loop></video>
+  <div style="height: 1600px"></div>
+</main>
