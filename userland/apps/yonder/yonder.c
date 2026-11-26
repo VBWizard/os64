@@ -13787,7 +13787,7 @@ static uint32_t s_plane_nlayers;
 // The kernel's overlay budget (GUI_PLANE_OVERLAY_PIXELS, kernel/include/gui/
 // plane.h, which the ABI does not carry): a place whose overlays' union is
 // larger is refused, so none is asked for.
-#define PLANE_OVERLAY_BUDGET 98304u
+#define PLANE_OVERLAY_BUDGET 393216u
 
 // Whether a render may have drawn over `v`'s picture in `part` (window
 // coordinates, inside the origin): a draw noted there, or a pixel that

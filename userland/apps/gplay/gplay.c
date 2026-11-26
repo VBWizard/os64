@@ -75,6 +75,8 @@
 // refuses a publish whose overlays blend more than GUI_PLANE_OVERLAY_PIXELS
 // (kernel/include/gui/plane.h, VIDEO_PLANE.md § 3.3): the widest box the
 // readout can make must stay inside it, or every refresh would be refused.
+// This is the readout's own bound, well under the kernel's, which it does
+// not need to follow up.
 #define READOUT_OVERLAY_BUDGET 98304u
 _Static_assert((READOUT_CHARS - 1) * 8 * READOUT_LINES * 16 <= READOUT_OVERLAY_BUDGET,
                "the readout's widest box outgrows a plane's overlay budget");

@@ -134,9 +134,14 @@ so the place says where it is worth reading:
   edit is the whole list for the place, not what was just painted, so every
   content pixel inside the union must carry a true top byte, the gaps between
   two controls included.
-- **The overlay area has a budget** (`GUI_PLANE_OVERLAY_PIXELS`, one number):
-  an edit whose union is larger is refused, and the window's side paints the
-  video itself. Eight rectangles bound the list; this bounds the work.
+- **The overlay area has a budget** (`GUI_PLANE_OVERLAY_PIXELS`, one number,
+  393,216 pixels, about 2.7 ms of blending at the P5's price): an edit whose
+  union is larger is refused, and the window's side paints the video
+  itself. Eight rectangles bound the list; this bounds the work. The number
+  holds a real player's bar and its seek preview (the P5 on 2026-11-26: the
+  bar alone 78,896 px, the preview up to 143,616), and was 98,304 (about
+  0.7 ms) until those runs showed the compositor's late frames at 0.28%
+  with 143,616 blended.
 - With no overlay rectangles (a video with nothing over it) the compositor's
   work for a new picture is row copies only.
 
@@ -308,7 +313,8 @@ of § 3.5's rules.
   byte against every byte) with 22 mutants. The blend works on all four
   channels in 16-bit lanes of one 64-bit word; the P5 priced it at 6.6 to
   7.0 ns a blended pixel and about 2 ns one read and found opaque or clear
-  (2026-11-25), which `GUI_PLANE_OVERLAY_PIXELS` rests on (about 0.7 ms).
+  (2026-11-25), which `GUI_PLANE_OVERLAY_PIXELS` rests on (about 2.7 ms at
+  its 393,216 pixels).
 - **P1c**: the calls (syscalls 71 to 75: create, surface, publish, destroy,
   and `window_publish_edits`), `kernel/src/gui/plane.c`, the ABI in
   `os64/gui.h` § Planes. A pair of stores and its record are made outside
@@ -407,7 +413,7 @@ of § 3.5's rules.
   instead of asking again. New reasons: not a layer (a pixel's channels
   disagreeing by more than one, or a layer that could not be made: the part
   is forgotten in the map until a paint can say), the overlays' budget (the
-  kernel's 98,304 pixels), not yet painted. The non-source-over readers (a backdrop filter, a blend
+  kernel's budget, § 3.3), not yet painted. The non-source-over readers (a backdrop filter, a blend
   other than normal) were already P3a's "a backdrop reader"; every other
   verb composes source over. `--plane-check[=N]` composes the hole with the
   kernel's own `plane_blend` (built into yonder by `plane_blend.c`) against
