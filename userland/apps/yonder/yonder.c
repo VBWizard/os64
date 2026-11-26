@@ -9952,6 +9952,7 @@ typedef struct {
 static void plane_reading(DiagText *t, const Video *v, const os64_media_player_facts_t *f);
 static void video_glass_reading(DiagText *t, Video *v, const os64_media_player_facts_t *f);
 static void plane_counts_reading(DiagText *t);
+static void heap_regions_reading(DiagText *t);
 
 static void dt_put(DiagText *t, const char *fmt, ...) OS64_PRINTF(2, 3);
 static void dt_put(DiagText *t, const char *fmt, ...)
@@ -10277,6 +10278,7 @@ static bool paint_lines(DiagText *t, DiagText *u)
         plane_reading(t, &s_videos[i], &vf);
     }
     plane_counts_reading(t);
+    heap_regions_reading(t);
 
     // The bells the loop took, then the ticker's own counts: its rings —
     // more than the bells when rings were made before the loop took one —
@@ -13700,7 +13702,8 @@ static struct {
     // none of it counted in the paint's own cost.
     uint64_t layer_passes, layer_us, layer_us_most;
     uint64_t layer_buffers_grown;       // a kept buffer (a layer's, a pass's or the check's row) made larger (plane_buf)
-    uint64_t heap_maps, heap_unmaps;    // libos64's heap's regions taken and given back, at the restart
+    uint64_t heap_maps, heap_unmaps;    // libos64's heap's regions taken and given back at the restart
+                                        // (heap_regions_reading: every reading, planes or none)
     uint64_t overlay_retries;           // a refused publish whose places changed only their overlays
 } s_plane_counts;
 
@@ -14372,6 +14375,19 @@ static void plane_reading(DiagText *t, const Video *v, const os64_media_player_f
 }
 
 // The record's words for the planes of the whole window.
+// The heap's regions since the reading began, in every reading: each a
+// kernel map or unmap made under libos64's one heap lock, which the
+// player's threads wait on too (a region is an allocation of 128 KiB or
+// more, or a pool).
+static void heap_regions_reading(DiagText *t)
+{
+    os64_heap_report_t heap;
+    os64_heap_report_copy(&heap);
+    dt_put(t, "; the heap's regions taken from the kernel %lu, given back %lu",
+           (unsigned long)(heap.calls_map - s_plane_counts.heap_maps),
+           (unsigned long)(heap.calls_unmap - s_plane_counts.heap_unmaps));
+}
+
 static void plane_counts_reading(DiagText *t)
 {
     if (s_plane_counts.asks == 0 && s_plane_counts.edit_publishes == 0 && s_plane_counts.hides_owed == 0 &&
@@ -14393,14 +14409,6 @@ static void plane_counts_reading(DiagText *t)
                "the longest %s, their buffers grown %lu times", (unsigned long)s_plane_counts.layer_passes,
                dt_ms(s_plane_counts.layer_us).text, dt_ms(s_plane_counts.layer_us_most).text,
                (unsigned long)s_plane_counts.layer_buffers_grown);
-    // The heap's regions since the reading began: each a kernel map or unmap
-    // made under libos64's one heap lock, which the player's threads wait
-    // on too (a region is an allocation of 128 KiB or more, or a pool).
-    os64_heap_report_t heap;
-    os64_heap_report_copy(&heap);
-    dt_put(t, "; the heap's regions taken from the kernel %lu, given back %lu",
-           (unsigned long)(heap.calls_map - s_plane_counts.heap_maps),
-           (unsigned long)(heap.calls_unmap - s_plane_counts.heap_unmaps));
 }
 
 // The parts of `damage[from..count)` in `v`'s clip that changed over its
