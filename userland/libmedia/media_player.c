@@ -149,6 +149,12 @@ struct os64_media_player {
     os64_bell_t show_bell;                // the show thread's first verdict, to the plane call
     os64_media_show_t show;
     uint64_t frames_missed, waits_patience, frame_refused, start_tripwires, last_number;
+    // What reached the glass from the plane: pictures published while it was
+    // placed and the clock ran, when the last of them was (0 while not
+    // placed or not playing), and the longest time between two of them
+    // since the last os64_media_player_plane_gap_take.
+    uint64_t placed_published;
+    int64_t placed_publish_us, placed_gap_max_us;
     uint32_t pinned;                      // frames pinned by `shown` (at most two)
 
     os64_bell_t decode_bell, picture_bell;   // picture_bell only with a picture asked for
@@ -834,6 +840,8 @@ static int64_t show_thread(void *arg)
         }
         if (rc == 0 && f.why == OS64_GUI_PLANE_PATIENCE)
             p->waits_patience++;
+        if (!placed || p->state != OS64_MEDIA_PLAYER_PLAYING)
+            p->placed_publish_us = 0;   // a gap off the glass, or with the clock still, is none of the plane's
         int64_t period = frame && f.period_ns != 0 ? (int64_t)(f.period_ns / 1000)
                        : p->period_us != 0 ? p->period_us : PERIOD_GUESS_US;
         int64_t blank = frame ? (int64_t)f.blank_us + period : now;
@@ -904,6 +912,13 @@ static int64_t show_thread(void *arg)
             os64_lock_acquire(&p->lock);
             if (os64_media_show_published(&p->show, done, in.w, in.h, in.serial))
                 look(p);
+            if (done && placed && p->state == OS64_MEDIA_PLAYER_PLAYING) {
+                int64_t at = now_us();
+                p->placed_published++;
+                if (p->placed_publish_us != 0 && at - p->placed_publish_us > p->placed_gap_max_us)
+                    p->placed_gap_max_us = at - p->placed_publish_us;
+                p->placed_publish_us = at;
+            }
             frame_unpin(p, pin, &c);
             unlock(p);
             collect_release(p, &c);
@@ -980,6 +995,15 @@ int os64_media_player_plane(os64_media_player_t *p, int64_t win)
     os64_lock_release(&p->lock);
     os64_bell_close(&p->show_bell);
     return 0;
+}
+
+int64_t os64_media_player_plane_gap_take(os64_media_player_t *p)
+{
+    os64_lock_acquire(&p->lock);
+    int64_t gap = p->placed_gap_max_us;
+    p->placed_gap_max_us = 0;
+    os64_lock_release(&p->lock);
+    return gap;
 }
 
 void os64_media_player_plane_want(os64_media_player_t *p, bool want)
@@ -1708,6 +1732,8 @@ void os64_media_player_facts(os64_media_player_t *p, os64_media_player_facts_t *
     f.plane_recreates = p->show.recreates;
     f.plane_ended_placed = p->show.ended_placed;
     f.frames_missed = p->frames_missed;
+    f.plane_placed_published = p->placed_published;
+    f.plane_placed_publish_us = p->placed_publish_us;
     f.waits_patience = p->waits_patience;
     f.frame_refused = p->frame_refused;
     f.plane_start_tripwires = p->start_tripwires;

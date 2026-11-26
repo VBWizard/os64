@@ -81,6 +81,7 @@ bool yonder_media_player_facts(yonder_media_t *m, os64_media_player_facts_t *out
 }
 bool yonder_media_plane_ask(yonder_media_t *m, int64_t win) { (void)m; (void)win; fake_plane.asks++; return true; }
 void yonder_media_plane_want(yonder_media_t *m, bool want) { (void)m; fake_plane.want = want; }
+int64_t yonder_media_plane_gap_take(yonder_media_t *m) { (void)m; return 0; }
 bool yonder_media_shown(yonder_media_t *m, os64_media_player_view_t *out)
 {
     (void)m;

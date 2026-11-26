@@ -116,6 +116,8 @@ bool yonder_media_player_facts(yonder_media_t *m, os64_media_player_facts_t *out
 bool yonder_media_plane_ask(yonder_media_t *m, int64_t win);
 // os64_media_player_plane_want, for a <video> with a player.
 void yonder_media_plane_want(yonder_media_t *m, bool want);
+// os64_media_player_plane_gap_take, for a <video> with a player; 0 without.
+int64_t yonder_media_plane_gap_take(yonder_media_t *m);
 // The picture its player's pace last picked, pinned until
 // yonder_media_shown_done (os64_media_player_shown). False, `out` empty,
 // with none. Every view goes back before the session's close.

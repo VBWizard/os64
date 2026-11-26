@@ -1445,6 +1445,12 @@ bool yonder_media_plane_ask(yonder_media_t *m, int64_t win)
     return true;
 }
 
+int64_t yonder_media_plane_gap_take(yonder_media_t *m)
+{
+    os64_media_player_t *p = m->picture ? player_of(m) : NULL;
+    return p != NULL ? os64_media_player_plane_gap_take(p) : 0;
+}
+
 void yonder_media_plane_want(yonder_media_t *m, bool want)
 {
     os64_media_player_t *p = m->picture ? player_of(m) : NULL;
