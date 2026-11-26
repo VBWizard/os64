@@ -16,12 +16,20 @@
 //      /proc/self/maps and /proc/self/status, whose walks take the same
 //      lock. Every page keeps the tag written into it.
 //   4. unmap racing a fault in its own block, for the time asked: a thread
-//      faults fresh pages into a 256-page block one at a time while this
-//      one unmaps it, and dies of SIGSEGV at its first touch after (the
-//      handler ends the thread). Then a thread for each page around where
-//      it stopped reads that page, and must die of SIGSEGV too: a page that
-//      reads was installed by a fault after unmap passed it, left mapped in
-//      a range no mapping covers, its frame lost.
+//      faults fresh pages into a 256-page block one at a time, from the top
+//      down, while this one unmaps it, and dies of SIGSEGV at its first
+//      touch after (the handler ends the thread). Then a thread reads the
+//      page it was faulting in when it stopped, and another the page above
+//      (where it was, if that fault went through and it went on), and each
+//      must die of SIGSEGV too: a page that reads was installed by a fault
+//      after unmap passed it, left mapped in a range no mapping covers, its
+//      frame lost. At most RACE_ROUNDS rounds: a thread that ends keeps its
+//      stacks until the task does (DEBTS, "No PER-THREAD teardown"), and the
+//      task's stack addresses run into its fixed windows after about 1,400
+//      (DEBTS, "Thread stacks have no ceiling").
+//      From the top down because unmap walks up: the pages below the one
+//      being faulted are not there yet, so unmap's walk reaches it while
+//      that fault may still be under way, which is the race.
 //
 // Exit codes: 0x3A9E0000 success, 0x3A9E00NN the step that failed.
 
@@ -150,12 +158,13 @@ static bool list_race(int64_t seconds)
 // Step 4. A thread's touch of a page with no mapping is a SIGSEGV, whose
 // handler ends that thread with SEGV_EXIT; this thread never touches.
 #define RACE_PAGES 256
+#define RACE_ROUNDS 300   // three threads a round, well under the stacks' ceiling
 #define SEGV_EXIT 0x5E6F
 #define TOUCHED_ALL 1
 #define PAGE_READ 2
 
 static uint8_t *volatile s_race_block;
-static volatile uint32_t s_race_at;
+static volatile uint32_t s_race_at, s_race_page;   // pages touched; the page being touched
 static uint64_t s_race_rounds, s_race_cut, s_race_probes;
 
 static void on_segv(int signo)
@@ -168,8 +177,10 @@ static int64_t race_toucher(void *arg)
 {
     (void)arg;
     uint8_t *block = s_race_block;
-    for (uint32_t p = 0; p < RACE_PAGES; p++) {
-        __atomic_store_n(&s_race_at, p, __ATOMIC_RELEASE);
+    for (uint32_t n = 0; n < RACE_PAGES; n++) {
+        uint32_t p = RACE_PAGES - 1 - n;
+        __atomic_store_n(&s_race_page, p, __ATOMIC_RELEASE);
+        __atomic_store_n(&s_race_at, n, __ATOMIC_RELEASE);
         ((volatile uint64_t *)(block + (size_t)p * PAGE))[0] = p;
     }
     return TOUCHED_ALL;
@@ -199,7 +210,7 @@ static bool unmap_race(int64_t seconds)
         return false;
     int64_t until = os64_micros() + seconds * 1000000;
     bool ok = true;
-    for (uint64_t round = 0; ok && os64_micros() < until; round++) {
+    for (uint64_t round = 0; ok && round < RACE_ROUNDS && os64_micros() < until; round++) {
         uint8_t *block = os64_map((size_t)RACE_PAGES * PAGE);
         if (block == NULL)
             return false;
@@ -208,8 +219,10 @@ static bool unmap_race(int64_t seconds)
         int64_t h = os64_thread(race_toucher, NULL);
         if (h < 0)
             return false;
-        // Let it get some way in, a different way each round.
-        uint32_t want = 8 + (uint32_t)((round * 37) % (RACE_PAGES - 16));
+        // Let it get some way in, a different way each round, and most
+        // rounds near the bottom, where unmap's walk reaches it soonest.
+        uint32_t want = (round % 4) != 0 ? RACE_PAGES - 2 - (uint32_t)((round * 7) % 24)
+                                         : 8 + (uint32_t)((round * 37) % (RACE_PAGES - 16));
         int64_t give_up = os64_micros() + 200000;
         while (__atomic_load_n(&s_race_at, __ATOMIC_ACQUIRE) < want && os64_micros() < give_up) {
         }
@@ -223,9 +236,9 @@ static bool unmap_race(int64_t seconds)
             s_race_cut++;
         else if (rc != TOUCHED_ALL)
             ok = false;
-        // The pages around where it stopped: none may still be mapped.
-        uint32_t at = __atomic_load_n(&s_race_at, __ATOMIC_ACQUIRE);
-        for (uint32_t p = at > 2 ? at - 2 : 0; p <= at + 1 && p < RACE_PAGES; p++) {
+        // Where it stopped, and the page above: neither may still be mapped.
+        uint32_t at = __atomic_load_n(&s_race_page, __ATOMIC_ACQUIRE);
+        for (uint32_t p = at; p <= at + 1 && p < RACE_PAGES; p++) {
             int64_t probe = join_one(race_prober, block + (size_t)p * PAGE);
             s_race_probes++;
             if (probe != SEGV_EXIT) {
@@ -238,8 +251,8 @@ static bool unmap_race(int64_t seconds)
         }
         s_race_rounds++;
     }
-    os64_printf("maprace: unmap racing a fault, %ld s: %lu rounds, %lu cut short by the unmap, %lu pages "
-                "probed after it\n", (long)seconds, (unsigned long)s_race_rounds, (unsigned long)s_race_cut,
+    os64_printf("maprace: unmap racing a fault, %ld s or %u rounds: %lu rounds, %lu cut short by the unmap, "
+                "%lu pages probed after it\n", (long)seconds, (unsigned)RACE_ROUNDS, (unsigned long)s_race_rounds, (unsigned long)s_race_cut,
                 (unsigned long)s_race_probes);
     return ok;
 }
