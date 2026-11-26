@@ -102,6 +102,9 @@ void vma_add(task_t* task, vma_t* vma);
 vma_t* vma_lookup_hold(task_t* task, uintptr_t addr);
 // One hold given back. The last hold of a delisted mapping frees it.
 void vma_release(task_t* task, vma_t* vma);
+// Whether `vma`, which the caller holds, is still listed: a fault asks under
+// the task's pageLock before it installs a page in it (task.h).
+bool vma_is_listed(task_t* task, vma_t* vma);
 // The facts of the listed mapping holding `addr`, copied under the lock;
 // false for none.
 bool vma_lookup_facts(task_t* task, uintptr_t addr, vma_facts_t *out);
@@ -115,13 +118,14 @@ bool vma_delist(task_t* task, vma_t* vma);
 // (vma_chain_next walks it); `*held` counts the holds found outstanding.
 vma_t* vma_take_all(task_t* task, uint64_t *held);
 vma_t* vma_chain_next(vma_t* vma);
-// The list's counts for /proc/<id>/status, copied under the lock: how many
-// mappings are listed, the walks and the lock's waits and holds, each since
-// the task began and since the last read, which starts the windows again.
+// The list's counts for /proc/<id>/status, each copied under its own lock:
+// how many mappings are listed, the walks, and the waits and holds of the
+// list's lock and the task's page lock, each since the task began and since
+// the last read, which starts the windows again.
 typedef struct {
     uint32_t listed;
     maplist_walks_t walks, walks_since;
-    counted_lock_stats_t lock;
+    counted_lock_stats_t lock, page_lock;
 } vma_counts_t;
 void vma_read_counts(task_t* task, vma_counts_t *out);
 

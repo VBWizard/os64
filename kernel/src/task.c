@@ -2055,6 +2055,7 @@ task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask, uint
 
 	maplist_init(&newTask->mmaps);
 	newTask->mapLock = (counted_lock_t){0};
+	newTask->pageLock = (counted_lock_t){0};
 	// Lazily created on first use by task_map_shared_object — most tasks
 	// never touch dynamic linking, so most never allocate this at all.
 	newTask->shared_objects = NULL;

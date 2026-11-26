@@ -3575,6 +3575,17 @@ static uint64_t syscall_unmap(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	if (vma == NULL)
 		return SYSCALL_RESULT_INVALID;
 
+	// DELISTED FIRST (MAPPING_LIST.md): from here no fault can find it, and
+	// one already holding it rechecks `listed` under the page lock before it
+	// installs anything (page_publish_lock, simple_exceptions.c). Two unmaps
+	// of one base can both get this far; the one that did not delist it
+	// gives its hold back and is refused.
+	if (!vma_delist(task, vma))
+	{
+		vma_release(task, vma);
+		return SYSCALL_RESULT_INVALID;
+	}
+
 	// Give back every page that was actually faulted in. paging_unmap_page
 	// invlpg's locally; pages never touched have no PTE and nothing to free.
 	//
@@ -3601,29 +3612,35 @@ static uint64_t syscall_unmap(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	// signalled on resumes on a dead page and takes a clean ring-3
 	// segfault. That is this function's own stated doctrine — a bad handle
 	// should hurt the caller, not the kernel.
+	//
+	// AND EACH PAGE'S WALK AND REMOVAL UNDER THE TASK'S PAGE LOCK, inside
+	// signalLock (the order task.h gives), so a fault's publish lands wholly
+	// before the walk (and the page is freed here) or wholly after it (and
+	// finds the mapping delisted). The frame is freed after the page lock is
+	// released, still under signalLock.
 	for (uintptr_t va = vma->start; va < vma->end; va += PAGE_SIZE)
 	{
 		uint64_t uf = spinlock_acquire_irqsave(&task->signalLock);
+		uint64_t pf = counted_lock_acquire(&task->pageLock);
 		uintptr_t phys = paging_walk_paging_table((pt_entry_t *)task->pml4v, va);
-		if (phys != 0 && phys != 0xbadbadba)
-		{
+		bool present = phys != 0 && phys != 0xbadbadba;
+		if (present)
 			paging_unmap_page((pt_entry_t *)task->pml4v, va);
-			// The allocator choke point: also HHDM-unmaps + TLB-shoots the
-			// kernel alias, per the lazy-HHDM rules.
+		counted_lock_release(&task->pageLock, pf);
+		// The allocator choke point: also HHDM-unmaps + TLB-shoots the
+		// kernel alias, per the lazy-HHDM rules.
+		if (present)
 			free_memory(phys);
-		}
 		spinlock_release_irqrestore(&task->signalLock, uf);
 	}
 
 	printd(DEBUG_SYSCALL, "unmap: task %s: region 0x%016lx-0x%016lx released\n",
 	       task->exename, vma->start, vma->end);
 
-	// Delisted, then this call's hold given back: whichever of it and a
-	// fault's hold is the last frees the mapping. Two unmaps of one base
-	// both reach here; the one that did not delist it says so.
-	bool mine = vma_delist(task, vma);
+	// This call's hold given back: whichever of it and a fault's hold is
+	// the last frees the mapping.
 	vma_release(task, vma);
-	return mine ? 0 : SYSCALL_RESULT_INVALID;
+	return 0;
 }
 
 // ── getcwd / chdir ───────────────────────────────────────────────────────────

@@ -498,10 +498,24 @@ static uint64_t proc_cycles_to_ns(uint64_t cycles)
 	return per_ms ? cycles / per_ms * 1000000 + cycles % per_ms * 1000000 / per_ms : 0;
 }
 
+// A counted lock's line: taken, waited, the worst wait and hold, since it
+// began and since the last read.
+static void proc_add_counted_lock(synth_text_t *t, const char *key, const counted_lock_stats_t *l)
+{
+	synth_text_addf(t, "%s\t%lu taken %lu waited %lu ns worst wait %lu ns worst hold %lu ns; "
+	                "since read %lu taken %lu waited %lu ns worst wait %lu ns worst hold %lu ns\n",
+	                key, l->acquires, l->contended, proc_cycles_to_ns(l->wait_cycles),
+	                proc_cycles_to_ns(l->max_wait_cycles), proc_cycles_to_ns(l->max_hold_cycles),
+	                l->window_acquires, l->window_contended, proc_cycles_to_ns(l->window_wait_cycles),
+	                proc_cycles_to_ns(l->window_max_wait_cycles), proc_cycles_to_ns(l->window_max_hold_cycles));
+}
+
 // The task's list of mappings: how many, the walks the lookups took (in
-// mappings stepped over), and its lock's waits and holds, each since the task
-// began and since this file was last read (MAPPING_LIST.md). A long walk is
-// the lock's hold, which is why both are here.
+// mappings stepped over), and the waits and holds of its lock and of the
+// task's page lock (which a fault publishes a page under and unmap removes
+// one under), each since the task began and since this file was last read
+// (MAPPING_LIST.md). A long walk is the list lock's hold, which is why both
+// are here.
 static void proc_add_mapping_counts(synth_text_t *t, task_t *task)
 {
 	vma_counts_t c;
@@ -510,12 +524,8 @@ static void proc_add_mapping_counts(synth_text_t *t, task_t *task)
 	synth_text_addf(t, "mapping_walks\t%lu lookups %lu steps longest %lu; since read %lu lookups %lu steps longest %lu\n",
 	                c.walks.lookups, c.walks.steps, c.walks.steps_most,
 	                c.walks_since.lookups, c.walks_since.steps, c.walks_since.steps_most);
-	synth_text_addf(t, "mapping_lock\t%lu taken %lu waited %lu ns worst wait %lu ns worst hold %lu ns; "
-	                "since read %lu taken %lu waited %lu ns worst wait %lu ns worst hold %lu ns\n",
-	                c.lock.acquires, c.lock.contended, proc_cycles_to_ns(c.lock.wait_cycles),
-	                proc_cycles_to_ns(c.lock.max_wait_cycles), proc_cycles_to_ns(c.lock.max_hold_cycles),
-	                c.lock.window_acquires, c.lock.window_contended, proc_cycles_to_ns(c.lock.window_wait_cycles),
-	                proc_cycles_to_ns(c.lock.window_max_wait_cycles), proc_cycles_to_ns(c.lock.window_max_hold_cycles));
+	proc_add_counted_lock(t, "mapping_lock", &c.lock);
+	proc_add_counted_lock(t, "page_lock", &c.page_lock);
 }
 
 static void proc_add_system_causes(synth_text_t *t, const accounting_thread_cycles_t *cycles,

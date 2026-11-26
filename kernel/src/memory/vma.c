@@ -256,6 +256,14 @@ void vma_release(task_t* task, vma_t* vma)
         vma_destroy(vma);
 }
 
+bool vma_is_listed(task_t* task, vma_t* vma)
+{
+    uint64_t f = counted_lock_acquire(&task->mapLock);
+    bool listed = vma->node.listed;
+    counted_lock_release(&task->mapLock, f);
+    return listed;
+}
+
 bool vma_lookup_facts(task_t* task, uintptr_t addr, vma_facts_t *out)
 {
     if (!task)
@@ -308,6 +316,10 @@ vma_t* vma_chain_next(vma_t* vma)
 
 void vma_read_counts(task_t* task, vma_counts_t *out)
 {
+    uint64_t pf = counted_lock_acquire(&task->pageLock);
+    out->page_lock = task->pageLock.stats;
+    counted_lock_window_restart(&task->pageLock);
+    counted_lock_release(&task->pageLock, pf);
     uint64_t f = counted_lock_acquire(&task->mapLock);
     out->listed = task->mmaps.count;
     maplist_read_walks(&task->mmaps, &out->walks, &out->walks_since);

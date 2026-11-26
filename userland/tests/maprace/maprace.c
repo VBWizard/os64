@@ -15,6 +15,13 @@
 //      first two link and delist, then check every tag and unmap; one reads
 //      /proc/self/maps and /proc/self/status, whose walks take the same
 //      lock. Every page keeps the tag written into it.
+//   4. unmap racing a fault in its own block, for the time asked: a thread
+//      faults fresh pages into a 256-page block one at a time while this
+//      one unmaps it, and dies of SIGSEGV at its first touch after (the
+//      handler ends the thread). Then a thread for each page around where
+//      it stopped reads that page, and must die of SIGSEGV too: a page that
+//      reads was installed by a fault after unmap passed it, left mapped in
+//      a range no mapping covers, its frame lost.
 //
 // Exit codes: 0x3A9E0000 success, 0x3A9E00NN the step that failed.
 
@@ -23,6 +30,7 @@
 #include "os64/io.h"
 #include "os64/mem.h"
 #include "os64/proc.h"
+#include "os64/signal.h"
 #include "os64/thread.h"
 
 #define THREADS 4
@@ -139,6 +147,103 @@ static bool list_race(int64_t seconds)
     return ok;
 }
 
+// Step 4. A thread's touch of a page with no mapping is a SIGSEGV, whose
+// handler ends that thread with SEGV_EXIT; this thread never touches.
+#define RACE_PAGES 256
+#define SEGV_EXIT 0x5E6F
+#define TOUCHED_ALL 1
+#define PAGE_READ 2
+
+static uint8_t *volatile s_race_block;
+static volatile uint32_t s_race_at;
+static uint64_t s_race_rounds, s_race_cut, s_race_probes;
+
+static void on_segv(int signo)
+{
+    (void)signo;
+    os64_thread_exit(SEGV_EXIT);
+}
+
+static int64_t race_toucher(void *arg)
+{
+    (void)arg;
+    uint8_t *block = s_race_block;
+    for (uint32_t p = 0; p < RACE_PAGES; p++) {
+        __atomic_store_n(&s_race_at, p, __ATOMIC_RELEASE);
+        ((volatile uint64_t *)(block + (size_t)p * PAGE))[0] = p;
+    }
+    return TOUCHED_ALL;
+}
+
+static int64_t race_prober(void *arg)
+{
+    (void)((volatile uint64_t *)arg)[0];
+    return PAGE_READ;
+}
+
+static int64_t join_one(int64_t (*fn)(void *), void *arg)
+{
+    int64_t h = os64_thread(fn, arg);
+    if (h < 0)
+        return -1;
+    int64_t rc = -1;
+    if (os64_thread_join((int32_t)h, &rc) < 0)
+        rc = -1;
+    os64_close((int32_t)h);
+    return rc;
+}
+
+static bool unmap_race(int64_t seconds)
+{
+    if (os64_signal_set_handler(OS64_SIGSEGV, on_segv) < 0)
+        return false;
+    int64_t until = os64_micros() + seconds * 1000000;
+    bool ok = true;
+    for (uint64_t round = 0; ok && os64_micros() < until; round++) {
+        uint8_t *block = os64_map((size_t)RACE_PAGES * PAGE);
+        if (block == NULL)
+            return false;
+        s_race_block = block;
+        __atomic_store_n(&s_race_at, 0, __ATOMIC_RELEASE);
+        int64_t h = os64_thread(race_toucher, NULL);
+        if (h < 0)
+            return false;
+        // Let it get some way in, a different way each round.
+        uint32_t want = 8 + (uint32_t)((round * 37) % (RACE_PAGES - 16));
+        int64_t give_up = os64_micros() + 200000;
+        while (__atomic_load_n(&s_race_at, __ATOMIC_ACQUIRE) < want && os64_micros() < give_up) {
+        }
+        if (os64_unmap(block) != 0)
+            ok = false;
+        int64_t rc = -1;
+        if (os64_thread_join((int32_t)h, &rc) < 0)
+            ok = false;
+        os64_close((int32_t)h);
+        if (rc == SEGV_EXIT)
+            s_race_cut++;
+        else if (rc != TOUCHED_ALL)
+            ok = false;
+        // The pages around where it stopped: none may still be mapped.
+        uint32_t at = __atomic_load_n(&s_race_at, __ATOMIC_ACQUIRE);
+        for (uint32_t p = at > 2 ? at - 2 : 0; p <= at + 1 && p < RACE_PAGES; p++) {
+            int64_t probe = join_one(race_prober, block + (size_t)p * PAGE);
+            s_race_probes++;
+            if (probe != SEGV_EXIT) {
+                os64_printf("maprace: page %u of an unmapped block %s (round %lu)\n", (unsigned)p,
+                            probe == PAGE_READ ? "still reads: a fault installed it after unmap passed it"
+                                               : "could not be probed",
+                            (unsigned long)round);
+                ok = false;
+            }
+        }
+        s_race_rounds++;
+    }
+    os64_printf("maprace: unmap racing a fault, %ld s: %lu rounds, %lu cut short by the unmap, %lu pages "
+                "probed after it\n", (long)seconds, (unsigned long)s_race_rounds, (unsigned long)s_race_cut,
+                (unsigned long)s_race_probes);
+    return ok;
+}
+
 int main(int argc, char **argv)
 {
     int64_t seconds = 2;
@@ -179,5 +284,7 @@ int main(int argc, char **argv)
 
     if (!list_race(seconds))
         FAIL(3);
+    if (!unmap_race(seconds))
+        FAIL(4);
     return (int)0x3A9E0000u;
 }
