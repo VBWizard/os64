@@ -13228,8 +13228,9 @@ static uint64_t videos_next(void)
 // in tenths; `gap` the longest the glass went without a new picture of it,
 // in ms, among the gaps that ended since its last line or are still open,
 // counted while it was watched (video_glass_watched: its clock running,
-// its box on the view, and on its plane the plane shown, off it the window
-// not wholly covered). `pick` and `drop` are its player's pace a second
+// its box on the view, the window not wholly covered; a window partly
+// behind another, its video hidden, reads as a gap). `pick` and `drop` are
+// its player's pace a second
 // (the show thread's picks while its plane is on, which keep the clock's
 // pace whether or not a picture reaches the glass), `plane` 1 on its plane.
 // The rates are `-` on a video's first line, or when its counts started
@@ -13249,20 +13250,15 @@ static void video_rate_tenths(char *out, size_t cap, uint64_t n, uint64_t ms)
     os64_snprintf(out, cap, "%lu.%lu", (unsigned long)(tenths / 10), (unsigned long)(tenths % 10));
 }
 
-// Whether the glass's pictures of `v` are measured: its clock runs and its
-// box is on the view, and the glass can show it. On its plane, that is the
-// kernel's own answer, the plane's frames (facts.plane_shown); off it, only
-// that the window is not wholly covered, so a box hidden behind another
-// window while the rest of yonder shows counts as watched.
+// Whether the glass's pictures of `v` are measured: its clock runs, its box
+// is on the view, and the window is not wholly covered, on its plane or
+// off it. A window partly behind another, its video hidden, still counts,
+// and reads as a gap: whether one box is seen is not asked of the GUI for
+// a measuring line, and a display that stalls must stay inside the watch.
 static bool video_glass_watched(const Video *v)
 {
     os64_gui_rect_t part;
-    if (v->node == NULL || !v->seen.picture || !v->playing || !video_on_view(v, &part))
-        return false;
-    os64_media_player_facts_t f;
-    if (v->placed)
-        return yonder_media_player_facts(v->session, &f) && f.plane_shown;
-    return !g.covered;
+    return v->node != NULL && v->seen.picture && v->playing && !g.covered && video_on_view(v, &part);
 }
 
 static void video_glass_gap(Video *v, int64_t gap)
@@ -13379,8 +13375,9 @@ static void video_rate_say(void)
     if (!s_video_rate_legend) {
         s_video_rate_legend = true;
         os64_printf("video-rate legend: t ms since boot; v the video; scr pictures that reached the glass a "
-                    "second; gap the longest the glass went without a new one, ms (watched: on its plane, while "
-                    "the plane is shown; off it, while the window is not wholly covered); pick the pace's picks "
+                    "second; gap the longest the glass went without a new one, ms, while it played in view and the "
+                    "window was not wholly covered (one partly behind another, the video hidden, reads as a "
+                    "gap); pick the pace's picks "
                     "a second; drop its drops a second; plane 1 on its plane, 0 not\n");
     }
     for (int32_t i = 0; i < VIDEOS_MAX; i++) {
