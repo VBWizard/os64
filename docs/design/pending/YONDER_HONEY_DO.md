@@ -516,3 +516,17 @@ Not for now, on Chris's word; for the list.
   knows the page took the answer (a media query that matched, a
   `color-scheme` it declared, the canvas's own colour) is the design's
   question.
+- **yonder's complaints go to the console alone, not the system log.**
+  Chris, 2026-11-26; not urgent, for the next time yonder's reporting is
+  open. Today a complaint is said twice: `os64_complain` writes the line to
+  standard error and hands the same line to `os64_debug_log`, which puts it
+  in the kernel's log as `[user] ...`, and a few sites call
+  `os64_debug_log` alone (yonder.conf's refused values, the cookie file).
+  The row: yonder says each of them once, on standard error, and nothing of
+  yonder's reaches the kernel's log. It is yonder's change, not
+  `os64_complain`'s: other programs keep both. A yonder started from
+  grootmenu inherits the desktop's terminal, so its lines land there unseen;
+  grootmenu spawns its command directly, with no shell, so `> /dev/null` in
+  a menu entry would reach yonder as two arguments, not as a redirection.
+  If the lines should be discarded outright for a menu start, that is a
+  word for grootmenu's entries (a way to say "no output"), its own row.
