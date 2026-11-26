@@ -13607,7 +13607,8 @@ static void videos_tick(void)
 // holding that thread no longer holds the picture. The plane is asked for
 // at the video's first cover, from a thread of its own (the ask waits for
 // the plane to be made: yonder_media_plane_ask), and kept until its
-// session closes.
+// session closes; a plane that ends while its session plays is asked for
+// again, a second apart at most, PLANE_ASKS_AGAIN times a session.
 //
 // EACH PAINT DECIDES each video's place (plane_place.h; the reasons, in
 // order, are its yonder_plane_reason_t), and the publish that paints it
@@ -13617,10 +13618,11 @@ static void videos_tick(void)
 //   placed has its whole clip marked, so the render paints all of it, and
 //   one leaving its plane has its old clip marked, so the picture is
 //   painted back where the hole was;
-// - planes_judge, after the render: where the render may have drawn over a
-//   picture (a cut a glass verb made after the video's own box, a shown
+// - planes_judge, after the render: where the page changed something over
+//   a picture at this paint (planes_take_changes) and the render may have
+//   drawn there (a cut a glass verb made after the video's own box, a shown
 //   widget painted after the view, or a pixel of the clip that differs from
-//   `shown`, from which the render painted the picture), the part is
+//   `shown`, from which the render painted the picture), each part is
 //   painted twice more from the video up, over black and over white, and
 //   what lies over the picture taken apart as a layer: its colour,
 //   premultiplied, and its coverage (THE LAYERS). The map (plane_place.h)
@@ -13629,14 +13631,14 @@ static void videos_tick(void)
 //   with those overlays unless what lies over it was no layer, needs more
 //   overlay than the kernel blends, or covers a part not yet painted;
 //   planes_hole then writes the layer into the clip, zero (see-through)
-//   where there is none, and keeps a widget's pixels as painted, opaque
-//   (§ 3.3). A placed video that stops qualifying leaves, its clip painted
-//   again with the picture before the publish;
-// - planes_publish: the edits, with damage covering every rectangle
-//   rendered and every clip they change (the kernel's rule 2), or the
-//   plain publishes when there are none. A refused publish is published
-//   again plain, the newly placed clips painted back with the picture,
-//   and placing that video is held off a while.
+//   where there is none (§ 3.3). A placed video that stops qualifying
+//   leaves, its clip painted again with the picture before the publish;
+// - planes_publish: the damage rectangles meeting no changed place's clip
+//   published plain, then the edits, with damage covering what the
+//   kernel's rule 2 asks and every rectangle meeting such a clip, whole; or
+//   the plain publishes alone when there are no edits. A refused publish is
+//   published again plain, the newly placed clips painted back with the
+//   picture, and placing that video is held off a while.
 //
 // A PLANE IS PLACED ONLY ON THE PICTURE THE PAGE WOULD SHOW: ready at the
 // fitted size, and holding `shown`'s picture (facts.plane_serial) at the
@@ -13678,7 +13680,7 @@ static struct {
     // The layer passes (plane_layer_make): how many, their time, the longest;
     // none of it counted in the paint's own cost.
     uint64_t layer_passes, layer_us, layer_us_most;
-    uint64_t layer_buffers_grown;       // a kept layer buffer made larger (plane_buf)
+    uint64_t layer_buffers_grown;       // a kept buffer (a layer's, a pass's or the check's row) made larger (plane_buf)
     uint64_t heap_maps, heap_unmaps;    // libos64's heap's regions taken and given back, at the restart
     uint64_t overlay_retries;           // a refused publish whose places changed only their overlays
 } s_plane_counts;
@@ -13842,16 +13844,17 @@ static struct {
 } s_plane_layers[PLANE_LAYERS_MAX];
 static uint32_t s_plane_nlayers;
 
-// THE LAYER PASSES ALLOCATE NOTHING: the render's pixels kept, the white
-// pass, and each slot's layer live in buffers kept across paints, grown when
-// a part needs more and let go when no video is mapped (planes_prepare). A
+// THE LAYER PASSES ALLOCATE NOTHING, nor does the hole or --plane-check:
+// the render's pixels kept, the white pass, each slot's layer and the
+// check's row live in buffers kept across paints, grown when a part needs
+// more and let go when no video is mapped (planes_prepare). A
 // buffer of 128 KiB or more is a region of its own in libos64's heap, taken
 // from and given back to the kernel under the heap's one lock, so allocating
 // three a pass made every pass six such calls under it, and the player's
 // decoding and sound threads waited on that lock (the sound ran dry on the
 // P5).
-static uint32_t *s_layer_kept, *s_layer_white;
-static size_t s_layer_kept_cap, s_layer_white_cap;
+static uint32_t *s_layer_kept, *s_layer_white, *s_check_row;
+static size_t s_layer_kept_cap, s_layer_white_cap, s_check_row_cap;
 
 // `*buf` holding at least `n` pixels, grown (its contents not kept) when it
 // holds fewer; NULL with no memory, the old buffer let go.
@@ -13870,8 +13873,9 @@ static void planes_buffers_free(void)
 {
     os64_free(s_layer_kept);
     os64_free(s_layer_white);
-    s_layer_kept = s_layer_white = NULL;
-    s_layer_kept_cap = s_layer_white_cap = 0;
+    os64_free(s_check_row);
+    s_layer_kept = s_layer_white = s_check_row = NULL;
+    s_layer_kept_cap = s_layer_white_cap = s_check_row_cap = 0;
     for (uint32_t k = 0; k < PLANE_LAYERS_MAX; k++) {
         os64_free(s_plane_layers[k].px);
         s_plane_layers[k].px = NULL;
@@ -14558,9 +14562,10 @@ static void planes_hole(const os64_gui_rect_t *damage, uint32_t count)
         check = s_videos[i].node != NULL && s_videos[i].place;
     if (check)
         check = s_plane_check_due++ % s_plane_check == 0;
-    // A row of the page's pixels, for the check alone: with no memory for
-    // it this paint goes unchecked, and the holes are cut all the same.
-    uint32_t *painted = check ? os64_malloc((size_t)(s->width > 0 ? s->width : 1) * 4) : NULL;
+    // A row of the page's pixels, for the check alone, in a buffer kept
+    // with the layers' (THE LAYER PASSES ALLOCATE NOTHING): with no memory
+    // for it this paint goes unchecked, and the holes are cut all the same.
+    uint32_t *painted = check ? plane_buf(&s_check_row, &s_check_row_cap, s->width > 0 ? s->width : 1) : NULL;
     check = check && painted != NULL;
     for (int32_t i = 0; i < VIDEOS_MAX; i++) {
         Video *v = &s_videos[i];
@@ -14589,7 +14594,6 @@ static void planes_hole(const os64_gui_rect_t *damage, uint32_t count)
             }
         }
     }
-    os64_free(painted);
 }
 
 // After the render that painted the closed sessions' boxes (their clips
