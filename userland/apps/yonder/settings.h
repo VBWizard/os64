@@ -124,6 +124,11 @@ bool yonder_settings_saved_shadow_dom(void);
 // unless `ranges = off` says otherwise; anything else, or no key, leaves it
 // on. Read at start.
 bool yonder_settings_saved_ranges(void);
+// A developer's key with no row in the dialog: a <video> is shown on a
+// plane of the window when it can be (VIDEO_PLANE.md § 5) unless
+// `planes = off` says otherwise (as `--plane=off` does); anything else, or
+// no key, leaves them on. Read at start.
+bool yonder_settings_saved_planes(void);
 // yonder.conf's `ledger` developer key: where each page's script time goes,
 // written to its record beside the paint counts (`on`), and with a sampling
 // profile of the script itself (`profile`); anything else, or no key, is

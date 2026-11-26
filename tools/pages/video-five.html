@@ -1,0 +1,42 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Five videos on a long page</title>
+<!--
+  VIDEO_PLANE.md § 5, P3a's fixture for a scroll, a resize and the planes
+  running out. Five videos play muted and loop down a long page, nothing
+  drawn over any of them. A window has four planes, so four videos are shown
+  on planes and the fifth is painted by the page as before (the record's
+  video lines say which, and why).
+
+  Scroll the page: each video's place moves with the publish that paints
+  the scrolled page, and one scrolled away is hidden. Every six seconds the
+  first video changes width (480px and 320px in turn): its plane is hidden
+  while the page paints the picture at the new size, and placed again when
+  the plane holds a picture of that size. It grows inside a box as tall as
+  its larger size, so nothing below it moves when it does, and a scroll is
+  judged against a page that holds still. Add `?grow=0` to the address to
+  keep the widths still.
+-->
+<style>
+  body { font: 16px sans-serif; margin: 16px; background: #223; color: #ddd; }
+  video { display: block; width: 320px; margin: 12px 0; background: #678; }
+  #room { height: 294px; }   /* the first video at 480 wide is 270 tall, with its margins */
+  p { max-width: 600px; }
+</style>
+<h1>Five videos on a long page</h1>
+<div id="room"><video id="v1" src="bbb-480p-3s-av.mp4" autoplay muted loop></video></div>
+<p>The first video changes width every six seconds, inside room kept for its larger size: nothing below it moves.</p>
+<video id="v2" src="bbb-480p-3s-av.mp4" autoplay muted loop></video>
+<video id="v3" src="bbb-480p-3s-av.mp4" autoplay muted loop></video>
+<p>Scroll down for two more.</p>
+<div style="height: 400px"></div>
+<video id="v4" src="bbb-480p-3s-av.mp4" autoplay muted loop></video>
+<video id="v5" src="bbb-480p-3s-av.mp4" autoplay muted loop></video>
+<div style="height: 800px"></div>
+<script>
+  const grow = Number(new URLSearchParams(location.search).get('grow') ?? 6);
+  if (grow > 0) {
+    const v1 = document.getElementById('v1');
+    setInterval(function () { v1.style.width = v1.style.width === '480px' ? '320px' : '480px'; }, grow * 1000);
+  }
+</script>

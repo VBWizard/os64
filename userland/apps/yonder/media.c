@@ -145,6 +145,16 @@ struct yonder_media {
     bool loader_quit;               // the bytes' reader gave up on it: cancel the fetch
     bool loader_done;               // the loader's last touch of the session
     bool opener_done;               // the opener's last touch of the session
+    // Its plane (VIDEO_PLANE.md § 5): a helper thread asks for it, since
+    // the ask waits for the plane to be made, and the window must not. A
+    // close while it asks is the helper's to carry out when the ask
+    // returns: the player must outlive the call.
+    bool plane_asked;               // yonder_media_plane_ask was made
+    bool plane_helper_started;      // a helper may be running
+    bool plane_helper_in_ask;       // the helper is inside os64_media_player_plane
+    bool plane_helper_done;         // the helper's last touch of the session
+    bool plane_close_owed;          // closed while the helper asked: it closes the player
+    int64_t plane_win;              // the window the plane is asked of
     bool closed;                    // the window let go of it
     // The bytes' reader's own (the opener's, then the player's decoding
     // thread's).
@@ -1168,6 +1178,7 @@ static bool audio_running(void)
 static bool threads_done_locked(const yonder_media_t *m)
 {
     return m->opener_done && (!m->loader_started || m->loader_done) &&
+           (!m->plane_helper_started || m->plane_helper_done) &&
            (m->player == NULL ? !m->player_unknown : m->player_finished);
 }
 
@@ -1235,12 +1246,19 @@ yonder_media_t *yonder_media_open(const yonder_media_request_t *r)
 }
 
 // A session's player closed, once: its decoding thread's read fails on the
-// stop already set (store_read), and it frees itself. Window.
+// stop already set (store_read), and it frees itself. Window. While the
+// plane's helper is inside its ask, the close is owed to the helper, which
+// makes it as the ask returns (plane_helper): the player is freed after its
+// close, and the ask must not be inside it then.
 static void player_close(yonder_media_t *m)
 {
     os64_lock_acquire(&m->lock);
     os64_media_player_t *p = m->player_closed ? NULL : m->player;
     m->player_closed = true;
+    if (p != NULL && m->plane_helper_in_ask) {
+        m->plane_close_owed = true;
+        p = NULL;
+    }
     os64_lock_release(&m->lock);
     if (p != NULL)
         os64_media_player_close(p);
@@ -1368,6 +1386,93 @@ bool yonder_media_player_facts(yonder_media_t *m, os64_media_player_facts_t *out
         return false;
     os64_media_player_facts(p, out);
     return true;
+}
+
+// The plane's helper: the ask, which waits for the plane to be made or
+// refused, then the close the window owed it, if it did. Whether it is
+// inside the ask is said under the session's lock, so a close is owed to it
+// only while it is (player_close), and a helper that never ran, or one
+// that finds the player closed already, is owed nothing. The close owed is
+// read in the same locked section that says the helper is done, so none
+// can arrive unseen between the two; the session outlives the close made
+// after it, since its player cannot finish before it is closed.
+static int64_t plane_helper(void *arg)
+{
+    yonder_media_t *m = arg;
+    os64_lock_acquire(&m->lock);
+    os64_media_player_t *p = m->player;
+    int64_t win = m->plane_win;
+    bool ask = !m->player_closed;
+    m->plane_helper_in_ask = ask;
+    os64_lock_release(&m->lock);
+    if (ask)
+        (void)os64_media_player_plane(p, win);
+    os64_lock_acquire(&m->lock);
+    m->plane_helper_in_ask = false;
+    bool close = m->plane_close_owed;
+    m->plane_helper_done = true;
+    os64_lock_release(&m->lock);
+    if (close)
+        os64_media_player_close(p);
+    // The window reads the verdict from the player's facts at its next turn.
+    ring_window();
+    return 0;
+}
+
+bool yonder_media_plane_ask(yonder_media_t *m, int64_t win)
+{
+    os64_media_player_t *p = m->picture ? player_of(m) : NULL;
+    if (p == NULL)
+        return false;
+    os64_lock_acquire(&m->lock);
+    bool ask = !m->plane_asked && !m->player_closed;
+    if (ask) {
+        m->plane_asked = true;
+        m->plane_win = win;
+        // Started before the thread runs, and kept even when the start
+        // fails: a failed start may still be running (thread_start).
+        m->plane_helper_started = true;
+    }
+    os64_lock_release(&m->lock);
+    if (!ask)
+        return false;
+    if (!thread_start(plane_helper, m)) {
+        // Out of handles the kernel may start the thread detached and still
+        // answer an error, so whether it runs is unknown: the session waits
+        // for its done flag either way, as for the opener.
+        return false;
+    }
+    return true;
+}
+
+void yonder_media_plane_want(yonder_media_t *m, bool want)
+{
+    os64_media_player_t *p = m->picture ? player_of(m) : NULL;
+    if (p != NULL)
+        os64_media_player_plane_want(p, want);
+}
+
+bool yonder_media_shown(yonder_media_t *m, os64_media_player_view_t *out)
+{
+    os64_media_player_t *p = m->picture ? player_of(m) : NULL;
+    *out = (os64_media_player_view_t){0};
+    return p != NULL && os64_media_player_shown(p, out) == 0;
+}
+
+void yonder_media_shown_done(yonder_media_t *m, os64_media_player_view_t *view)
+{
+    if (view->frame == NULL)
+        return;
+    // The window gives every view back before it closes the session
+    // (video_remove), so the player is still open here. It is read
+    // directly rather than through player_of, which answers NULL once a
+    // close has been asked for.
+    os64_lock_acquire(&m->lock);
+    os64_media_player_t *p = m->player;
+    os64_lock_release(&m->lock);
+    if (p != NULL)
+        os64_media_player_shown_done(p, view);
+    *view = (os64_media_player_view_t){0};
 }
 
 void yonder_media_size(yonder_media_t *m, uint32_t width, uint32_t height)

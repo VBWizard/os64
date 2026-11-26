@@ -299,7 +299,7 @@ of § 3.5's rules.
   `/dev/glass`; and the same under the frame clock's tearing count.
 - `make run-sparse` as well, since a second thread publishes.
 
-### 3.11 As built (P1a to P2b)
+### 3.11 As built (P1a to P3a)
 
 - **P1a**: `task_va_reserve` (task.c) is the one door; `map` and a window's
   canvas take their ranges through it, and so does a plane's canvas.
@@ -367,6 +367,25 @@ of § 3.5's rules.
   `--check` now also judges the path (a plane on to the end with `frame`
   never called, or none with `--no-plane`; steps 10 and 11 are the
   window's path, 11 covered) and step 5's script resizes on a plane.
+- **P3a**: yonder's videos on planes with nothing over the picture
+  (`apps/yonder/yonder.c` § Videos on planes, `plane_place.c` pure with
+  `tools/test_plane_place_host.sh` and 22 mutants). Each paint decides each
+  video's place around the render: what the render drew over a picture
+  is every cut a glass verb made after the video's own box, every widget
+  painted after the view, and every pixel that differs from `shown`, which
+  the render painted the picture from (the tile map); a video with nothing
+  over it has its clip set to zero, the hole, in the publish that places
+  it. From the ask until a frame call answers again after `frame` is
+  handed back, the page paints the box from a pinned `shown`. P3b brings the two paints and the overlays. The ask is
+  `yonder_media_plane_ask`, on a thread of its own, a close during the ask
+  carried out by that thread when it returns; `--plane=off` and
+  `planes = off` ask for none; facts.plane_serial is libmedia's for the
+  serial rule. Proof: the host cases in `tools/test_yonder_planes.inc` (a
+  real render placed, drawn over, not ready, an older picture, out of view,
+  closed placed with its picture painted back, the first ask) and on QEMU
+  `video-held.html` (through a three-second hold the plane published 100
+  pictures and dropped none; with `--plane=off` 28 shown and 77 dropped),
+  `video-leave.html` and `video-five.html`.
 - **Open**: kept pairs of smaller classes can fill
   a task's budget for its life, so a larger plane is refused until it dies
   (beside one 4K pair in use, two kept 1080p pairs leave no room in 128 MiB
@@ -482,9 +501,26 @@ Exactly when it is a **cover** today (`video_cover_rect`: the walk opens no
 group around its draw, the picture is at the fitted size, it is visible and
 painted) and no backdrop reader meets its box (`backdrop_read_meets`), its
 clip meets no other plane candidate's clip, what is painted over it fits the
-overlay budget, and the player's plane is **ready** at the fitted size.
-Otherwise the page's thread paints it as now, plain or general, from
-`shown`.
+overlay budget, and the player's plane is **ready** at the fitted size and
+holds **`shown`'s picture** (facts.plane_serial is `shown`'s serial at the
+paint that places it): ready alone, after time spent hidden, could place an
+older picture, and the glass would step back one for a frame. Otherwise the
+page's thread paints it as now, plain or general, from `shown`.
+
+Each reason is counted, in this order (`plane_place.h`): out of view, not a
+cover, a backdrop reader, another plane's clip, something over it (the
+overlay budget, from P3b), not ready, a refused publish. The plane is
+**wanted** (`os64_media_player_plane_want`) for every reason but out of
+view, so the picture is current when the reason goes; that costs the show
+thread a copy and a publish of every picture to a plane nobody sees, for as
+long as a page keeps its video disqualified, so the record counts the time
+wanted and not placed by reason, and that number decides whether the long-
+lived reasons should drop `want` later.
+
+The plane is asked for at a video's **first cover**, from a thread of its
+own (the ask waits for the plane to be made), and kept until the session
+closes: a video that stops qualifying keeps its plane hidden, painted by
+the page from `shown`.
 
 ### 5.2 What the page paints instead of the picture
 
@@ -492,18 +528,40 @@ Otherwise the page's thread paints it as now, plain or general, from
   0), and nothing else. Letterbox bars are the box's background and stay
   opaque content.
 - Everything the ordinary walk paints after the video inside that box (the
-  page's own controls, captions, overlays): painted as a layer with coverage,
-  the way a group's sheet is, and stored into the window canvas as
-  premultiplied pixels with their coverage in the top byte. Each such area is
-  an overlay rectangle; more than 8 are joined. The list is kept across
-  partial repaints and scrolls: it describes everything over the video, not
-  what this paint drew.
-- yonder's own `<video controls>` widget is painted by the toolkit after the
-  view. It is opaque: its rectangle is an overlay rectangle and yonder sets
-  the top byte to 255 over it after the toolkit paints.
+  page's own controls, captions, overlays) is stored into the window canvas
+  as premultiplied pixels with their coverage in the top byte. **yonder's
+  groups keep no coverage** (a group is laid over a copy of what lay beneath
+  it), so the coverage comes from **two paints** of the covered part from the
+  video up, once over black and once over white, the video's own verb
+  drawing nothing: B = C·a and W = C·a + 255·(1 − a), so the pixel is B with
+  a = 255 − (W − B) in its top byte, exact at 0 and 255 and within § 5.6's 1
+  between. The second paint is skipped when the walk drew nothing over the
+  part.
+- **What the two paints rest on, as a rule**: everything painted over the
+  part is, pixel by pixel, content plus what lies beneath times (1 − a).
+  Anything else that meets a clip (a backdrop filter, a blend mode, any
+  filter or group whose result at a pixel depends on what lies beneath its
+  neighbours) is a reason of its own, counted with the element named; and a
+  pixel whose a, taken from each of the three channels, disagrees by more
+  than 1 makes that part no layer, the video painted by the page for that
+  paint, the element named in the record. `--plane-check` stays the proof on
+  real pages.
+- Each area with coverage is an overlay rectangle, from **ink, not boxes'
+  rectangles**: a 16-pixel tile map per video says which tiles the page
+  painted over the picture, kept across partial repaints (a tile a paint
+  covers only in part can be inked, never cleared) and rebuilt by a scroll,
+  which repaints the whole view. A real player's transparent box laid over
+  the whole video to take clicks paints nothing, and costs nothing. More
+  than 8 rectangles are joined.
+- **Every in-window toolkit widget over a clip** (yonder's `<video controls>`
+  strip, a form control placed over a box) is opaque: its rectangle is an
+  overlay rectangle and yonder sets the top byte to 255 over it after the
+  toolkit paints.
 - The place is the fitted box as the origin rectangle, and that box cut by
   the ancestors' clip and the view as the clip. It is an edit of the publish
-  that paints the hole.
+  that paints the hole: one `window_publish_edits` whose damage covers every
+  rectangle rendered and every clip its edits change, counted with its area
+  in the record, so a page publishing whole views because of edits shows.
 
 A new picture then marks nothing on the page and costs the page's thread
 nothing. The page repaints over the video only when something over it changes.
@@ -539,6 +597,20 @@ The record counts each move and why (a backdrop reader, a group around the
 video, a new size, another video's clip, the overlay budget, a refusal by
 reason).
 
+### 5.4.1 No black hole where a video was
+
+From a session's close to the publish that hides its plane, the glass shows
+the plane's last picture. The publish that hides a closed session's plane
+comes in the **same turn of the loop as the close**, and paints the last
+picture back into the clip, from a copy the page took at the close, in the
+box's own turn of the paint (so what the page paints above the video lies
+over it), when the page that held it is still the one shown, laid out and
+scrolled as it was; otherwise the page paints the place as it now is. On a navigation the old page's
+sessions close when the new page is installed, so the hides ride the new
+page's first paint, which repaints the whole view. A hide refused because
+the plane is already gone (the show thread's closing bound passed and the
+kernel took it out) is dropped and counted.
+
 ### 5.5 What a script can still do
 
 `drawImage(video)` is refused today for any video and is not part of this
@@ -557,7 +629,12 @@ plane does not prevent.
   blended once round differently from the same paints blended in turn (a
   channel of 192 under two blacks of alpha 64 and 192 is 36 one way and 35
   the other). Differences of 1 are counted; anything more names the element.
-- Fixtures: a video with nothing over it; with page-drawn controls,
+- Fixtures: a video while a script holds the page's thread
+  (`video-held.html`); a video's session closed while its page stays, and a
+  navigation that takes seconds to arrive (`video-leave.html`,
+  `tools/pages_serve.py`'s `?delay=`); five videos on a long page, scrolled,
+  one resized while playing (`video-five.html`); a video with nothing over
+  it; with page-drawn controls,
   see-through and opaque, overlapping; with captions; under a fixed header
   while scrolling, its top cut by the header; an overlay that moves and one
   that goes away across a partial repaint; two videos that overlap, with a

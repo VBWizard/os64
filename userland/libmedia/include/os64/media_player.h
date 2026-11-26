@@ -245,6 +245,9 @@ typedef struct {
     bool plane_ready;               // it holds a picture of the size being converted to (the size asked)
     bool plane_stale;               // a picture of another size was picked while it was placed; until the
                                     // publish that gives it that size
+    uint32_t plane_serial;          // the serial of the picture the plane holds (`shown`'s numbering), 0
+                                    // none: a caller places only when it is `shown`'s, or the glass would
+                                    // step back to an older picture
     uint64_t plane_published, plane_recreates;
     uint64_t plane_ended_placed;    // closings that ended with the plane still placed
     uint64_t frames_missed;         // display frames passed with no answer, playing and shown

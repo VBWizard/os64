@@ -1704,6 +1704,7 @@ void os64_media_player_facts(os64_media_player_t *p, os64_media_player_facts_t *
     f.plane_ready = p->show.ready && p->show.pic_w == p->pic_w && p->show.pic_h == p->pic_h;
     f.plane_stale = p->show.stale;
     f.plane_published = p->show.publishes;
+    f.plane_serial = p->show.published;
     f.plane_recreates = p->show.recreates;
     f.plane_ended_placed = p->show.ended_placed;
     f.frames_missed = p->frames_missed;
