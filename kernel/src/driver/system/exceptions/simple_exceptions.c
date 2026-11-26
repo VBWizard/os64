@@ -908,102 +908,16 @@ static void __attribute__((noreturn)) user_fault_kill(task_t *task, const char *
 	__builtin_unreachable();
 }
 
-void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
+// The fault, resolved in the mapping `vma` covering cr2, which the caller
+// holds (vma_lookup_hold) and gives back after this returns, whatever it
+// returns. NULL when the fault is resolved; otherwise the reason a ring-3
+// fault kills its program, which the caller acts on once the hold is given
+// back: the kill delivers a caught SIGSEGV under signalLock, and a fault
+// path takes that only with no hold and no page lock of its own. A fault
+// this function cannot resolve in ring 0 panics here.
+static const char *page_fault_in_mapping(task_t *task, vma_t *vma, thread_t *fault_thread,
+                                         uint64_t cr2, uint64_t error_code, uint64_t rip)
 {
-    if (kTestingPageFaults)
-    {
-        if (gLastFaultRsp != 0 && kTestingPageFaultResumeRip != 0)
-        {
-            uint64_t *stack = (uint64_t *)gLastFaultRsp;
-            // Error code at stack[0], return RIP at stack[1]
-            stack[1] = kTestingPageFaultResumeRip;
-        }
-        printd(DEBUG_EXCEPTIONS, "\tPage fault occurred during test mode, returning without halt.\n");
-        // Clear the CR2
-        __asm__ __volatile__(
-            "xor rax, rax\n\t"
-            "mov cr2, rax\n\t");
-        return;
-    }
-
-    // DEBUG_DEMAND_PAGING, not EXCEPTIONS: most faults that reach this line
-    // are the demand pager being asked to do its job, and EXCEPTIONS is
-    // always-on — routine paging traffic was drowning the default log. Every
-    // FATAL path below re-announces RIP/CR2/error on DEBUG_EXCEPTIONS (plus
-    // decoded bits and a stack trace) before it panics, so demoting this
-    // line loses nothing when a fault is actually news.
-    printd(DEBUG_DEMAND_PAGING, "PAGE FAULT at RIP=0x%016lx, CR2=0x%016lx, ERROR=0x%lx\n", rip, cr2, error_code);
-
-    // Early faults have no task context until GS-based CLS is installed.
-    // Do not read it to look up a VMA before that initialization.
-    core_local_storage_t *cls = try_get_core_local_storage();
-    thread_t *fault_thread = cls ? cls->currentThread : NULL;
-    // A migrated thread can run before cls->task catches up. The thread owns
-    // the address space we must fault into, and a file read may later block
-    // and resume it on another core; retain this identity across that read.
-    task_t *task = (fault_thread != NULL && fault_thread != NO_THREAD)
-                   ? (task_t *)fault_thread->ownerTask : (cls ? cls->task : NULL);
-    if (!task)
-    {
-        page_fault_panic("no task context (early boot?)", cr2, error_code, rip);
-    }
-
-    // A VMA cannot override the first-page guard. Refuse before resolving
-    // backing pages: the mapper rejects this address, so retrying would
-    // fault again and could allocate an unreachable frame on each pass.
-    if (cr2 < PAGE_SIZE)
-    {
-        if (error_code & 0x4)
-        {
-            if (try_catch_segv(task))
-                return;
-            user_fault_kill(task, "access to guarded page zero", cr2, error_code, rip);
-        }
-        page_fault_panic("access to guarded page zero", cr2, error_code, rip);
-    }
-
-    vma_t *vma = vma_lookup(task, cr2);
-    if (!vma)
-    {
-        // Error bit 2 = the faulting access came from ring 3: the app chased
-        // a wild pointer.  Its problem, not ours — segfault the task.  (The
-        // kernel-mode paths below stay panics: a ring-0 no-VMA fault is a
-        // kernel bug, and the syscall copy helpers pre-validate user ranges
-        // precisely so a bad user pointer can never fault down here in ring 0.)
-        if (error_code & 0x4)
-        {
-            if (try_catch_segv(task))
-                return;   // handler armed; the exception iretq resumes into it
-            user_fault_kill(task,
-                // No VMA does NOT always mean unmapped: eagerly-mapped memory
-                // (stacks, argv, env) has PTEs but no VMA, so a PRESENT fault
-                // down here is a protection kill, not a wild pointer — and an
-                // NX fetch deserves its own name (the first nx_test run was
-                // reported as "access to unmapped address", which misnames
-                // the crime: the page was right there, honestly refusing).
-                !(error_code & 0x1)
-                    ? "access to unmapped address"
-                    : ((error_code & 0x10)
-                        ? "no-execute violation (instruction fetch from data memory)"
-                        : "protection violation on eagerly-mapped memory"),
-                cr2, error_code, rip);
-        }
-        // A fault in the HHDM range is the lazy-HHDM tripwire firing (see
-        // paging.h): physical memory is only HHDM-mapped while allocated, so
-        // this is a use-after-free, a wild physical-address dereference, or
-        // memory that never came from the allocator (e.g. MMIO that needs an
-        // explicit mapping). Say so, rather than the generic no-VMA message.
-        if (kHHDMMaintenanceEnabled && cr2 >= kHHDMOffset && cr2 < kHHDMOffset + 0x1000000000000UL)
-        {
-            char hhdm[128];
-            snprintf(hhdm, sizeof(hhdm),
-                     "HHDM access to unallocated physical 0x%016lx — use-after-free or wild pointer?",
-                     cr2 - kHHDMOffset);
-            page_fault_panic(hhdm, cr2, error_code, rip);
-        }
-        page_fault_panic("no VMA covers this address", cr2, error_code, rip);
-    }
-
     // Per-fault detail: rides DETAILED so the base demand-paging channel
     // stays a readable two-lines-per-fault (announce + resolution).
     printd(DEBUG_DEMAND_PAGING | DEBUG_DETAILED, "Found VMA: 0x%016lx - 0x%016lx (prot=0x%x, cow=%d)\n", vma->start, vma->end, vma->prot, vma->cow);
@@ -1068,7 +982,7 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
                    "CoW twin at 0x%016lx: winner already privatised, our copy discarded\n",
                    aligned);
             record_resolved_fault(fault_thread, false, false);
-            return;
+            return NULL;
         }
         paging_map_page((pt_entry_t *)task->pml4v, aligned, new_phys, cow_flags);
         page_publish_unlock();
@@ -1081,7 +995,7 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
         printd(DEBUG_DEMAND_PAGING, "CoW: 0x%016lx privatised (old phys 0x%016lx -> new phys 0x%016lx)\n",
                aligned, old_phys, new_phys);
         record_resolved_fault(fault_thread, false, false);
-        return;
+        return NULL;
     }
 
     if (page_was_present)
@@ -1092,15 +1006,9 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
         // Error bit 4 (I/D) marks an instruction fetch — under NXE that is
         // the NX bit doing its job, and the kill names it (2026-08-16).
         if (error_code & 0x4)
-        {
-            if (try_catch_segv(task))
-                return;   // handler armed; the exception iretq resumes into it
-            user_fault_kill(task,
-                (error_code & 0x10)
-                    ? "no-execute violation (instruction fetch from data memory)"
-                    : "protection violation",
-                cr2, error_code, rip);
-        }
+            return (error_code & 0x10)
+                       ? "no-execute violation (instruction fetch from data memory)"
+                       : "protection violation";
 
         // Page is present but the access was denied and this VMA is not CoW.
         // This is a genuine protection violation, not a recoverable fault.
@@ -1153,19 +1061,14 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
             // ring-0 fault here still panics: the kernel touching a
             // shared-object page it cannot resolve is a kernel bug.
             if (error_code & 0x4)
-            {
-                if (try_catch_segv(task))
-                    return;   // handler armed; the exception iretq resumes into it
-                user_fault_kill(task, "shared library or dynamic executable page could not be resolved",
-                                cr2, error_code, rip);
-            }
+                return "shared library or dynamic executable page could not be resolved";
             page_fault_panic("failed to resolve a shared-object page",
                              cr2, error_code, rip);
         }
 
         paging_map_page((pt_entry_t *)task->pml4v, aligned, phys, PAGE_PRESENT | PAGE_USER);
         record_resolved_fault(fault_thread, did_read, false);
-        return;
+        return NULL;
     }
 
     // Ordinary demand page fault: page is not present yet.  Resolve via the
@@ -1212,7 +1115,7 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
                "Twin resolve at 0x%016lx: winner already published, our frame 0x%016lx freed\n",
                aligned, phys);
         record_resolved_fault(fault_thread, did_read, anon_zero);
-        return;   // retry the access against the winner's mapping
+        return NULL;   // retry the access against the winner's mapping
     }
     paging_map_page((pt_entry_t *)task->pml4v, aligned, phys, flags);
     page_publish_unlock();
@@ -1220,8 +1123,120 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
     printd(DEBUG_DEMAND_PAGING, "Mapped page at 0x%016lx with flags 0x%lx\n", aligned, flags);
 
     record_resolved_fault(fault_thread, did_read, anon_zero);
+    return NULL;
 }
 
+void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
+{
+    if (kTestingPageFaults)
+    {
+        if (gLastFaultRsp != 0 && kTestingPageFaultResumeRip != 0)
+        {
+            uint64_t *stack = (uint64_t *)gLastFaultRsp;
+            // Error code at stack[0], return RIP at stack[1]
+            stack[1] = kTestingPageFaultResumeRip;
+        }
+        printd(DEBUG_EXCEPTIONS, "\tPage fault occurred during test mode, returning without halt.\n");
+        // Clear the CR2
+        __asm__ __volatile__(
+            "xor rax, rax\n\t"
+            "mov cr2, rax\n\t");
+        return;
+    }
+
+    // DEBUG_DEMAND_PAGING, not EXCEPTIONS: most faults that reach this line
+    // are the demand pager being asked to do its job, and EXCEPTIONS is
+    // always-on — routine paging traffic was drowning the default log. Every
+    // FATAL path below re-announces RIP/CR2/error on DEBUG_EXCEPTIONS (plus
+    // decoded bits and a stack trace) before it panics, so demoting this
+    // line loses nothing when a fault is actually news.
+    printd(DEBUG_DEMAND_PAGING, "PAGE FAULT at RIP=0x%016lx, CR2=0x%016lx, ERROR=0x%lx\n", rip, cr2, error_code);
+
+    // Early faults have no task context until GS-based CLS is installed.
+    // Do not read it to look up a VMA before that initialization.
+    core_local_storage_t *cls = try_get_core_local_storage();
+    thread_t *fault_thread = cls ? cls->currentThread : NULL;
+    // A migrated thread can run before cls->task catches up. The thread owns
+    // the address space we must fault into, and a file read may later block
+    // and resume it on another core; retain this identity across that read.
+    task_t *task = (fault_thread != NULL && fault_thread != NO_THREAD)
+                   ? (task_t *)fault_thread->ownerTask : (cls ? cls->task : NULL);
+    if (!task)
+    {
+        page_fault_panic("no task context (early boot?)", cr2, error_code, rip);
+    }
+
+    // A VMA cannot override the first-page guard. Refuse before resolving
+    // backing pages: the mapper rejects this address, so retrying would
+    // fault again and could allocate an unreachable frame on each pass.
+    if (cr2 < PAGE_SIZE)
+    {
+        if (error_code & 0x4)
+        {
+            if (try_catch_segv(task))
+                return;
+            user_fault_kill(task, "access to guarded page zero", cr2, error_code, rip);
+        }
+        page_fault_panic("access to guarded page zero", cr2, error_code, rip);
+    }
+
+    // The mapping, held: a sibling's unmap may delist it while this fault
+    // resolves, and the hold keeps it alive until the fault is done with it.
+    // Every exit that returns gives the hold back, the kill's included, which
+    // gives it back before it acts. A panic does not, nor a thread torn down
+    // while its fault waits on a file read; burial frees the mapping whatever
+    // its holds, and counts any it finds.
+    vma_t *vma = vma_lookup_hold(task, cr2);
+    if (!vma)
+    {
+        // Error bit 2 = the faulting access came from ring 3: the app chased
+        // a wild pointer.  Its problem, not ours — segfault the task.  (The
+        // kernel-mode paths below stay panics: a ring-0 no-VMA fault is a
+        // kernel bug, and the syscall copy helpers pre-validate user ranges
+        // precisely so a bad user pointer can never fault down here in ring 0.)
+        if (error_code & 0x4)
+        {
+            if (try_catch_segv(task))
+                return;   // handler armed; the exception iretq resumes into it
+            user_fault_kill(task,
+                // No VMA does NOT always mean unmapped: eagerly-mapped memory
+                // (stacks, argv, env) has PTEs but no VMA, so a PRESENT fault
+                // down here is a protection kill, not a wild pointer — and an
+                // NX fetch deserves its own name (the first nx_test run was
+                // reported as "access to unmapped address", which misnames
+                // the crime: the page was right there, honestly refusing).
+                !(error_code & 0x1)
+                    ? "access to unmapped address"
+                    : ((error_code & 0x10)
+                        ? "no-execute violation (instruction fetch from data memory)"
+                        : "protection violation on eagerly-mapped memory"),
+                cr2, error_code, rip);
+        }
+        // A fault in the HHDM range is the lazy-HHDM tripwire firing (see
+        // paging.h): physical memory is only HHDM-mapped while allocated, so
+        // this is a use-after-free, a wild physical-address dereference, or
+        // memory that never came from the allocator (e.g. MMIO that needs an
+        // explicit mapping). Say so, rather than the generic no-VMA message.
+        if (kHHDMMaintenanceEnabled && cr2 >= kHHDMOffset && cr2 < kHHDMOffset + 0x1000000000000UL)
+        {
+            char hhdm[128];
+            snprintf(hhdm, sizeof(hhdm),
+                     "HHDM access to unallocated physical 0x%016lx — use-after-free or wild pointer?",
+                     cr2 - kHHDMOffset);
+            page_fault_panic(hhdm, cr2, error_code, rip);
+        }
+        page_fault_panic("no VMA covers this address", cr2, error_code, rip);
+    }
+
+    const char *kill = page_fault_in_mapping(task, vma, fault_thread, cr2, error_code, rip);
+    vma_release(task, vma);
+    if (kill != NULL)
+    {
+        if (try_catch_segv(task))
+            return;   // handler armed; the exception iretq resumes into it
+        user_fault_kill(task, kill, cr2, error_code, rip);
+    }
+}
 
 void handle_machine_check(uint64_t rip) {
     exception_panic("Machine Check (#MC) occurred!", rip, 0xFFFFFFFFFFFFFFFF);

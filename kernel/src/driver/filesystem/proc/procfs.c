@@ -490,6 +490,34 @@ static uint64_t proc_cycles_to_us(uint64_t cycles)
 	return per_us ? cycles / per_us : 0;
 }
 
+// Nanoseconds, for the mapping lock's waits and holds: a walk of the list
+// is far shorter than a microsecond.
+static uint64_t proc_cycles_to_ns(uint64_t cycles)
+{
+	uint64_t per_ms = kCPUCyclesPerSecond / 1000;
+	return per_ms ? cycles / per_ms * 1000000 + cycles % per_ms * 1000000 / per_ms : 0;
+}
+
+// The task's list of mappings: how many, the walks the lookups took (in
+// mappings stepped over), and its lock's waits and holds, each since the task
+// began and since this file was last read (MAPPING_LIST.md). A long walk is
+// the lock's hold, which is why both are here.
+static void proc_add_mapping_counts(synth_text_t *t, task_t *task)
+{
+	vma_counts_t c;
+	vma_read_counts(task, &c);
+	synth_text_addf(t, "mappings\t%u\n", c.listed);
+	synth_text_addf(t, "mapping_walks\t%lu lookups %lu steps longest %lu; since read %lu lookups %lu steps longest %lu\n",
+	                c.walks.lookups, c.walks.steps, c.walks.steps_most,
+	                c.walks_since.lookups, c.walks_since.steps, c.walks_since.steps_most);
+	synth_text_addf(t, "mapping_lock\t%lu taken %lu waited %lu ns worst wait %lu ns worst hold %lu ns; "
+	                "since read %lu taken %lu waited %lu ns worst wait %lu ns worst hold %lu ns\n",
+	                c.lock.acquires, c.lock.contended, proc_cycles_to_ns(c.lock.wait_cycles),
+	                proc_cycles_to_ns(c.lock.max_wait_cycles), proc_cycles_to_ns(c.lock.max_hold_cycles),
+	                c.lock.window_acquires, c.lock.window_contended, proc_cycles_to_ns(c.lock.window_wait_cycles),
+	                proc_cycles_to_ns(c.lock.window_max_wait_cycles), proc_cycles_to_ns(c.lock.window_max_hold_cycles));
+}
+
 static void proc_add_system_causes(synth_text_t *t, const accounting_thread_cycles_t *cycles,
                                    uint64_t system_us)
 {
@@ -577,6 +605,7 @@ static void proc_gen_task_status(synth_text_t *t, task_t *task)
 	}
 	synth_text_addf(t, "faults\t%lu minor %lu major\n", minor_faults, major_faults);
 	synth_text_addf(t, "anon_zero_pages\t%lu\n", anon_zero_pages);
+	proc_add_mapping_counts(t, task);
 	synth_text_addf(t, "switches\t%u\n", task->cSwitches);
 	// Which CPU the task's thread last ran on — the answer to "whose plate
 	// did this time come off", without which per-CPU arithmetic is guesswork.
@@ -862,7 +891,7 @@ typedef struct
 // root, "/boot/x" under /fat). The owner filesystem is matched back to its
 // mount entry by pointer; a file with no owner (should not exist) or an
 // unmatched one prints its local path bare rather than nothing.
-static void proc_map_file_path(const vma_t *v, char *out, size_t cap)
+static void proc_map_file_path(const vma_facts_t *v, char *out, size_t cap)
 {
 	// MAP_SHARED_LIBRARY REPURPOSES vma->file: it holds a shared_object_t*,
 	// not a vfs_file_t* (memory/vma.h says so, and a VMA is only ever one or
@@ -910,12 +939,19 @@ static void proc_map_row(proc_map_row_t *r, uintptr_t start, uintptr_t end,
 
 static void proc_gen_maps(synth_text_t *t, task_t *task)
 {
-	// Count first, then allocate exactly: VMAs (capped by the walk guard) +
-	// 3 fixed windows + 6 rows per thread (two stacks, two guards each).
-	size_t vmaCount = 0;
-	if (task->mmaps != NULL)
-		for (dlist_node_t *n = task->mmaps->head; n != NULL && vmaCount < PROC_MAX_LIST_WALK; n = n->next)
-			vmaCount++;
+	// The mappings' facts are copied out of the list under its lock, then
+	// formatted with the lock released: nothing is formatted or allocated
+	// under it. At most the walk guard's worth, newest first.
+	vma_facts_t *facts = kmalloc(PROC_MAX_LIST_WALK * sizeof(vma_facts_t));
+	if (facts == NULL)
+	{
+		synth_text_addf(t, "(out of memory)\n");
+		return;
+	}
+	size_t vmaCount = vma_copy_all_facts(task, facts, PROC_MAX_LIST_WALK, NULL);
+
+	// Then allocate exactly: the mappings copied + 3 fixed windows + 6 rows
+	// per thread (two stacks, two guards each).
 	size_t threadCount = 0;
 	for (thread_t *th = task->threads; th != NULL && threadCount < PROC_MAX_LIST_WALK; th = th->taskNext)
 		threadCount++;
@@ -924,20 +960,19 @@ static void proc_gen_maps(synth_text_t *t, task_t *task)
 	proc_map_row_t *rows = kmalloc(cap * sizeof(proc_map_row_t));
 	if (rows == NULL)
 	{
+		kfree(facts);
 		synth_text_addf(t, "(out of memory)\n");
 		return;
 	}
 	size_t count = 0;
 
 	// 1. The VMAs — what the task mapped, or had mapped for it by the loader.
-	if (task->mmaps != NULL)
+	// A file-backed or library mapping's `file` stays good to read here:
+	// unmap takes only anonymous mappings, so only burial removes the others.
 	{
-		size_t walked = 0;
-		for (dlist_node_t *n = task->mmaps->head; n != NULL && walked < vmaCount; n = n->next, walked++)
+		for (size_t i = 0; i < vmaCount; i++)
 		{
-			vma_t *v = (vma_t *)n->data;
-			if (v == NULL)
-				continue;
+			const vma_facts_t *v = &facts[i];
 			char prot[4];
 			prot[0] = (v->prot & PROT_READ)  ? 'r' : '-';
 			prot[1] = (v->prot & PROT_WRITE) ? 'w' : '-';
@@ -1017,6 +1052,7 @@ static void proc_gen_maps(synth_text_t *t, task_t *task)
 		                rows[i].prot, rows[i].flags, rows[i].what);
 
 	kfree(rows);
+	kfree(facts);
 }
 
 // Copy `len` bytes OUT OF A TASK'S ADDRESS SPACE — the fixed-length sibling

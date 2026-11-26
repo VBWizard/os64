@@ -6,6 +6,8 @@
 #include "dlist.h"
 #include "thread.h"
 #include "spinlock.h"   // spinlock_t — the per-task signal-delivery lock
+#include "counted_lock.h"     // the mappings' lock (mapLock)
+#include "memory/maplist.h"   // the mappings' list (mmaps)
 #include "time.h"
 #include "env.h"
 #include "handle.h"
@@ -325,7 +327,13 @@
         uint32_t argvPages;
         struct rusage usage;
         void* stdin, *stdout, *stderr;        //standard input/output/error pointers
-        dlist_t* mmaps;
+        // The task's mappings (memory/vma.h's doors; MAPPING_LIST.md), and
+        // the lock every read and write of them takes: a leaf, irqsave,
+        // held for a walk, counted for /proc/<id>/status. A mapping handed
+        // out of the lock carries a hold and is freed at its last release
+        // once delisted; burial takes them all at once.
+        maplist_t mmaps;
+        counted_lock_t mapLock;
         int errno;
         char* cwd;                              //Current working directory for the process
         void* startHandler[TASK_MAX_EXIT_HANDLERS];

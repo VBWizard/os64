@@ -757,17 +757,20 @@ static uint64_t task_release_vmas(task_t *t, uint64_t *shared_bytes_out)
 	uint64_t reclaimed_bytes = 0;
 	uint64_t shared_bytes = 0;
 
-	if (t->mmaps == NULL) {
-		*shared_bytes_out = 0;
-		return 0;
-	}
+	// The whole list at once, under its lock, then everything outside it.
+	// Every mapping is freed whatever its holds: no thread of the task is
+	// left to give one back. A hold outstanding here is a thread that died
+	// holding one (killed while its fault waited on a file read), counted
+	// and said.
+	uint64_t held = 0;
+	vma_t *vma = vma_take_all(t, &held);
+	if (held != 0)
+		printd(DEBUG_TASK, "task_release_vmas: %s buried with %lu mapping holds outstanding\n",
+		       t->exename, held);
+	while (vma != NULL) {
+		vma_t *next = vma_chain_next(vma);
 
-	dlist_node_t *node = t->mmaps->head;
-	while (node != NULL) {
-		dlist_node_t *next = node->next;
-		vma_t *vma = (vma_t *)node->data;
-
-		if (vma != NULL && t->pml4v != NULL) {
+		if (t->pml4v != NULL) {
 			// Free only what is REALLY there. Demand paging's other half:
 			// a page the program never touched has no PTE, was never
 			// allocated, and has nothing to give back — so the reclaim is
@@ -809,15 +812,11 @@ static uint64_t task_release_vmas(task_t *t, uint64_t *shared_bytes_out)
 
 		// The bookkeeping IS ours, unconditionally: vma_create kmallocs a
 		// fresh vma_t per task even for a shared library (task_map_shared_
-		// object makes its own), and dlist_add kmallocs the node. Nothing
-		// else points at either once the task is off every public list.
+		// object makes its own). Nothing else points at it once the task is
+		// off every public list.
 		vma_destroy(vma);
-		kfree(node);
-		node = next;
+		vma = next;
 	}
-
-	kfree(t->mmaps);
-	t->mmaps = NULL;
 
 	kTaskVmaReclaimedBytes += reclaimed_bytes;
 	*shared_bytes_out = shared_bytes;
@@ -943,7 +942,7 @@ static void task_reparent_orphans(task_t *dying)
 //     which also releases ext2's open-inode refcount, so rm stops being
 //     haunted by dead tasks' binaries), the struct itself
 //   - (2026-08-13) the argv blob, the env blob, the ring-3 exit trampoline
-//     page, every vma_t and mmaps/shared_objects dlist node, and one
+//     page, every vma_t and shared_objects dlist node, and one
 //     shared_object reference for a dynamic task
 //   - (2026-08-13, arena) every page table this address space ever drew —
 //     arena_destroy below. The paging pool's bump allocator no longer has
@@ -2054,10 +2053,8 @@ task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask, uint
     newTask->parentTask = parentTask;
     newTask->priority = TASK_DEFAULT_PRIORITY;
 
-	newTask->mmaps = kmalloc(sizeof(dlist_t));
-	if (newTask->mmaps) {
-		dlist_init(newTask->mmaps);
-	}
+	maplist_init(&newTask->mmaps);
+	newTask->mapLock = (counted_lock_t){0};
 	// Lazily created on first use by task_map_shared_object — most tasks
 	// never touch dynamic linking, so most never allocate this at all.
 	newTask->shared_objects = NULL;
