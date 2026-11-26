@@ -952,24 +952,35 @@ int os64_media_player_plane(os64_media_player_t *p, int64_t win)
     if (p == NULL || win <= 0 || (p->cfg.want & OS64_MEDIA_WANT_PICTURE) == 0)
         return OS64_MEDIA_BAD_ARGS;
     os64_lock_acquire(&p->lock);
+    bool again = false;
     if (p->plane_state == OS64_MEDIA_PLANE_ENDED && !p->quit && p->show_thread > 0) {
         // A plane that ended while the player plays may be asked for again:
         // its show thread has returned, so it is joined and a new one
-        // starts as the first did.
+        // starts as the first did. STARTING across the join, so another
+        // call meanwhile is answered BUSY.
         int64_t ended = p->show_thread;
         p->show_thread = 0;
-        p->plane_state = OS64_MEDIA_PLANE_NONE;
+        p->plane_state = OS64_MEDIA_PLANE_STARTING;
         p->show_quit = false;
         os64_lock_release(&p->lock);
         (void)os64_thread_join((int32_t)ended, NULL);
         os64_close((int32_t)ended);
         os64_lock_acquire(&p->lock);
+        if (p->quit) {
+            // Closed during the join: no new plane for a closing player.
+            p->plane_state = OS64_MEDIA_PLANE_ENDED;
+            os64_lock_release(&p->lock);
+            return OS64_MEDIA_BUSY;
+        }
+        again = true;
     }
-    if (p->plane_state != OS64_MEDIA_PLANE_NONE) {
+    if (!again && p->plane_state != OS64_MEDIA_PLANE_NONE) {
         os64_lock_release(&p->lock);
         return OS64_MEDIA_BUSY;
     }
     if (os64_bell_make(&p->show_bell) < 0) {
+        if (again)
+            p->plane_state = OS64_MEDIA_PLANE_ENDED;    // as it was before the ask
         os64_lock_release(&p->lock);
         return OS64_MEDIA_NO_MEMORY;
     }

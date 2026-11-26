@@ -89,6 +89,13 @@ bool yonder_plane_map_reset(yonder_plane_map_t *m, yonder_plane_rect_t origin, u
 void yonder_plane_map_paint(yonder_plane_map_t *m, yonder_plane_rect_t painted, yonder_plane_rect_t clip,
                             bool (*ink)(void *ctx, yonder_plane_rect_t part), void *ctx);
 
+// `r` grown to all of the tiles it meets, cut to the fitted picture and
+// `clip`, in `*out`: a part a paint can tell the map all of, so a tile it
+// meets is cleared or inked whole and none is left half known. False when
+// `r` meets none.
+bool yonder_plane_map_whole_tiles(const yonder_plane_map_t *m, yonder_plane_rect_t r, yonder_plane_rect_t clip,
+                                  yonder_plane_rect_t *out);
+
 // A tile meeting `clip` is inked.
 bool yonder_plane_map_inked(const yonder_plane_map_t *m, yonder_plane_rect_t clip);
 // Every tile meeting `clip` is known (clear or inked). False with no map.

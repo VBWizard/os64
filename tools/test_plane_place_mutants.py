@@ -62,6 +62,8 @@ mutants = [
      '    *area = n ? (uint64_t)all.w * (uint64_t)all.h : 0;\n    return n;'),
     ('forget-forgets-nothing', '            m->tiles[(size_t)r * m->cols + c] = YONDER_PLANE_TILE_UNKNOWN;',
      '            (void)0;'),
+    ('whole-tiles-not-grown', '    yonder_plane_rect_t in_origin;\n    return cut(tiles, m->origin, &in_origin) && cut(in_origin, clip, out);',
+     '    yonder_plane_rect_t in_origin;\n    (void)tiles;\n    return cut(in, m->origin, &in_origin) && cut(in_origin, clip, out);'),
     ('join-past-the-cap', '    while (n > max) {\n        uint32_t bi = 0, bj = 1;', '    while (n > max + 1) {\n        uint32_t bi = 0, bj = 1;'),
     ('join-the-dearest', '                if (cost < best) {', '                if (cost > best || best == INT64_MAX) {'),
     ('spread-off-by-one', '            counts->spread[hi - lo >= 5 ? 3 : hi - lo - 2]++;', '            counts->spread[hi - lo >= 5 ? 3 : hi - lo - 1 > 3 ? 3 : hi - lo - 1]++;'),

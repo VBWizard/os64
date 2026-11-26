@@ -575,9 +575,10 @@ own (the ask waits for the plane to be made), and kept until the session
 closes: a video that stops qualifying keeps its plane hidden, painted by
 the page from `shown`. A plane that **ends** while its session plays (the
 show thread's frame wait answered an error; the answer is in the record
-and on the console) is not meant to happen; it is asked for again, a
-second after the end at most, three times a session, each counted. A
-refused plane is not: that answer does not change.
+and on the console) is not meant to happen; it is asked for again, no
+sooner than a second after the end (and only once it is a cover in view
+again), three times a session, each counted. A refused plane is not: that
+answer does not change.
 
 ### 5.2 What the page paints instead of the picture
 
@@ -594,20 +595,28 @@ refused plane is not: that answer does not change.
   a = 255 − (W − B) in its top byte, exact at 0 and 255 and within § 5.6's
   two between. Both paints are made only where the page CHANGED something
   over the picture at this paint (a view mark other than the video's own
-  picture's, a widget's own, another video's picture, a change of place),
-  and there only where the render may have drawn over it (a draw noted, or
-  a pixel not `shown`'s): a video's own new picture repaints its box and
-  everything over it, and asks for no layer. Each changed part is its own
-  layer, joined past four a video by least added area, so a moving dot
-  costs its strip. They wait, the changed parts forgotten in the map until
-  a paint can say, for a video no layer can place (out of view, a backdrop
-  reader, another plane's clip), and are made a quarter second apart at
-  most for one off its plane for no layer or the budget; a placed video
-  never waits. **No pass, hole or check allocates**: their buffers are kept
-  across paints, grown when needed, let go when no video is mapped (a
-  buffer of 128 KiB or more is a kernel map and unmap under libos64's one
-  heap lock, which the player's threads wait on too; allocating three a
-  pass ran the sound dry on the P5).
+  picture's, another video's picture, a change of place, a rectangle the
+  render adds itself, and a widget's own invalidation, unless libui folds it
+  into the video's own picture's rectangle: that one is lost, which delays
+  only what an off-plane video's map knows, since a placed video marks no
+  picture of its own), and there only where the render may have drawn over
+  it (a draw noted, or a pixel not `shown`'s): a video's own new picture
+  repaints its box and everything over it, and asks for no layer. Each
+  changed part is its own layer, grown to the map's whole tiles so the map
+  learns every tile it meets, and joined past four a video by least added
+  area, so a moving dot costs its strip. A failed layer leaves its area
+  forgotten, and the next change that meets it at all is layered with all
+  of it. They wait for a video no layer can place (out of view, a backdrop
+  reader, another plane's clip), the changed parts forgotten and learned
+  again whole at the paint that places it; and they are made a quarter
+  second apart at most for one off its plane for no layer or the budget,
+  the parts between owed and marked again when the wait is over, while its
+  forgotten tiles keep it off as not yet painted. A placed video never
+  waits. **No pass, hole or check allocates**: their buffers are kept
+  across paints, grown when needed, let go at a paint with no video mapped
+  or no page shown (a buffer of 128 KiB or more is a kernel map and unmap
+  under libos64's one heap lock, which the player's threads wait on too;
+  allocating three a pass ran the sound dry on the P5).
 - **What the two paints rest on, as a rule**: everything painted over the
   part is, pixel by pixel, content plus what lies beneath times (1 − a).
   Anything else that meets a clip (a backdrop filter, a blend mode, any

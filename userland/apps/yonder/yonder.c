@@ -3621,6 +3621,10 @@ typedef struct {
     bool changes_all;                   // every part of the clip counts as changed
     uint64_t layer_next_ms;             // off its plane for no layer or the budget: no pass before then
     uint64_t layers_capped;             // passes that wait skipped
+    os64_gui_rect_t owed;               // the parts those passes would have made, marked again when the
+    bool owed_any;                      // wait is over (videos_tick), so a change is never dropped
+    os64_gui_rect_t unlearned;          // what failed layers left forgotten in the map: a change that
+    bool unlearned_any;                 // meets it is layered with all of it, so the map can learn it again
     // Why a layer was no layer: its channels disagreed (by how far apart,
     // 2, 3, 4, 5 or more, and the first such pixel since the reading), or it
     // could not be made (the layers' room full, no memory, the walk never
@@ -13532,6 +13536,15 @@ static void videos_glass_watch(void);
 static void videos_tick(void)
 {
     videos_glass_watch();
+    // The parts a waiting pass owes, marked again once its wait is over:
+    // a change of the paint's own, so the next judge layers it.
+    for (int32_t i = 0; i < VIDEOS_MAX; i++) {
+        Video *v = &s_videos[i];
+        if (v->node != NULL && v->owed_any && yonder_now_ms() >= v->layer_next_ms) {
+            v->owed_any = false;
+            plane_mark_window(v->owed);
+        }
+    }
     if (!s_frames.open) {
         if (planes_placed_any())
             video_rate_say();
@@ -13608,7 +13621,7 @@ static void videos_tick(void)
 // at the video's first cover, from a thread of its own (the ask waits for
 // the plane to be made: yonder_media_plane_ask), and kept until its
 // session closes; a plane that ends while its session plays is asked for
-// again, a second apart at most, PLANE_ASKS_AGAIN times a session.
+// again, no sooner than a second apart, PLANE_ASKS_AGAIN times a session.
 //
 // EACH PAINT DECIDES each video's place (plane_place.h; the reasons, in
 // order, are its yonder_plane_reason_t), and the publish that paints it
@@ -13766,6 +13779,9 @@ static bool plane_map_on(Video *v, os64_gui_rect_t origin)
         v->tiles = grown;
         v->ntiles = need;
     }
+    // A map laid anew knows nothing, and what was owed or unlearned was
+    // in the old one's place.
+    v->owed_any = v->unlearned_any = false;
     return yonder_plane_map_reset(&v->map, o, v->tiles, v->ntiles);
 }
 
@@ -13847,7 +13863,8 @@ static uint32_t s_plane_nlayers;
 // THE LAYER PASSES ALLOCATE NOTHING, nor does the hole or --plane-check:
 // the render's pixels kept, the white pass, each slot's layer and the
 // check's row live in buffers kept across paints, grown when a part needs
-// more and let go when no video is mapped (planes_prepare). A
+// more and let go at a paint with no video mapped or no page shown
+// (planes_prepare). A
 // buffer of 128 KiB or more is a region of its own in libos64's heap, taken
 // from and given back to the kernel under the heap's one lock, so allocating
 // three a pass made every pass six such calls under it, and the player's
@@ -13880,6 +13897,7 @@ static void planes_buffers_free(void)
         os64_free(s_plane_layers[k].px);
         s_plane_layers[k].px = NULL;
         s_plane_layers[k].cap = 0;
+        s_plane_layers[k].at = (os64_gui_rect_t){0, 0, 0, 0};
     }
 }
 
@@ -14058,7 +14076,9 @@ static bool plane_layer_make(Video *v, os64_gui_rect_t at)
 static void planes_release(void)
 {
     s_plane_watch = false;
-    s_plane_nlayers = 0;     // the slots' buffers are kept for the next paint
+    for (uint32_t k = 0; k < s_plane_nlayers; k++)
+        s_plane_layers[k].at = (os64_gui_rect_t){0, 0, 0, 0};   // the buffers are kept; no place is
+    s_plane_nlayers = 0;
     for (int32_t i = 0; i < VIDEOS_MAX; i++)
         if (s_videos[i].node != NULL && s_videos[i].view.frame != NULL)
             yonder_media_shown_done(s_videos[i].session, &s_videos[i].view);
@@ -14094,6 +14114,8 @@ static bool plane_over_budget(Video *v, os64_gui_rect_t clip)
 // holds), every part of the clip counts. Taken once a paint, after prepare
 // has marked, and the marks let go for the next.
 static void planes_buffers_free(void);
+static os64_gui_rect_t s_taken[OS64_UI_DAMAGE_MAX];
+static uint32_t s_ntaken;
 
 static void planes_take_changes(void)
 {
@@ -14121,6 +14143,12 @@ static void planes_take_changes(void)
     }
     s_nmarks = 0;
     s_marks_lost = false;
+    // The list as taken: the render may add to it (libui's own reconcile of
+    // a widget disabled or detached marks inside os64_ui_render_list), and
+    // what it adds is a change no one was told of (plane_changed_parts).
+    s_ntaken = g.ui.any_dirty ? g.ui.damage_count : 0;
+    for (uint32_t k = 0; k < s_ntaken; k++)
+        s_taken[k] = g.ui.damage[k];
 }
 
 // Before the render: each video's facts, its plane asked for at its first
@@ -14133,8 +14161,10 @@ static void planes_prepare(void)
     s_plane_over_n = 0;
     s_plane_over_all = false;
     s_plane_watch = false;
-    if (g.page.tree == NULL)
+    if (g.page.tree == NULL) {
+        planes_buffers_free();      // no page, no video's layers to make
         return;
+    }
     for (int32_t i = 0; i < VIDEOS_MAX; i++) {
         Video *v = &s_videos[i];
         if (v->node == NULL)
@@ -14170,7 +14200,8 @@ static void planes_prepare(void)
         if (f.plane_state == OS64_MEDIA_PLANE_ENDED && v->plane_asked && v->asks_again < PLANE_ASKS_AGAIN &&
             yonder_now_ms() >= v->ask_again_ms) {
             // A plane that ended while its session plays is not meant to
-            // happen; it is asked for again, a second apart at most,
+            // happen; it is asked for again, no sooner than a second apart
+            // (and only when it is a cover in view again),
             // PLANE_ASKS_AGAIN times a session, counted. A refused one is
             // not: that answer does not change.
             v->plane_asked = false;
@@ -14219,7 +14250,15 @@ static void planes_prepare(void)
             .clip_meets = meets,
             .not_layer = mapped && v->not_layer,
             .over_budget = mapped && plane_over_budget(v, clip),
-            .unpainted = false,     // asked after the render (planes_judge): a new place marks all of its clip
+            // Off for no layer or the budget, with tiles forgotten since: not
+            // yet painted until a pass relearns them, so a forgotten tile
+            // (counted as no ink) cannot shrink the overlays under the
+            // budget and make it a candidate whose place marks all of its
+            // clip. Otherwise asked after the render (planes_judge).
+            .unpainted = mapped && !v->placed &&
+                         (v->reason == YONDER_PLANE_NOT_LAYER || v->reason == YONDER_PLANE_BUDGET ||
+                          v->reason == YONDER_PLANE_UNPAINTED) &&
+                         !yonder_plane_map_known(&v->map, to_plane_rect(clip)),
             .ready = f.plane_ready && f.plane_pic_w == (uint32_t)origin.w && f.plane_pic_h == (uint32_t)origin.h,
             // The serial is the placing paint's question: a placed plane
             // shows its own pictures, and between the show thread's pick
@@ -14361,8 +14400,9 @@ static void plane_counts_reading(DiagText *t)
 // The parts of `damage[from..count)` in `v`'s clip that changed over its
 // picture: met with this paint's changes on the first render, whole on a
 // later one (a render the judge asked for, whose marks are the picture
-// painted back where a plane was, a change over anything under it). At most
-// `cap` in `out`, joined by least added area when more come.
+// painted back where a plane was, a change over anything under it), and
+// whole for a rectangle the render added after the changes were taken. At
+// most PLANE_PARTS_MAX in `out`, joined by least added area when more come.
 #define PLANE_PARTS_MAX 32
 static uint32_t plane_changed_parts(const Video *v, const os64_gui_rect_t *damage, uint32_t from, uint32_t count,
                                     yonder_plane_rect_t *out)
@@ -14372,7 +14412,10 @@ static uint32_t plane_changed_parts(const Video *v, const os64_gui_rect_t *damag
         os64_gui_rect_t part;
         if (!os64_rect_intersect(damage[k], v->clip, &part))
             continue;
-        bool whole = from > 0 || v->changes_all;
+        bool taken = false;
+        for (uint32_t t = 0; t < s_ntaken && !taken; t++)
+            taken = os64_memcmp(&s_taken[t], &damage[k], sizeof(damage[k])) == 0;
+        bool whole = from > 0 || v->changes_all || !taken;   // a rectangle the render added is a change
         for (uint32_t c = 0; c < (whole ? 1u : v->nchanges); c++) {
             os64_gui_rect_t piece = part;
             if (!whole && !os64_rect_intersect(part, v->changes[c], &piece))
@@ -14387,12 +14430,15 @@ static uint32_t plane_changed_parts(const Video *v, const os64_gui_rect_t *damag
 
 // Whether a pass for `v` waits (VIDEO_PLANE.md § 5.2): it cannot be placed
 // at this paint for a reason no layer cures (out of view, a backdrop
-// reader, another plane's clip), or it is off its plane for no layer or the
-// budget and asked less than PLANE_LAYER_WAIT_MS ago, which a change at the
-// display's rate would otherwise ask at its own. A placed video never waits.
+// reader, another plane's clip; relearned whole at the paint that places
+// it), or it is off its plane for no layer or the budget and asked less
+// than PLANE_LAYER_WAIT_MS ago, which a change at the display's rate would
+// otherwise ask at its own (`*capped`: the parts are owed, marked again
+// when the wait is over). A placed video never waits.
 #define PLANE_LAYER_WAIT_MS 250
-static bool plane_layers_wait(Video *v)
+static bool plane_layers_wait(Video *v, bool *capped)
 {
+    *capped = false;
     if (v->candidate || v->placed)
         return false;
     if (v->reason == YONDER_PLANE_OUT_OF_VIEW || v->reason == YONDER_PLANE_BACKDROP ||
@@ -14403,6 +14449,7 @@ static bool plane_layers_wait(Video *v)
     uint64_t now = yonder_now_ms();
     if (now < v->layer_next_ms) {
         v->layers_capped++;
+        *capped = true;
         return true;
     }
     v->layer_next_ms = now + PLANE_LAYER_WAIT_MS;
@@ -14446,17 +14493,46 @@ static bool planes_judge(const os64_gui_rect_t *damage, uint32_t from, uint32_t 
         // the map knew. A pass that waits leaves the changed parts
         // forgotten, as one that fails does, since a part the render
         // painted with no layer would read as nothing over the picture.
+        // A part is layered and told to the map on all of the tiles it
+        // meets (yonder_plane_map_whole_tiles): a layer pass paints what it
+        // is asked, so no tile is left half known, which only a later paint
+        // of all of it could settle.
         yonder_plane_rect_t parts[PLANE_PARTS_MAX], layers[PLANE_PARTS_MAX];
         uint32_t nparts = plane_changed_parts(v, damage, from, count, parts);
-        if (nparts > 0 && plane_layers_wait(v)) {
-            for (uint32_t k = 0; k < nparts; k++)
+        bool capped = false;
+        if (nparts > 0 && plane_layers_wait(v, &capped)) {
+            for (uint32_t k = 0; k < nparts; k++) {
                 yonder_plane_map_forget(&v->map, parts[k]);
+                if (capped) {
+                    // Owed: marked again once the wait is over, so the last
+                    // change of a burst is not dropped.
+                    os64_gui_rect_t r = {parts[k].x, parts[k].y, parts[k].w, parts[k].h};
+                    v->owed = v->owed_any ? os64_rect_union(v->owed, r) : r;
+                    v->owed_any = true;
+                }
+            }
         } else if (nparts > 0) {
             uint32_t nlayers = 0;
+            bool meets_unlearned = false;
             for (uint32_t k = 0; k < nparts; k++) {
-                os64_gui_rect_t r = {parts[k].x, parts[k].y, parts[k].w, parts[k].h};
+                os64_gui_rect_t r = {parts[k].x, parts[k].y, parts[k].w, parts[k].h}, met;
+                meets_unlearned |= v->unlearned_any && os64_rect_intersect(r, v->unlearned, &met);
+                yonder_plane_rect_t whole;
+                if (yonder_plane_map_whole_tiles(&v->map, parts[k], to_plane_rect(v->clip), &whole))
+                    parts[k] = whole;
                 if (v->view.pixels == NULL || plane_part_touched(v, r))
                     layers[nlayers++] = parts[k];
+            }
+            if (meets_unlearned && nparts < PLANE_PARTS_MAX) {
+                // A change over what a failed layer left forgotten: all of it
+                // is layered again with the change, since the cause may lie
+                // anywhere in it and no later change need meet the rest.
+                yonder_plane_rect_t again;
+                if (yonder_plane_map_whole_tiles(&v->map, to_plane_rect(v->unlearned), to_plane_rect(v->clip), &again)) {
+                    parts[nparts++] = again;
+                    layers[nlayers++] = again;
+                }
+                v->unlearned_any = false;
             }
             nlayers = yonder_plane_join(layers, nlayers, PLANE_LAYERS_A_VIDEO);
             bool made[PLANE_PARTS_MAX];
@@ -14466,8 +14542,11 @@ static bool planes_judge(const os64_gui_rect_t *damage, uint32_t from, uint32_t 
                 yonder_plane_map_paint(&v->map, parts[k], to_plane_rect(v->clip), plane_ink, v);
             for (uint32_t k = 0; k < nlayers; k++)
                 if (!made[k]) {
+                    os64_gui_rect_t r = {layers[k].x, layers[k].y, layers[k].w, layers[k].h};
                     v->layers_failed = true;
                     yonder_plane_map_forget(&v->map, layers[k]);
+                    v->unlearned = v->unlearned_any ? os64_rect_union(v->unlearned, r) : r;
+                    v->unlearned_any = true;
                 }
         }
         yonder_plane_rect_t clip = to_plane_rect(v->clip);
@@ -14708,14 +14787,11 @@ static void planes_commit(void)
     }
 }
 
-// The render's damage published: with the planes' edits when there are
-// any, in one publish whose damage covers every rectangle rendered and
-// every clip the edits change; plainly otherwise.
 // The damage rectangles that ride with the edits (those meeting a changed
 // place's clip at all, each whole, never cut at the clip, so a box across
-// the video's edge reaches the glass in one publish) grow `*all`; the
-// others are published plain, first, and marked `sent`. Their area, the
-// rectangles' own, in `*area`. Between the plain publishes and the edit
+// the video's edge reaches the glass in one publish) grow `*all`, and
+// `*area` is the sum of their own areas; the others are published plain,
+// first, and marked `sent`. Between the plain publishes and the edit
 // one the glass may show unrelated parts of the window a frame apart,
 // which no reader can tell from a slower paint: none of them is a place's,
 // and the parts that meet one are all in the edit publish.
@@ -14740,6 +14816,9 @@ static void planes_publish_split(const os64_gui_rect_t *damage, uint32_t count, 
     }
 }
 
+// The render's damage published: with the planes' edits when there are
+// any (the damage meeting a changed place's clip with them, the rest plain
+// before them, planes_publish_split); plainly otherwise.
 static void planes_publish(os64_gui_rect_t *damage, uint32_t *count)
 {
     os64_gui_plane_edit_t edits[OS64_GUI_PLANE_EDITS_MAX];

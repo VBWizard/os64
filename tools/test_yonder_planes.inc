@@ -74,6 +74,16 @@ static void plane_pill_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os
     os64_draw_fill_round_rect(&ctx->surf, w->bounds, w->bounds.h / 2, 0xff204060u);
 }
 
+/* The damage libui holds for the render, as os64_ui_render_list would hand
+ * it to the judge: the changes cases judge exactly these. */
+static uint32_t plane_damage_now(os64_gui_rect_t *out)
+{
+    uint32_t n = g.ui.any_dirty ? g.ui.damage_count : 0;
+    for (uint32_t k = 0; k < n; k++)
+        out[k] = g.ui.damage[k];
+    return n;
+}
+
 /* The whole window rendered, as the render after planes_prepare would. */
 static os64_gui_rect_t plane_render(void)
 {
@@ -417,8 +427,10 @@ static void plane_cases(void)
         planes_prepare();
         check(v->mapped && !v->candidate && v->nchanges == 0 && !v->changes_all,
               "changes: the video's own new picture is no change over it");
-        d = plane_render();
-        planes_judge(&d, 0, 1);
+        os64_gui_rect_t dd[OS64_UI_DAMAGE_MAX];
+        uint32_t nd = plane_damage_now(dd);
+        (void)plane_render();
+        planes_judge(dd, 0, nd);
         planes_release();
         check(s_plane_counts.layer_passes == passes, "changes: and it makes no layer pass");
         g.ui.damage_count = 0;
@@ -429,35 +441,37 @@ static void plane_cases(void)
         mark_part((os64_gui_rect_t){60, 180, 200, 30});  /* the page changes the box over it */
         planes_prepare();
         check(v->nchanges >= 1 && !v->changes_all, "changes: a page mark inside its box is a change, though libui folds it into the picture's");
-        d = plane_render();
-        planes_judge(&d, 0, 1);
-        check(s_plane_counts.layer_passes == passes + 1 && s_plane_nlayers == 1 &&
-                  s_plane_layers[0].at.h <= 30 + 1,
-              "changes: it makes one pass, over the change alone");
+        nd = plane_damage_now(dd);
+        (void)plane_render();
+        planes_judge(dd, 0, nd);
+        check(s_plane_counts.layer_passes == passes + 1 && s_plane_nlayers == 1 && s_plane_layers[0].at.h <= 48,
+              "changes: it makes one pass, over the change's tiles alone");
         planes_release();
     }
     plane_drop();
 
-    /* A layer cures no backdrop reader: a change over its video makes no
-     * pass, and the part it painted is forgotten in the map. */
-    plane_page("<!doctype html><style>body{margin:0;background:#123}"
-               "#v{position:absolute;left:40px;top:40px;width:320px;height:180px}"
-               "#g{position:absolute;left:60px;top:60px;width:100px;height:60px;backdrop-filter:blur(4px)}</style>"
-               "<video id=v></video><div id=g></div>");
+    /* A layer cures no backdrop reader: with its map known from a placing
+     * paint, a change over the video while a reason no layer cures holds
+     * it makes no pass, and the part the render painted is forgotten. */
+    plane_page(kPlanePage);
     planes_prepare();
     d = plane_render();
     planes_judge(&d, 0, 1);
     planes_release();
     {
+        os64_gui_rect_t w = {g.view.bounds.x + 200, g.view.bounds.y + 150, 40, 20};
+        check(yonder_plane_map_known(&v->map, to_plane_rect(w)), "changes: the map known from the placing paint");
         uint64_t passes = s_plane_counts.layer_passes;
         g.ui.damage_count = 0;
         g.ui.any_dirty = false;
         mark_part((os64_gui_rect_t){200, 150, 40, 20});
         planes_prepare();
-        check(v->mapped && v->reason == YONDER_PLANE_BACKDROP, "changes: a backdrop reader keeps it off");
-        d = plane_render();
-        planes_judge(&d, 0, 1);
-        os64_gui_rect_t w = {g.view.bounds.x + 200, g.view.bounds.y + 150, 40, 20};
+        v->candidate = v->place = false;            /* held by a reason no layer cures */
+        v->reason = YONDER_PLANE_BACKDROP;
+        os64_gui_rect_t dd[OS64_UI_DAMAGE_MAX];
+        uint32_t nd = plane_damage_now(dd);
+        (void)plane_render();
+        planes_judge(dd, 0, nd);
         check(s_plane_counts.layer_passes == passes && !yonder_plane_map_known(&v->map, to_plane_rect(w)),
               "changes: no pass for it, and the part forgotten");
         planes_release();
@@ -465,7 +479,8 @@ static void plane_cases(void)
     plane_drop();
 
     /* Off its plane for the budget: at most one pass a quarter second for
-     * changes over it, the rest waited for, counted, their parts forgotten. */
+     * changes over it, the rest waited for and counted, their parts owed
+     * and marked again once the wait is over (videos_tick). */
     plane_page("<!doctype html><style>body{margin:0;background:#123}"
                "#v{position:absolute;left:40px;top:40px;width:640px;height:360px}"
                "#o{position:absolute;left:40px;top:40px;width:640px;height:300px;background:red}</style>"
@@ -480,8 +495,10 @@ static void plane_cases(void)
         fake_plane.facts.plane_pic_w = 640;
         fake_plane.facts.plane_pic_h = 360;
         planes_prepare();
-        d = plane_render();
-        planes_judge(&d, 0, 1);
+        os64_gui_rect_t dd[OS64_UI_DAMAGE_MAX];
+        uint32_t nd = plane_damage_now(dd);
+        (void)plane_render();
+        planes_judge(dd, 0, nd);
         planes_release();
         uint64_t passes = s_plane_counts.layer_passes, at = now_ms;
         for (int k = 0; k < 3; k++) {
@@ -489,15 +506,96 @@ static void plane_cases(void)
             g.ui.any_dirty = false;
             mark_part((os64_gui_rect_t){100, 100, 40, 20});
             planes_prepare();
-            d = plane_render();
-            planes_judge(&d, 0, 1);
+            os64_gui_rect_t dd[OS64_UI_DAMAGE_MAX];
+            uint32_t nd = plane_damage_now(dd);
+            (void)plane_render();
+            planes_judge(dd, 0, nd);
             planes_release();
             if (k == 1)
                 now_ms += 300;
         }
         check(v->reason == YONDER_PLANE_BUDGET && v->layers_capped == 1 && s_plane_counts.layer_passes == passes + 2,
               "changes: off for the budget, one pass a quarter second, the one between waited for");
+        check(v->owed_any, "changes: the waited-for part is owed");
+        s_nmarks = 0;
+        videos_tick();
+        check(v->owed_any, "changes: not marked again before the wait is over");
+        now_ms += PLANE_LAYER_WAIT_MS;
+        videos_tick();
+        bool marked = false;
+        for (uint32_t k = 0; k < s_nmarks; k++)
+            marked |= s_marks[k].video == -1 && s_marks[k].r.w == v->owed.w;
+        check(!v->owed_any && marked, "changes: and marked again once the wait is over, a change");
+        /* Its forgotten tiles hold it off as not yet painted, never a
+         * candidate whose place marks all of its clip. */
+        yonder_plane_map_forget(&v->map, to_plane_rect(v->clip));
+        planes_prepare();
+        check(!v->candidate && v->reason == YONDER_PLANE_UNPAINTED, "changes: forgotten tiles hold it off, not yet painted");
+        planes_release();
         now_ms = at;
+    }
+    plane_drop();
+
+    /* A part forgotten for no layer at a rectangle that meets its tiles in
+     * part: the change that clears it is layered on whole tiles, so the map
+     * knows the clip again and it is no longer off for no layer. */
+    plane_page(kPlanePage);
+    planes_prepare();
+    d = plane_render();
+    planes_judge(&d, 0, 1);
+    planes_release();
+    {
+        os64_gui_rect_t odd = {103, 107, 21, 13};          /* the page's coordinates, off the tile grid */
+        g.ui.damage_count = 0;
+        g.ui.any_dirty = false;
+        mark_part(odd);
+        planes_prepare();
+        os64_gui_rect_t dd[OS64_UI_DAMAGE_MAX];
+        uint32_t nd = plane_damage_now(dd);
+        (void)plane_render();
+        plane_screen.surf.pixels[(size_t)(g.view.bounds.y + 110) * 800 + g.view.bounds.x + 110] ^= 0xffffffu;
+        s_plane_nlayers = PLANE_LAYERS_MAX;             /* no room: the layer cannot be made */
+        planes_judge(dd, 0, nd);
+        s_plane_nlayers = 0;
+        planes_release();
+        check(v->not_layer, "changes: a layer that cannot be made leaves it off for no layer");
+        g.ui.damage_count = 0;
+        g.ui.any_dirty = false;
+        mark_part(odd);                                 /* the change that takes it away */
+        planes_prepare();
+        nd = plane_damage_now(dd);
+        (void)plane_render();
+        planes_judge(dd, 0, nd);
+        planes_release();
+        check(!v->not_layer && yonder_plane_map_known(&v->map, to_plane_rect(v->clip)),
+              "changes: the change after it is layered with what the failure left forgotten, and the map knows the clip again");
+    }
+    plane_drop();
+
+    /* A rectangle the render adds after the changes were taken (libui's own
+     * reconcile marks inside the render) is a change over a placed video. */
+    plane_page(kPlanePage);
+    planes_prepare();
+    d = plane_render();
+    planes_judge(&d, 0, 1);
+    planes_hole(&d, 1);
+    all = d;
+    (void)planes_edits(edits, &all, true, edit_clips, &nedit_clips);
+    planes_commit();
+    planes_release();
+    {
+        uint64_t passes = s_plane_counts.layer_passes;
+        g.ui.damage_count = 0;
+        g.ui.any_dirty = false;
+        mark_part((os64_gui_rect_t){600, 400, 20, 20}); /* a mark far from the video when the changes are taken */
+        planes_prepare();
+        check(v->nchanges == 0 && !v->changes_all, "changes: nothing over the video when taken");
+        os64_gui_rect_t added = {g.view.bounds.x + 100, g.view.bounds.y + 100, 30, 20};
+        (void)plane_render();
+        plane_screen.surf.pixels[(size_t)(g.view.bounds.y + 105) * 800 + g.view.bounds.x + 105] ^= 0xffffffu;
+        planes_judge(&added, 0, 1);
+        check(s_plane_counts.layer_passes == passes + 1, "changes: a rectangle the render added is a change");
+        planes_release();
     }
     plane_drop();
 
@@ -518,14 +616,17 @@ static void plane_cases(void)
         mark_part((os64_gui_rect_t){50, 45, 30, 10});
         mark_part((os64_gui_rect_t){300, 200, 30, 10});
         planes_prepare();
-        d = plane_render();
+        os64_gui_rect_t dd[OS64_UI_DAMAGE_MAX];
+        uint32_t nd = plane_damage_now(dd);
+        (void)plane_render();
         plane_screen.surf.pixels[(size_t)(g.view.bounds.y + 48) * 800 + g.view.bounds.x + 55] ^= 0xffffffu;
         plane_screen.surf.pixels[(size_t)(g.view.bounds.y + 203) * 800 + g.view.bounds.x + 305] ^= 0xffffffu;
-        planes_judge(&d, 0, 1);
+        planes_judge(dd, 0, nd);
         bool small = s_plane_nlayers == 2;
         for (uint32_t k = 0; k < s_plane_nlayers; k++)
-            small &= s_plane_layers[k].at.w <= 30 && s_plane_layers[k].at.h <= 10;
-        check(v->placed && small, "changes: two changes far apart, two small layers");
+            small &= s_plane_layers[k].at.w <= 48 && s_plane_layers[k].at.h <= 32 &&
+                     (s_plane_layers[k].at.x - v->origin.x) % 16 == 0 && (s_plane_layers[k].at.y - v->origin.y) % 16 == 0;
+        check(v->placed && small, "changes: two changes far apart, two small layers on whole tiles");
         planes_release();
     }
     plane_drop();

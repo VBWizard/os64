@@ -98,6 +98,20 @@ static bool tile_span(const yonder_plane_map_t *m, yonder_plane_rect_t r, uint32
     return true;
 }
 
+bool yonder_plane_map_whole_tiles(const yonder_plane_map_t *m, yonder_plane_rect_t r, yonder_plane_rect_t clip,
+                                  yonder_plane_rect_t *out)
+{
+    uint32_t c0, c1, r0, r1;
+    yonder_plane_rect_t in;
+    if (!cut(r, clip, &in) || !tile_span(m, in, &c0, &c1, &r0, &r1))
+        return false;
+    yonder_plane_rect_t tiles = {m->origin.x + (int32_t)(c0 * YONDER_PLANE_TILE),
+                                 m->origin.y + (int32_t)(r0 * YONDER_PLANE_TILE),
+                                 (int32_t)((c1 - c0) * YONDER_PLANE_TILE), (int32_t)((r1 - r0) * YONDER_PLANE_TILE)};
+    yonder_plane_rect_t in_origin;
+    return cut(tiles, m->origin, &in_origin) && cut(in_origin, clip, out);
+}
+
 void yonder_plane_map_paint(yonder_plane_map_t *m, yonder_plane_rect_t painted, yonder_plane_rect_t clip,
                             bool (*ink)(void *ctx, yonder_plane_rect_t part), void *ctx)
 {

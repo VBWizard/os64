@@ -372,6 +372,34 @@ static uint64_t brute_area(const yonder_plane_rect_t *r, uint32_t n)
     return area;
 }
 
+static bool clear_ink(void *ctx, yonder_plane_rect_t part)
+{
+    (void)ctx;
+    (void)part;
+    return false;
+}
+
+static void whole_tile_cases(void)
+{
+    yonder_plane_map_t m;
+    yonder_plane_rect_t origin = {10, 6, 100, 50}, clip = {10, 6, 100, 40}, out;
+    CHECK(yonder_plane_map_reset(&m, origin, s_tiles, 1024), "whole tiles: reset");
+    CHECK(yonder_plane_map_whole_tiles(&m, (yonder_plane_rect_t){10 + 20, 6 + 3, 2, 2}, clip, &out) &&
+              out.x == 10 + 16 && out.y == 6 && out.w == 16 && out.h == 16,
+          "whole tiles: a part inside one tile grows to it");
+    CHECK(yonder_plane_map_whole_tiles(&m, (yonder_plane_rect_t){10 + 15, 6 + 30, 2, 20}, clip, &out) &&
+              out.x == 10 && out.w == 32 && out.y == 6 + 16 && out.y + out.h == 6 + 40,
+          "whole tiles: across tiles, cut to the clip");
+    CHECK(!yonder_plane_map_whole_tiles(&m, (yonder_plane_rect_t){500, 500, 4, 4}, clip, &out),
+          "whole tiles: none met");
+    // Painted on whole tiles with no ink, the tiles are known clear.
+    yonder_plane_map_forget(&m, origin);
+    yonder_plane_rect_t part = {10 + 20, 6 + 3, 2, 2};
+    CHECK(yonder_plane_map_whole_tiles(&m, part, clip, &out), "whole tiles: grown");
+    yonder_plane_map_paint(&m, out, clip, clear_ink, NULL);
+    CHECK(s_tiles[1] == YONDER_PLANE_TILE_CLEAR, "whole tiles: a grown part's paint knows its tile");
+}
+
 static void join_cases(void)
 {
     yonder_plane_rect_t r[12], in[12];
@@ -504,6 +532,7 @@ int main(void)
     layer_cases();
     forget_cases();
     join_cases();
+    whole_tile_cases();
     overlay_cases();
     if (s_failed) {
         printf("plane_place: %d failed\n", s_failed);
