@@ -357,6 +357,27 @@ static uint64_t brute_area(const yonder_plane_rect_t *r, uint32_t n)
     return area;
 }
 
+static void forget_cases(void)
+{
+    yonder_plane_map_t m;
+    yonder_plane_rect_t origin = {10, 6, 100, 50};
+    CHECK(yonder_plane_map_reset(&m, origin, s_tiles, 1024), "forget: reset");
+    for (uint32_t i = 0; i < m.cols * m.rows; i++)
+        s_tiles[i] = YONDER_PLANE_TILE_CLEAR;
+    CHECK(yonder_plane_map_known(&m, origin), "forget: all clear is known");
+    yonder_plane_rect_t part = {10 + 20, 6 + 3, 2, 2};     // inside tile (1, 0)
+    yonder_plane_map_forget(&m, part);
+    CHECK(s_tiles[1] == YONDER_PLANE_TILE_UNKNOWN && s_tiles[0] == YONDER_PLANE_TILE_CLEAR &&
+              s_tiles[2] == YONDER_PLANE_TILE_CLEAR && s_tiles[m.cols + 1] == YONDER_PLANE_TILE_CLEAR,
+          "forget: the tile the part meets, and only it");
+    CHECK(!yonder_plane_map_known(&m, origin), "forget: the clip no longer known");
+    yonder_plane_rect_t across = {10 + 15, 6 + 15, 2, 2};  // the corner of four tiles
+    yonder_plane_map_forget(&m, across);
+    CHECK(s_tiles[0] == YONDER_PLANE_TILE_UNKNOWN && s_tiles[m.cols] == YONDER_PLANE_TILE_UNKNOWN &&
+              s_tiles[m.cols + 1] == YONDER_PLANE_TILE_UNKNOWN && s_tiles[2] == YONDER_PLANE_TILE_CLEAR,
+          "forget: a part across four tiles forgets all four");
+}
+
 static void overlay_cases(void)
 {
     yonder_plane_map_t m;
@@ -438,6 +459,7 @@ int main(void)
     map_scenarios();
     map_properties();
     layer_cases();
+    forget_cases();
     overlay_cases();
     if (s_failed) {
         printf("plane_place: %d failed\n", s_failed);

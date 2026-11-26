@@ -60,6 +60,8 @@ mutants = [
     ('joined-past-the-cap', '    while (n > max) {', '    while (n > 1) {'),
     ('the-area-a-bounding-box', '    *area = yonder_plane_union_area(out, n);\n    return n;',
      '    *area = n ? (uint64_t)all.w * (uint64_t)all.h : 0;\n    return n;'),
+    ('forget-forgets-nothing', '            m->tiles[(size_t)r * m->cols + c] = YONDER_PLANE_TILE_UNKNOWN;',
+     '            (void)0;'),
     ('a-cell-counted-twice', '                    area += (uint64_t)(xs[i + 1] - xs[i]) * (uint64_t)(ys[j + 1] - ys[j]);\n                    break;',
      '                    area += (uint64_t)(xs[i + 1] - xs[i]) * (uint64_t)(ys[j + 1] - ys[j]);'),
     ('a-partial-paint-clears', '            else if (whole)\n', '            else if (whole || 1)\n'),

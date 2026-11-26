@@ -91,6 +91,10 @@ void yonder_plane_map_paint(yonder_plane_map_t *m, yonder_plane_rect_t painted, 
 bool yonder_plane_map_inked(const yonder_plane_map_t *m, yonder_plane_rect_t clip);
 // Every tile meeting `clip` is known (clear or inked). False with no map.
 bool yonder_plane_map_known(const yonder_plane_map_t *m, yonder_plane_rect_t clip);
+// Every tile meeting `part` unknown again: what lies over the picture there
+// could not be taken as a layer, so only a later paint of all of a tile's
+// part that can says what it is.
+void yonder_plane_map_forget(yonder_plane_map_t *m, yonder_plane_rect_t part);
 
 // THE LAYER OF WHAT LIES OVER A PICTURE (VIDEO_PLANE.md § 5.2): the part
 // painted from the video up twice, the video drawing nothing, once over

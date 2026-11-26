@@ -147,6 +147,16 @@ bool yonder_plane_map_known(const yonder_plane_map_t *m, yonder_plane_rect_t cli
     return m->tiles != NULL && cut(clip, m->origin, &in) && !any_tile(m, clip, false);
 }
 
+void yonder_plane_map_forget(yonder_plane_map_t *m, yonder_plane_rect_t part)
+{
+    uint32_t c0, c1, r0, r1;
+    if (m->tiles == NULL || !tile_span(m, part, &c0, &c1, &r0, &r1))
+        return;
+    for (uint32_t r = r0; r < r1; r++)
+        for (uint32_t c = c0; c < c1; c++)
+            m->tiles[(size_t)r * m->cols + c] = YONDER_PLANE_TILE_UNKNOWN;
+}
+
 void yonder_plane_layer(const uint32_t *b, const uint32_t *w, size_t n, uint32_t *out,
                         yonder_plane_layer_counts_t *counts)
 {
