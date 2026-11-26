@@ -12,17 +12,20 @@
   the scrolled page, and one scrolled away is hidden. Every six seconds the
   first video changes width (480px and 320px in turn): its plane is hidden
   while the page paints the picture at the new size, and placed again when
-  the plane holds a picture of that size. Add `?grow=0` to the address to
+  the plane holds a picture of that size. It grows inside a box as tall as
+  its larger size, so nothing below it moves when it does, and a scroll is
+  judged against a page that holds still. Add `?grow=0` to the address to
   keep the widths still.
 -->
 <style>
   body { font: 16px sans-serif; margin: 16px; background: #223; color: #ddd; }
   video { display: block; width: 320px; margin: 12px 0; background: #678; }
+  #room { height: 294px; }   /* the first video at 480 wide is 270 tall, with its margins */
   p { max-width: 600px; }
 </style>
 <h1>Five videos on a long page</h1>
-<video id="v1" src="bbb-480p-3s-av.mp4" autoplay muted loop></video>
-<p>The first video changes width every six seconds.</p>
+<div id="room"><video id="v1" src="bbb-480p-3s-av.mp4" autoplay muted loop></video></div>
+<p>The first video changes width every six seconds, inside room kept for its larger size: nothing below it moves.</p>
 <video id="v2" src="bbb-480p-3s-av.mp4" autoplay muted loop></video>
 <video id="v3" src="bbb-480p-3s-av.mp4" autoplay muted loop></video>
 <p>Scroll down for two more.</p>

@@ -103,6 +103,37 @@ static void plane_cases(void)
     planes_release();
     check(fake_plane.pins == 0, "planes: the view given back after the paint");
 
+    /* Placed, then the page moves under it: the paint that paints the moved
+     * page carries the moved place, worked out from the scroll and layout
+     * that render paints, and the hole is cut where the picture now is. */
+    {
+        os64_gui_rect_t was = v->placed_clip, was_origin = v->placed_origin;
+        g.sy += 20;
+        planes_prepare();
+        d = plane_render();
+        check(!planes_judge(&d, 0, 1) && v->place, "planes: moved, still placed");
+        planes_hole(&d, 1);
+        all = d;
+        n = planes_edits(edits, &all, true);
+        check(n == 1 && !edits[0].hide && edits[0].origin.y == was_origin.y - 20 &&
+                  edits[0].origin.x == was_origin.x && edits[0].clip.y == was.y - 20,
+              "planes: the moved place rides the paint of the moved page, from its scroll");
+        check(plane_screen.surf.pixels[(size_t)(was.y - 20 + 5) * 800 + was.x + 5] == 0 &&
+                  plane_screen.surf.pixels[(size_t)(was.y + was.h - 5) * 800 + was.x + 5] != 0,
+              "planes: the hole cut at the new place, and the old place's foot repainted");
+        planes_commit();
+        planes_release();
+        g.sy -= 20;
+        planes_prepare();
+        d = plane_render();
+        (void)planes_judge(&d, 0, 1);
+        planes_hole(&d, 1);
+        all = d;
+        (void)planes_edits(edits, &all, true);
+        planes_commit();
+        planes_release();
+    }
+
     /* Placed, then the page draws over the picture: it leaves, its old clip
      * marked to be painted again, and the next edit is its hide. */
     planes_prepare();
