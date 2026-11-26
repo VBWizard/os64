@@ -21373,6 +21373,9 @@ static void pane_layer_close(void *ctx, const flow_filter_t *filter, int32_t n, 
         yonder_paint_layers_refused++;
     for (int32_t k = 0; k < gp->n; k++) {
         const Glass *on = gp->now[k];
+        // The layer's boxes drew on its sheets, which note nothing: laying
+        // it is its drawing, wherever it lands.
+        plane_note_over(on, glass_cut(on, t->bounds));
         yonder_layer_lay(on->surf->pixels, on->surf->pitch_px, on->clip, layer, w, h,
                          t->bounds.x + on->dx, t->bounds.y + on->dy, alpha, mode);
     }

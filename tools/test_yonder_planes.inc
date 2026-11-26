@@ -154,6 +154,21 @@ static void plane_cases(void)
     check(!v->place && v->reason == YONDER_PLANE_OVER, "planes: black over a black frame is something over it");
     plane_drop();
 
+    /* The same overlay filtered: its boxes draw on a layer's sheets, and
+     * laying the layer onto the window is its drawing, noted all the same. */
+    plane_page("<!doctype html><style>body{margin:0;background:#123}"
+               "#v{position:absolute;left:40px;top:40px;width:320px;height:180px}"
+               "#o{position:absolute;left:60px;top:60px;width:50px;height:20px;background:#000;"
+               "filter:brightness(.5)}</style>"
+               "<video id=v></video><div id=o></div>");
+    for (uint32_t i = 0; i < 320u * 180u; i++)
+        plane_pic[i] = 0xff000000u;
+    planes_prepare();
+    d = plane_render();
+    planes_judge(&d, 0, 1);
+    check(!v->place && v->reason == YONDER_PLANE_OVER, "planes: a filtered black overlay on a black frame is over it");
+    plane_drop();
+
     /* Two videos side by side, the second with a background of its own, and
      * text after both: a box painted after the first video but under the
      * second's picture is over neither, and text beside them is not over
