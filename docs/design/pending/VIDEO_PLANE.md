@@ -653,8 +653,13 @@ plane does not prevent.
   while it was placed and shown and the clock ran
   (facts.plane_placed_published). Beside it, the longest the glass went
   without a new picture of that video while it was WATCHED: its clock
-  running, its box on the view, the window not covered, judged at every turn
-  of the loop, so a pause or a scroll away is no gap while a page thread
+  running, its box on the view, and the glass able to show it, judged at
+  every turn of the loop. On its plane that is the kernel's own answer, the
+  plane's frames (facts.plane_shown: frames answer only a plane the kernel
+  shows); off it, only that the window is not wholly covered, since asking
+  whether one box is visible would be kernel surface for a measuring flag
+  (ruled 2026-11-26), so a box hidden behind another window while yonder
+  shows counts as watched. Judged every turn, so a pause or a scroll away is no gap while a page thread
   held for seconds (which runs no turn) is; a watch's end counts what it
   saw before it closes. The gaps come from the page's paints that drew some
   of the picture, from the player's own gaps between placed publishes
@@ -663,8 +668,10 @@ plane does not prevent.
   (the plane is folded every turn), and from a gap still open when a line
   or a reading is written. An open gap is never cut: each line and each reading counts the
   longest gap that ended or is open in its interval, and the picture ending
-  a hold counts it whole. The picks keep columns of their own, named as
-  picks, and the line's legend prints once.
+  a hold counts it whole. The line's fields are labelled
+  (`video-rate,t=…,v=…,scr=…,gap=…,pick=…,drop=…,plane=…`: the glass's rate
+  `scr`, the pace's rates `pick` and `drop`, each a second, `gap` in ms), and
+  a legend says each label once; the running totals are the record's.
 
 ## 6. gplay
 

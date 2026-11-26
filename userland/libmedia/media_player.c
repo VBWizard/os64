@@ -159,6 +159,7 @@ struct os64_media_player {
     // longest time between two of them in one run since the last
     // os64_media_player_plane_gap_take.
     uint64_t placed_published, placed_runs;
+    bool plane_shown;                     // the last wait a poke did not end was answered by a frame, placed
     int64_t placed_first_us, placed_last_us, placed_anchor_us, placed_gap_max_us;
     uint32_t pinned;                      // frames pinned by `shown` (at most two)
 
@@ -845,6 +846,8 @@ static int64_t show_thread(void *arg)
         }
         if (rc == 0 && f.why == OS64_GUI_PLANE_PATIENCE)
             p->waits_patience++;
+        if (gone || (rc == 0 && f.why != OS64_GUI_PLANE_POKED))
+            p->plane_shown = frame && placed;   // the kernel's own test: frames answer only a plane it shows
         if (!placed || p->state != OS64_MEDIA_PLAYER_PLAYING || (rc == 0 && f.why == OS64_GUI_PLANE_PATIENCE))
             p->placed_anchor_us = 0;    // the run ends: a gap off the glass, or with the clock still, is none of the plane's
         int64_t period = frame && f.period_ns != 0 ? (int64_t)(f.period_ns / 1000)
@@ -1742,6 +1745,7 @@ void os64_media_player_facts(os64_media_player_t *p, os64_media_player_facts_t *
     f.frames_missed = p->frames_missed;
     f.plane_placed_published = p->placed_published;
     f.plane_placed_runs = p->placed_runs;
+    f.plane_shown = p->plane_shown;
     f.plane_placed_first_us = p->placed_first_us;
     f.plane_placed_last_us = p->placed_last_us;
     f.waits_patience = p->waits_patience;
