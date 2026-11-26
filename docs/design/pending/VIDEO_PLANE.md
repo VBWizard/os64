@@ -643,6 +643,39 @@ plane does not prevent.
 - The record: per video, pictures published by the plane, display frames
   missed, time on the plane against time on the page's paint and why, the
   page thread's paints the video caused (expected: none while on the plane).
+- **What reached the glass is the measure, not the pace.** With a plane on,
+  the pace's picks are the show thread's, and they keep the clock's pace
+  whether or not a picture reaches the glass: while a video is on the page's
+  paint and the page's thread is held, the picks go on and the glass does
+  not change. So `--video-rate`'s rate and the record's reading count the
+  pictures that reached the glass: the page's paints of a new picture in the
+  video's box that the publish left off its plane, and the plane's publishes
+  while it was placed and shown and the clock ran
+  (facts.plane_placed_published). A page's paint that draws the picture is
+  counted even when the page then paints over all of it (an opaque box over
+  the whole video): what survives would have to be judged by its colours,
+  which § 5.2's rule forbids, or by an analysis of the paint's order out of
+  scale with a measuring line. Beside it, the longest the glass went
+  without a new picture of that video while it was WATCHED: its clock
+  running, its box on the view, the window not wholly covered, on its plane
+  or off it, judged at every turn of the loop. A window partly behind
+  another, its video hidden, still counts and reads as a gap: whether one
+  box is seen would be kernel surface for a measuring line, and a plane's
+  frames cannot say it, since a wait that runs out of patience is a display
+  stall as often as a hidden plane, and a stall must stay inside the watch
+  (ruled 2026-11-26). Judged every turn, so a pause or a scroll away is no gap while a page thread
+  held for seconds (which runs no turn) is; a watch's end counts what it
+  saw before it closes. The gaps come from the page's paints that drew some
+  of the picture, from the player's own gaps between placed publishes
+  (`os64_media_player_plane_gap_take`), from the glass's last picture to a
+  plane run's first when that run is the only one begun since the last fold
+  (the plane is folded every turn), and from a gap still open when a line
+  or a reading is written. An open gap is never cut: each line and each reading counts the
+  longest gap that ended or is open in its interval, and the picture ending
+  a hold counts it whole. The line's fields are labelled
+  (`video-rate,t=…,v=…,scr=…,gap=…,pick=…,drop=…,plane=…`: the glass's rate
+  `scr`, the pace's rates `pick` and `drop`, each a second, `gap` in ms), and
+  a legend says each label once; the running totals are the record's.
 
 ## 6. gplay
 

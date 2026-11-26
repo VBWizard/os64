@@ -69,6 +69,7 @@ static struct {
     uint32_t w, h, serial;
     int pins, asks;
     bool want;
+    int64_t gap;            /* what the next plane_gap_take answers */
 } fake_plane;
 bool yonder_media_player_facts(yonder_media_t *m, os64_media_player_facts_t *out)
 {
@@ -81,6 +82,7 @@ bool yonder_media_player_facts(yonder_media_t *m, os64_media_player_facts_t *out
 }
 bool yonder_media_plane_ask(yonder_media_t *m, int64_t win) { (void)m; (void)win; fake_plane.asks++; return true; }
 void yonder_media_plane_want(yonder_media_t *m, bool want) { (void)m; fake_plane.want = want; }
+int64_t yonder_media_plane_gap_take(yonder_media_t *m) { (void)m; int64_t g = fake_plane.gap; fake_plane.gap = 0; return g; }
 bool yonder_media_shown(yonder_media_t *m, os64_media_player_view_t *out)
 {
     (void)m;
@@ -13871,6 +13873,7 @@ int main(void)
     if(getenv("YONDER_COVER_ONLY")) {
         cover_cases();
         plane_cases();
+        glass_cases();
         os64_text_font_release(probe_font);
         check(os64_text_destroy(probe_text)==OS64_FONT_OK,"cover: text released");
         check(live==0,"cover: heap empty");
@@ -13933,6 +13936,7 @@ int main(void)
     svg_partial_window_cases();
     cover_cases();
     plane_cases();
+    glass_cases();
     custom_census_cases();
     custom_element_parse_case();
     svg_cache_window_cases();
