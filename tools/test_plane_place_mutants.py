@@ -45,8 +45,8 @@ mutants = [
      '    } else if (in->backdrop && !in->not_layer) {\n        v.reason = YONDER_PLANE_BACKDROP;'),
     ('a-reason-misnamed', '"not a layer"', '"no layer"'),
     # The layer.
-    ('coverage-from-red', '    if (a[1] > 0)\n        counts->inked++;\n    out[i] = (uint32_t)a[1] << 24',
-     '    if (a[0] > 0)\n        counts->inked++;\n    out[i] = (uint32_t)a[0] << 24'),
+    ('coverage-from-red', '        if (a[1] > 0)\n            counts->inked++;\n        out[i] = (uint32_t)a[1] << 24',
+     '        if (a[0] > 0)\n            counts->inked++;\n        out[i] = (uint32_t)a[0] << 24'),
     ('disagreement-not-counted', '        if (hi - lo > 1)\n', '        if (hi - lo > 255)\n'),
     ('disagreement-too-strict', '        if (hi - lo > 1)\n', '        if (hi - lo > 0)\n'),
     ('colour-from-the-white-pass', '    out[i] = (uint32_t)a[1] << 24 | (b[i] & 0x00ffffffu);', '    out[i] = (uint32_t)a[1] << 24 | (w[i] & 0x00ffffffu);'),

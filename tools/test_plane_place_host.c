@@ -335,6 +335,13 @@ static void layer_cases(void)
     uint32_t bd = 0xff000000u, wd = 0xff00ff80u, o;
     yonder_plane_layer(&bd, &wd, 1, &o, &counts);
     CHECK(counts.disagree == 1, "layer: channels that disagree are counted");
+    // Channels one apart agree; past one they do not, and the layer's
+    // coverage is green's. A white pass darker than the black one (no
+    // paint makes it) reads as opaque.
+    uint32_t b1[2] = {0xff000000u, 0xff808080u}, w1[2] = {0xff373736u, 0xff707070u}, o1[2];
+    yonder_plane_layer(b1, w1, 2, o1, &counts);
+    CHECK(counts.disagree == 0 && (o1[0] >> 24) == 255 - 0x37, "layer: one apart agrees; the coverage is green's");
+    CHECK((o1[1] >> 24) == 255, "layer: a coverage past opaque is opaque");
     // Out in place.
     yonder_plane_layer(b, w, N, b, &counts);
     CHECK(memcmp(b, out, sizeof(out)) == 0, "layer: written over the black pass gives the same");
@@ -398,6 +405,11 @@ static void overlay_cases(void)
             s_tiles[r * m.cols + c] = YONDER_PLANE_TILE_INKED;
     n = yonder_plane_map_overlays(&m, origin, out, 8, &area);
     CHECK(n == 1 && out[0].w == 48 && out[0].h == 48 && area == 48 * 48, "overlays: a block is one rectangle (%u)", n);
+    // Two tiles apart, the cap eight: two rectangles, not joined.
+    yonder_plane_map_reset(&m, origin, s_tiles, 1024);
+    s_tiles[0] = s_tiles[2 * m.cols + 5] = YONDER_PLANE_TILE_INKED;
+    n = yonder_plane_map_overlays(&m, origin, out, 8, &area);
+    CHECK(n == 2 && area == 2 * 16 * 16, "overlays: under the cap, nothing joined (%u)", n);
     // Random maps: at most the cap, inside the clip, every inked part
     // covered, the area the union's.
     for (int round = 0; round < 400; round++) {
