@@ -651,7 +651,11 @@ plane does not prevent.
   pictures that reached the glass: the page's paints of a new picture in the
   video's box that the publish left off its plane, and the plane's publishes
   while it was placed and shown and the clock ran
-  (facts.plane_placed_published). Beside it, the longest the glass went
+  (facts.plane_placed_published). A page's paint that draws the picture is
+  counted even when the page then paints over all of it (an opaque box over
+  the whole video): what survives would have to be judged by its colours,
+  which § 5.2's rule forbids, or by an analysis of the paint's order out of
+  scale with a measuring line. Beside it, the longest the glass went
   without a new picture of that video while it was WATCHED: its clock
   running, its box on the view, the window not wholly covered, on its plane
   or off it, judged at every turn of the loop. A window partly behind

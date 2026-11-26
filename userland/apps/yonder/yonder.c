@@ -13225,6 +13225,9 @@ static uint64_t videos_next(void)
 // `scr` is the pictures of it that reached the glass (the page's paints of
 // a new picture in its box that left it off its plane, and its plane's
 // publishes while placed and shown) a second since that video's last line,
+// a page's paint counted when it draws some of the picture, even when the
+// page paints over all of that afterwards (what survives is not judged by
+// its colours),
 // in tenths; `gap` the longest the glass went without a new picture of it,
 // in ms, among the gaps that ended since its last line or are still open,
 // counted while it was watched (video_glass_watched: its clock running,
@@ -13326,7 +13329,9 @@ static void video_glass_fold(Video *v)
 }
 
 // After a publish: each video whose box it painted with a new picture, and
-// which the publish left off its plane, has that picture on the glass now,
+// which the publish left off its plane, has that picture on the glass now
+// (as far as this line knows: a box the page painted over whole afterwards
+// is counted all the same, since what survives is not judged by colour),
 // the time since its last one in the watch a gap. A placed video's box is
 // rendered too, but the publish cuts it to a hole, and what shows there is
 // the plane's.
@@ -13375,7 +13380,8 @@ static void video_rate_say(void)
     if (!s_video_rate_legend) {
         s_video_rate_legend = true;
         os64_printf("video-rate legend: t ms since boot; v the video; scr pictures that reached the glass a "
-                    "second; gap the longest the glass went without a new one, ms, while it played in view and the "
+                    "second (off its plane, a page paint that drew the picture, even one the page then painted "
+                    "over); gap the longest the glass went without a new one, ms, while it played in view and the "
                     "window was not wholly covered (one partly behind another, the video hidden, reads as a "
                     "gap); pick the pace's picks "
                     "a second; drop its drops a second; plane 1 on its plane, 0 not\n");
