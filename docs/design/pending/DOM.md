@@ -1641,7 +1641,8 @@ Missing or unrecognized values leave scripts off. A changed setting cancels
 in-flight navigation and queued scripts, destroys the runtime, then requests
 reload with the new parser mode. POST reload retains the resend question;
 refusing it leaves the already drawn page with no remaining script runtime.
-An empty window waits for its next page. The status line begins **SCRIPTS ON**
+An empty window waits for its next page. With diagnostics on (a
+`diagnostics` folder in `yonder.conf`), the status line begins **SCRIPTS ON**
 while enabled. The document's captured mode also reaches `flow_env_t.scripting`,
 so raw `noscript` fallback text is hidden when enabled, even under author
 `display` declarations, including `!important`; ordinary fallback markup is
@@ -2311,7 +2312,8 @@ viewport-relative boxes as if from the top.
 **The count and the sentence, per task.** Every task begins at
 `task_begin` (the count to zero, the audit's clock started) and ends at
 `task_said`, which puts `Script forced N layouts in T ms` on the status line
-and the count in the `--script-audit` line, for all six kinds: a blocking
+when diagnostics are on (with them off the line is never made and the status
+is not marked), and the count in the `--script-audit` line, for all six kinds: a blocking
 script (and one a verb connected), a ready script, a timer, an input event,
 `DOMContentLoaded` and `load`. A task that forced layouts and failed says
 both, the count first: an overrun inside a forced layout reads `Script

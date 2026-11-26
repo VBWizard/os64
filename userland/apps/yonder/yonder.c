@@ -661,12 +661,15 @@ static uint64_t s_exit_started, s_exit_quiet_from;
 // record could claim no name, have been said, each said once a run.
 // `keep`: yonder.conf's `keep_pages`, which keeps each page beside its file
 // (diag.h), read with the directory; a page that could not be kept is said
-// once a run too.
+// once a run too. `on`: the setting names a directory, usable or not, read
+// once at the start; the status row's diagnostic texts are said only then
+// (status_set).
 static struct {
     char dir[OS64_PATH_MAX];
     uint32_t next;
     bool write_said, claim_said;
     bool keep, keep_said;
+    bool on;
 } s_diag = {.next = 1};
 
 // ── Pages ───────────────────────────────────────────────────────────────
@@ -3786,7 +3789,8 @@ static const char *trim(const char *s)
     return s;
 }
 
-// What the status row says before anything while scripts run.
+// What the status row says before anything while scripts run, with
+// diagnostics on (s_diag.on): with them off the row is the person's alone.
 #define SCRIPTS_ON_SAID "SCRIPTS ON | "
 // The room the modes said before every message take at most.
 #define STATUS_MODES_ROOM (sizeof(SCRIPTS_ON_SAID) - 1 + sizeof(g.motion_pause) - 1)
@@ -3797,7 +3801,7 @@ static const char *trim(const char *s)
 static void status_set(const char *text)
 {
     os64_snprintf(g.status_text, sizeof(g.status_text), "%s%s%s",
-                  g.scripts_on ? SCRIPTS_ON_SAID : "", g.motion_pause, text);
+                  g.scripts_on && s_diag.on ? SCRIPTS_ON_SAID : "", g.motion_pause, text);
     os64_ui_mark_dirty(&g.ui, &g.status);
 }
 
@@ -3833,7 +3837,8 @@ static const char *diag_dir_open(void)
     static char said[OS64_PATH_MAX + 96];
     char dir[OS64_PATH_MAX];
     bool keep = yonder_settings_saved_keep_pages();
-    if (!yonder_settings_saved_diagnostics(dir, sizeof(dir))) {
+    s_diag.on = yonder_settings_saved_diagnostics(dir, sizeof(dir));
+    if (!s_diag.on) {
         if (keep)
             os64_debug_log("yonder: yonder.conf's keep_pages keeps pages beside their page files, "
                            "and there is no diagnostics directory; nothing is kept");
@@ -16737,9 +16742,12 @@ static void task_said(yonder_scripts_t *host, bool was_alive, const char *what,
                       (unsigned long)forced.elapsed_us);
         os64_debug_log(line);
     }
+    // The layouts a task forced are diagnostics' to say: with them off the
+    // line is never made, and a task that only forced layouts marks nothing
+    // (a page's script may force them many times a second).
     char line[512];
     size_t at = 0;
-    if (forced.layouts != 0) {
+    if (forced.layouts != 0 && s_diag.on) {
         os64_snprintf(line, sizeof(line), "Script forced %lu layouts in %lu.%03lu ms",
                       (unsigned long)forced.layouts, (unsigned long)(forced.elapsed_us / 1000),
                       (unsigned long)(forced.elapsed_us % 1000));
