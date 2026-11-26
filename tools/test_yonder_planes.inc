@@ -140,6 +140,41 @@ static void plane_cases(void)
           "planes: something over it: not placed, no edit");
     plane_drop();
 
+    /* An overlay the colour of the picture under it (black over a black
+     * frame): its cut is noted, so it is something over it all the same. */
+    plane_page("<!doctype html><style>body{margin:0;background:#123}"
+               "#v{position:absolute;left:40px;top:40px;width:320px;height:180px}"
+               "#o{position:absolute;left:60px;top:60px;width:50px;height:20px;background:#000}</style>"
+               "<video id=v></video><div id=o></div>");
+    for (uint32_t i = 0; i < 320u * 180u; i++)
+        plane_pic[i] = 0xff000000u;
+    planes_prepare();
+    d = plane_render();
+    planes_judge(&d, 0, 1);
+    check(!v->place && v->reason == YONDER_PLANE_OVER, "planes: black over a black frame is something over it");
+    plane_drop();
+
+    /* Two videos side by side, the second with a background of its own: a
+     * box painted after the first video but under the second's picture is
+     * over neither, and both are placed. */
+    plane_page("<!doctype html><style>body{margin:0;background:#123}"
+               "#v{position:absolute;left:40px;top:40px;width:320px;height:180px}"
+               "#w{position:absolute;left:400px;top:40px;width:320px;height:180px;background:#456}</style>"
+               "<video id=v></video><video id=w></video>");
+    os64_memset(&s_videos[1], 0, sizeof(s_videos[1]));
+    s_videos[1].node = probe_id("w");
+    s_videos[1].width = s_videos[1].asked_w = 320;
+    s_videos[1].height = s_videos[1].asked_h = 180;
+    s_videos[1].seen.picture = true;
+    planes_prepare();
+    d = plane_render();
+    planes_judge(&d, 0, 1);
+    check(v->place && s_videos[1].place, "planes: two videos side by side, both placed");
+    planes_release();
+    os64_free(s_videos[1].tiles);
+    os64_memset(&s_videos[1], 0, sizeof(s_videos[1]));
+    plane_drop();
+
     /* Not ready at the fitted size, and ready on an older picture than
      * `shown`'s: both not ready, both wanted. */
     plane_page(kPlanePage);

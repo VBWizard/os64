@@ -3584,6 +3584,7 @@ typedef struct {
     // player's plane is asked for at its first cover; while it is on,
     // `frame` is refused and the page paints `shown` instead.
     bool plane_asked;
+    bool frame_fresh;                   // a frame call answered with a picture since `frame` was handed back
     int plane_state;                    // the player's (OS64_MEDIA_PLANE_*), at the last read
     os64_media_player_view_t view;      // `shown`, pinned for one paint; pixels NULL for none
     uint32_t polled_serial;             // `shown`'s serial when the box was last marked for it
@@ -3594,6 +3595,7 @@ typedef struct {
     // This paint's plan, from planes_prepare to planes_publish.
     bool candidate;                     // every reason allows the place but what lies over the picture
     bool mapped;                        // a cover with its map laid: the render tells the map (planes_judge)
+    bool drawn;                         // its box painted in the paint part under way: a cut after it is over it
     bool place;                         // the place this paint's publish carries
     uint32_t name;
     os64_gui_rect_t origin, clip;       // window coordinates, for a video `mapped`
@@ -3624,12 +3626,12 @@ static Video *video_of(const os64_html_node_t *node)
 // The picture `v`'s box shows: the `shown` view pinned for the paint under
 // way, from the plane's ask on (the show thread may take the pace from then,
 // retiring the picture the last frame call gave, and its player refuses
-// `frame` once the plane is on); with the plane on and no view pinned
-// (outside a paint), none; otherwise the last frame call's. False with
-// none.
+// `frame` once the plane is on) until a frame call has answered again after
+// `frame` was handed back; with no view pinned in that time (outside a
+// paint), none; otherwise the last frame call's. False with none.
 static bool video_picture(const Video *v, const uint32_t **pixels, uint32_t *w, uint32_t *h)
 {
-    if (v->view.frame != NULL || v->plane_state == OS64_MEDIA_PLANE_ON) {
+    if (v->view.frame != NULL || (v->plane_asked && !v->frame_fresh) || v->plane_state == OS64_MEDIA_PLANE_ON) {
         *pixels = v->view.pixels;
         *w = v->view.w;
         *h = v->view.h;
@@ -13314,6 +13316,11 @@ static void videos_tick(void)
         s_cost.video_ask_us += (uint64_t)(os64_micros() - began);
         if (!fr.changed)
             continue;
+        // A picture answered while the plane is asked for, starting or on
+        // may be retired by its show thread; one answered after `frame` was
+        // handed back is the page's to keep.
+        if (!v->plane_asked || v->plane_state == OS64_MEDIA_PLANE_REFUSED || v->plane_state == OS64_MEDIA_PLANE_ENDED)
+            v->frame_fresh = true;
         if (fr.w == v->asked_w && fr.h == v->asked_h)
             v->sizing = 0;          // the picture at the size told
         v->frame = fr;
@@ -13346,13 +13353,14 @@ static void videos_tick(void)
 //   placed has its whole clip marked, so the render paints all of it, and
 //   one leaving its plane has its old clip marked, so the picture is
 //   painted back where the hole was;
-// - planes_judge, after the render: the render painted the picture from
-//   `shown` wherever it painted the box, so each pixel of the clip it
-//   painted that differs from `shown` is something the page drew over the
-//   picture (the map, plane_place.h). A video is placed only with nothing
-//   over its picture: planes_hole then sets the clip's pixels to zero, see-
-//   through (§ 3.3). A placed video found with something over it leaves,
-//   its clip painted again with the picture before the publish;
+// - planes_judge, after the render: what the render drew over each
+//   picture (the map, plane_place.h) is every cut a glass verb made after
+//   the video's own box and every shown widget painted after the view, over
+//   its clip, and every pixel of the clip that differs from `shown`, from
+//   which the render painted the picture. A video is placed only with
+//   nothing over its picture: planes_hole then sets the clip's pixels to
+//   zero, see-through (§ 3.3). A placed video found with something over it
+//   leaves, its clip painted again with the picture before the publish;
 // - planes_publish: the edits, with damage covering every rectangle
 //   rendered and every clip they change (the kernel's rule 2), or the
 //   plain publishes when there are none. A refused publish is published
@@ -13474,11 +13482,70 @@ static bool plane_map_on(Video *v, os64_gui_rect_t origin)
     return yonder_plane_map_reset(&v->map, o, v->tiles, v->ntiles);
 }
 
-// Whether the window's pixels in `part` (window coordinates, inside the
-// origin) differ from `shown`'s: something the page drew over the picture.
+// WHAT WAS DRAWN OVER A PICTURE AT THIS PAINT, whatever its colours: every
+// cut a glass verb made after a video's own box in the paint part's order
+// that meets its clip (plane_note_over, from on_glass), and every shown
+// widget libui painted after the view (planes_note_widgets). A pixel that differs
+// from `shown` says the same, but only when the colours differ: a black
+// overlay on a black frame does not.
+#define PLANE_OVER_MAX 64
+static struct {
+    os64_gui_rect_t r;
+    int32_t video;                  // s_videos' index of the video it is over
+} s_plane_over[PLANE_OVER_MAX];
+static uint32_t s_plane_over_n;
+static bool s_plane_over_all;       // more than PLANE_OVER_MAX: all of every clip counts as drawn over
+static bool s_plane_watch;          // a video is mapped at this paint
+
+static void plane_over_add(os64_gui_rect_t r, int32_t video)
+{
+    if (s_plane_over_n < PLANE_OVER_MAX)
+        s_plane_over[s_plane_over_n++] = (__typeof__(s_plane_over[0])){r, video};
+    else
+        s_plane_over_all = true;
+}
+
+// A paint part begins (view_paint, paint_part): no video's box painted yet.
+static void planes_part_begin(void)
+{
+    for (int32_t i = 0; i < VIDEOS_MAX; i++)
+        s_videos[i].drawn = false;
+}
+
+// The shown widgets libui paints after the view (in its tree's order: a
+// parent before its children, children in list order), noted where they
+// meet a mapped clip.
+static void planes_note_widgets(os64_ui_widget_t *w, bool *after)
+{
+    for (; w != NULL; w = w->next_sibling) {
+        if (w == &g.view) {
+            *after = true;
+            continue;   // the view's own children are its paint's, whose cuts are noted
+        }
+        if (*after && !w->hidden)
+            for (int32_t i = 0; i < VIDEOS_MAX; i++) {
+                os64_gui_rect_t met;
+                if (s_videos[i].node != NULL && s_videos[i].mapped &&
+                    os64_rect_intersect(w->bounds, s_videos[i].clip, &met))
+                    plane_over_add(met, i);
+            }
+        if (!w->hidden)
+            planes_note_widgets(w->first_child, after);
+    }
+}
+
+// Whether something was drawn over the picture in `part` (window
+// coordinates, inside the origin): a cut or widget noted there, or a pixel
+// that differs from `shown`'s.
 static bool plane_ink(void *ctx, yonder_plane_rect_t part)
 {
     const Video *v = ctx;
+    os64_gui_rect_t r = {part.x, part.y, part.w, part.h}, met;
+    if (s_plane_over_all)
+        return true;
+    for (uint32_t k = 0; k < s_plane_over_n; k++)
+        if (&s_videos[s_plane_over[k].video] == v && os64_rect_intersect(s_plane_over[k].r, r, &met))
+            return true;
     const os64_gui_surface_t *s = &g.ui.ctx->surf;
     for (int32_t y = part.y; y < part.y + part.h; y++) {
         const uint32_t *row = s->pixels + (size_t)y * s->pitch_px;
@@ -13492,6 +13559,7 @@ static bool plane_ink(void *ctx, yonder_plane_rect_t part)
 
 static void planes_release(void)
 {
+    s_plane_watch = false;
     for (int32_t i = 0; i < VIDEOS_MAX; i++)
         if (s_videos[i].node != NULL && s_videos[i].view.frame != NULL)
             yonder_media_shown_done(s_videos[i].session, &s_videos[i].view);
@@ -13504,6 +13572,9 @@ static void planes_prepare(void)
 {
     for (int32_t i = 0; i < VIDEOS_MAX; i++)
         s_videos[i].candidate = s_videos[i].mapped = s_videos[i].place = false;
+    s_plane_over_n = 0;
+    s_plane_over_all = false;
+    s_plane_watch = false;
     if (g.page.tree == NULL)
         return;
     for (int32_t i = 0; i < VIDEOS_MAX; i++) {
@@ -13537,15 +13608,19 @@ static void planes_prepare(void)
             os64_gui_rect_t c;
             if (s_planes && !v->plane_asked && on_view && v->seen.picture && b != NULL && video_cover_rect(v, b, &c)) {
                 v->plane_asked = true;
+                v->frame_fresh = false;
                 s_plane_counts.asks++;
                 (void)yonder_media_plane_ask(v->session, g.win);
             }
         }
-        // From the ask until a verdict that hands `frame` back, the page
-        // paints from a pinned `shown`: the show thread may take the pace
-        // at any moment of it (video_picture).
+        // From the ask until a frame call answers again once `frame` is
+        // handed back, the page paints from a pinned `shown`: the show
+        // thread may take the pace at any moment of it, and the picture the
+        // last frame call gave may be retired and its pixels reused
+        // (video_picture).
         bool handed_back = f.plane_state == OS64_MEDIA_PLANE_REFUSED || f.plane_state == OS64_MEDIA_PLANE_ENDED;
-        if ((v->plane_asked || f.plane_state != OS64_MEDIA_PLANE_NONE) && !handed_back && v->view.frame == NULL)
+        if ((v->plane_asked || f.plane_state != OS64_MEDIA_PLANE_NONE) && (!handed_back || !v->frame_fresh) &&
+            v->view.frame == NULL)
             (void)yonder_media_shown(v->session, &v->view);
         if (f.plane_state != OS64_MEDIA_PLANE_ON)
             continue;
@@ -13560,6 +13635,7 @@ static void planes_prepare(void)
             // Whatever its verdict, this render tells its map what lies
             // over its picture, so ink that goes away is seen to go.
             v->mapped = true;
+            s_plane_watch = true;
             v->origin = origin;
             v->clip = clip;
         }
@@ -13664,6 +13740,10 @@ static void plane_counts_reading(DiagText *t)
 static bool planes_judge(const os64_gui_rect_t *damage, uint32_t from, uint32_t count)
 {
     bool again = false;
+    if (from == 0 && s_plane_watch) {
+        bool after = false;
+        planes_note_widgets(g.ui.root, &after);
+    }
     for (int32_t i = 0; i < VIDEOS_MAX; i++) {
         Video *v = &s_videos[i];
         if (v->node == NULL)
@@ -19958,6 +20038,22 @@ typedef struct {
     os64_gui_rect_t whole;
 } Glass;
 
+// A glass verb's cut `r` on the window: noted over each mapped video whose
+// box this paint part has already painted and whose clip it meets.
+static void plane_note_over(const Glass *gl, os64_gui_rect_t r)
+{
+    if (!s_plane_watch || gl->whole.w <= 0 || r.w <= 0 || r.h <= 0)
+        return;
+    for (int32_t i = 0; i < VIDEOS_MAX; i++) {
+        os64_gui_rect_t met;
+        if (s_videos[i].node != NULL && s_videos[i].mapped && s_videos[i].drawn &&
+            os64_rect_intersect(r, s_videos[i].clip, &met))
+            plane_over_add(met, i);
+    }
+}
+
+// A verb's rectangle moved onto the glass and cut to what is being painted;
+// a cut on the window over a video's clip is noted (plane_note_over).
 static os64_gui_rect_t on_glass(const Glass *gl, os64_gui_rect_t r)
 {
     r.x += gl->dx;
@@ -19965,6 +20061,7 @@ static os64_gui_rect_t on_glass(const Glass *gl, os64_gui_rect_t r)
     os64_gui_rect_t out;
     if (!os64_rect_intersect(r, gl->clip, &out))
         return (os64_gui_rect_t){0, 0, 0, 0};
+    plane_note_over(gl, out);
     return out;
 }
 
@@ -20843,6 +20940,7 @@ static void pane_video(GlassPane *gp, const flow_box_t *b, os64_gui_rect_t c, os
         }
     }
     s_cost.video_draw_us += (uint64_t)(os64_micros() - began);
+    v->drawn = true;    // what this paint part draws from here is over it
 }
 
 static void pane_canvas(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip)
@@ -21748,6 +21846,7 @@ static void canvases_acknowledge(void)
 static bool paint_part(Glass *gl, const yonder_verbs_t *v, os64_gui_rect_t part, os64_gui_rect_t whole,
                        const flow_box_t *cover)
 {
+    planes_part_begin();
     os64_gui_rect_t was = gl->clip, win = {part.x + gl->dx, part.y + gl->dy, part.w, part.h};
     if (!os64_rect_intersect(win, was, &gl->clip)) {
         gl->clip = was;
@@ -22230,6 +22329,7 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
         g.paint_scratch = yonder_scratch_new();
     os64_gui_rect_t whole = {w->bounds.x - gl.dx, w->bounds.y - gl.dy, w->bounds.w, w->bounds.h};
     s_effects_past_video = false;
+    planes_part_begin();
     s_ndrawn_canvases = 0;
     s_drawn_canvases_lost = false;
     uint32_t refused = view_paint_parts(&gl, &v, view, whole);

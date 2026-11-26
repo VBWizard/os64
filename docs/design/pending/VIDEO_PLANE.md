@@ -370,11 +370,13 @@ of § 3.5's rules.
 - **P3a**: yonder's videos on planes with nothing over the picture
   (`apps/yonder/yonder.c` § Videos on planes, `plane_place.c` pure with
   `tools/test_plane_place_host.sh` and 22 mutants). Each paint decides each
-  video's place around the render: the render paints the picture from
-  `shown` wherever it paints the box, so a pixel of the clip that differs
-  from `shown` is something the page drew over it (the tile map); a video
-  with nothing over it has its clip set to zero, the hole, in the publish
-  that places it. P3b brings the two paints and the overlays. The ask is
+  video's place around the render: what the render drew over a picture
+  is every cut a glass verb made after the video's own box, every widget
+  painted after the view, and every pixel that differs from `shown`, which
+  the render painted the picture from (the tile map); a video with nothing
+  over it has its clip set to zero, the hole, in the publish that places
+  it. From the ask until a frame call answers again after `frame` is
+  handed back, the page paints the box from a pinned `shown`. P3b brings the two paints and the overlays. The ask is
   `yonder_media_plane_ask`, on a thread of its own, a close during the ask
   carried out by that thread when it returns; `--plane=off` and
   `planes = off` ask for none; facts.plane_serial is libmedia's for the
