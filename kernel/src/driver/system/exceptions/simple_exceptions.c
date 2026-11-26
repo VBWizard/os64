@@ -1194,10 +1194,16 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
     // The mapping, held: a sibling's unmap may delist it while this fault
     // resolves, and the hold keeps it alive until the fault is done with it.
     // Every exit that returns gives the hold back, the kill's included, which
-    // gives it back before it acts. A panic does not, nor a thread torn down
-    // while its fault waits on a file read; burial frees the mapping whatever
-    // its holds, and counts any it finds.
-    vma_t *vma = vma_lookup_hold(task, cr2);
+    // gives it back before it acts; only a panic does not. A thread is never
+    // torn down inside this path (a signal redirects only a thread in ring
+    // 3), so burial should find no hold outstanding, and counts any it does.
+    //
+    // NO LOOKUP ABOVE THE USER CEILING: no mapping covers such an address,
+    // and the lookup takes the task's mapLock, so a ring-0 fault taken while
+    // that lock is held (a wild pointer followed under it, the lazy HHDM's
+    // tripwire) would wait on its own thread's lock with interrupts off
+    // instead of reaching the panic below that names it.
+    vma_t *vma = cr2 < USER_CANONICAL_MAX ? vma_lookup_hold(task, cr2) : NULL;
     if (!vma)
     {
         // Error bit 2 = the faulting access came from ring 3: the app chased

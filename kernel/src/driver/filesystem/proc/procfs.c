@@ -977,8 +977,12 @@ static void proc_gen_maps(synth_text_t *t, task_t *task)
 	size_t count = 0;
 
 	// 1. The VMAs — what the task mapped, or had mapped for it by the loader.
-	// A file-backed or library mapping's `file` stays good to read here:
-	// unmap takes only anonymous mappings, so only burial removes the others.
+	// A file-backed or library mapping's `file` stays good to read here
+	// while the task lives: unmap takes only anonymous mappings, so only
+	// burial removes the others. Burial running between the copy and this
+	// formatting is not ruled out, as the rest of this file's reads of a
+	// task are not: /proc holds no reference on the task it reads (DEBTS,
+	// the lockless list walkers' lifetime).
 	{
 		for (size_t i = 0; i < vmaCount; i++)
 		{

@@ -23,8 +23,12 @@ bool test_vma_list_doors(void)
     vma_t *anon = vma_create(0x70000000, 0x70004000, PROT_READ | PROT_WRITE,
                              MAP_PRIVATE | MAP_ANONYMOUS, NULL, 0);
     vma_t *file = vma_create(0x60000000, 0x60002000, PROT_READ, MAP_PRIVATE, NULL, 0);
-    if (anon == NULL || file == NULL)
+    if (anon == NULL || file == NULL) {
+        kfree(anon);
+        kfree(file);
+        kfree(t);
         return false;
+    }
     vma_add(t, file);
     vma_add(t, anon);
     bool ok = t->mmaps.count == 2 && t->mmaps.head == &anon->node;
@@ -68,8 +72,16 @@ bool test_vma_list_doors(void)
     /* Burial takes every mapping, held or not, and counts the holds left. */
     vma_t *more = vma_create(0x70010000, 0x70011000, PROT_READ | PROT_WRITE,
                              MAP_PRIVATE | MAP_ANONYMOUS, NULL, 0);
-    if (more == NULL)
+    if (more == NULL) {
+        vma_t *v = vma_take_all(t, &(uint64_t){0});
+        while (v != NULL) {
+            vma_t *next = vma_chain_next(v);
+            vma_destroy(v);
+            v = next;
+        }
+        kfree(t);
         return false;
+    }
     vma_add(t, more);
     (void)vma_lookup_hold(t, 0x70010000);
     uint64_t left = 0;

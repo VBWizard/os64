@@ -759,9 +759,9 @@ static uint64_t task_release_vmas(task_t *t, uint64_t *shared_bytes_out)
 
 	// The whole list at once, under its lock, then everything outside it.
 	// Every mapping is freed whatever its holds: no thread of the task is
-	// left to give one back. A hold outstanding here is a thread that died
-	// holding one (killed while its fault waited on a file read), counted
-	// and said.
+	// left to give one back. None should be outstanding (a thread is never
+	// torn down inside the fault path or unmap, the two holders); any found
+	// is counted and said.
 	uint64_t held = 0;
 	vma_t *vma = vma_take_all(t, &held);
 	if (held != 0)

@@ -23,7 +23,11 @@
 //      (where it was, if that fault went through and it went on), and each
 //      must die of SIGSEGV too: a page that reads was installed by a fault
 //      after unmap passed it, left mapped in a range no mapping covers, its
-//      frame lost. At most RACE_ROUNDS rounds: a thread that ends keeps its
+//      frame lost. (Unmap invalidates on its own CPU only, DEBTS' "A
+//      mapping released under a running task is invalidated on the calling
+//      CPU only": a probe run on a CPU still holding the toucher's
+//      translation of the page above could read it. Not seen in a thousand
+//      rounds.) At most RACE_ROUNDS rounds: a thread that ends keeps its
 //      stacks until the task does (DEBTS, "No PER-THREAD teardown"), and the
 //      task's stack addresses run into its fixed windows after about 1,400
 //      (DEBTS, "Thread stacks have no ceiling").

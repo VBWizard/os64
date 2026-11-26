@@ -106,9 +106,13 @@ DEBTS row). Planes. Any change to what a mapping is.
   release of a delisted one. The fault holds the mapping it resolves in
   (`vma_lookup_hold`); its tail is `page_fault_in_mapping`, which returns a
   kill's reason, so the hold is given back before a kill takes
-  `signalLock`. A panic does not give it back, nor a thread torn down in a
-  fault's file read; burial frees every mapping whatever its holds and
-  counts the holds it finds (`DEBUG_TASK`). `user_range_accessible` copies
+  `signalLock`. Only a panic does not give it back: a thread is never torn
+  down inside the fault path or unmap (a signal redirects only a thread in
+  ring 3), so burial should find no hold outstanding; it frees every
+  mapping whatever its holds and counts any it finds (`DEBUG_TASK`). The
+  lookup is skipped above the user ceiling, where no mapping can be, so a
+  ring-0 fault taken under `mapLock` reaches its panic instead of waiting
+  on its own lock. `user_range_accessible` copies
   facts (`vma_lookup_facts`); `/proc`'s maps copies under the lock and
   formats after; burial takes the whole list (`vma_take_all`).
 - **`task->pageLock`**, counted and irqsave, replaces the global publish
@@ -117,8 +121,9 @@ DEBTS row). Planes. Any change to what a mapping is.
   walks and removes each page under `signalLock` and the page lock, frees
   the frame after the page lock, and gives its hold back; a second unmap of
   one base that loses the delist is refused. Every install (demand, CoW,
-  shared object) rechecks `vma_is_listed` under the page lock and gives its
-  frame back when the mapping is gone. Order: `signalLock`, `pageLock`,
+  shared object) rechecks `vma_is_listed` under the page lock and installs
+  nothing when the mapping is gone; demand and CoW give their frame back,
+  and the shared object's page is the cache's, so it is only not installed. Order: `signalLock`, `pageLock`,
   `mapLock`; the allocator's locks under `pageLock` through table pages.
 - **The counts** are in `/proc/<id>/status`: `mappings`, `mapping_walks`
   (lookups, steps, the longest walk), `mapping_lock` and `page_lock`
