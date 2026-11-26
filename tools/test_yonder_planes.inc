@@ -55,6 +55,8 @@ static void plane_drop(void)
     g.paint_cache = NULL;
     yonder_scratch_free(g.paint_scratch);
     g.paint_scratch = NULL;
+    yonder_canvas_keeps_free(g.canvas_keeps);       /* made at a paint, as the window's close frees them */
+    g.canvas_keeps = NULL;
     os64_free(plane_screen.surf.pixels);
     g.ui.ctx = plane_saved_ctx;
     fake_plane = (__typeof__(fake_plane)){0};
@@ -332,5 +334,147 @@ static void plane_cases(void)
     planes_prepare();
     s_planes = true;
     check(fake_plane.asks == 0, "planes: off, never asked");
+    plane_drop();
+}
+
+/* WHAT REACHED THE GLASS (--video-rate and the record): a video on the
+ * page's paint reaches the glass only with the page's publishes, so a held
+ * page shows its rate fall and its gap rise; on its plane, the show
+ * thread's publishes keep reaching it while the page is held. Each loop
+ * turn runs videos_glass_watch, as videos_tick does. */
+static void glass_paint_once(void)
+{
+    videos_glass_watch();
+    planes_prepare();
+    (void)plane_render();
+    videos_glass_published();
+    planes_release();
+}
+
+/* The plane's show thread publishing `n` pictures, one each `step` us, in
+ * one run (`fresh`: the first starts a new run). */
+static void glass_plane_publishes(int n, int64_t step, bool fresh)
+{
+    for (int k = 0; k < n; k++) {
+        clock_us += step;
+        fake_plane.facts.plane_placed_published++;
+        if (fresh && k == 0)
+            fake_plane.facts.plane_placed_first_us = clock_us;
+        fake_plane.facts.plane_placed_last_us = clock_us;
+    }
+}
+
+static void glass_cases(void)
+{
+    Video *v = &s_videos[0];
+    os64_media_player_facts_t f;
+
+    /* On the page's paint: a picture a paint, 33 ms apart, then a 3 s hold. */
+    plane_page(kPlanePage);
+    v->playing = true;
+    glass_paint_once();
+    check(v->page_pictures == 1 && v->glass_watch_from_us == clock_us && v->glass_last_us == clock_us,
+          "glass: the page's first picture, the watch begun at it");
+    for (int k = 0; k < 30; k++) {
+        clock_us += 33000;
+        fake_plane.serial++;
+        glass_paint_once();
+    }
+    video_glass_open_gap(v, os64_micros());
+    check(v->page_pictures == 31 && v->glass_gap_us == 33000, "glass: on the page's paint, 31 pictures, 33 ms apart");
+    v->glass_gap_us = v->glass_gap_reading_us = 0;
+    uint64_t before = video_glass_pictures(v, &fake_plane.facts);
+    clock_us += 1000000;            /* the page's thread held: no turn, no paint, */
+    fake_plane.serial += 30;        /* while the pace goes on picking */
+    video_glass_open_gap(v, os64_micros());
+    check(video_glass_pictures(v, &fake_plane.facts) == before && v->glass_gap_us == 1000000,
+          "glass: held on the page's paint, no picture reaches it and the gap grows");
+    v->glass_gap_us = 0;            /* a rate line written mid-hold */
+    clock_us += 2000000;
+    fake_plane.serial += 60;
+    clock_us += 33000;
+    fake_plane.serial++;
+    glass_paint_once();
+    check(v->glass_gap_us == 3033000 && v->glass_gap_reading_us == 3033000,
+          "glass: the picture ending the hold counts it whole, in the next line and in the reading");
+    /* A pause between two pictures is no gap: the watch ends at the turn
+     * that sees it, and starts again at the turn that sees it play. */
+    v->glass_gap_us = 0;
+    v->playing = false;
+    videos_glass_watch();
+    check(v->glass_watch_from_us == 0, "glass: paused, the watch ended");
+    clock_us += 2000000;
+    v->playing = true;
+    fake_plane.serial++;
+    glass_paint_once();
+    check(v->glass_gap_us == 0 && v->glass_last_us == clock_us, "glass: a pause of 2 s is no gap");
+    /* Placed, a page paint that renders its box with a newer picture puts
+     * none of the page's on the glass: the box is a hole. */
+    uint64_t page = v->page_pictures;
+    uint32_t serial = v->glass_serial;
+    v->placed = true;
+    fake_plane.serial++;
+    glass_paint_once();
+    check(v->glass_serial != serial && v->page_pictures == page,
+          "glass: placed, the page's render of its box with a newer picture is no picture on the glass");
+    v->placed = false;
+    plane_drop();
+
+    /* On its plane: the show thread publishes every 33 ms while the page is
+     * held 3 s; the plane's own longest gap is the player's. The run's first
+     * picture came 400 ms after the page's last: that gap is the glass's. */
+    plane_page(kPlanePage);
+    v->playing = true;
+    glass_paint_once();
+    v->glass_gap_us = 0;
+    v->placed = true;
+    glass_plane_publishes(1, 400000, true);
+    glass_plane_publishes(89, 33000, false);
+    fake_plane.gap = 34000;
+    video_glass_open_gap(v, os64_micros());
+    f = fake_plane.facts;
+    check(video_glass_pictures(v, &f) == 91 && v->glass_gap_us == 400000,
+          "glass: on its plane, the page's last picture to the run's first is a gap");
+    v->glass_gap_us = 0;
+    glass_plane_publishes(90, 33000, false);
+    fake_plane.gap = 34000;
+    video_glass_open_gap(v, os64_micros());
+    check(v->glass_gap_us == 34000, "glass: on its plane through a hold, the player's own 34 ms gap");
+    /* The plane stops publishing (taken off, or the show thread held): the
+     * gap runs from its last picture, not from the last line. */
+    v->glass_gap_us = 0;
+    clock_us += 500000;
+    video_glass_open_gap(v, os64_micros());
+    check(v->glass_gap_us == 500000, "glass: the gap after the plane's last picture runs from it");
+    clock_us += 200000;
+    video_glass_open_gap(v, os64_micros());
+    check(v->glass_gap_us == 700000, "glass: and is not cut by the line before");
+    /* Paused and played again, a run's pictures from before the pause start
+     * no gap in the new watch. */
+    v->playing = false;
+    videos_glass_watch();
+    clock_us += 3000000;
+    v->playing = true;
+    videos_glass_watch();
+    v->glass_gap_us = 0;
+    clock_us += 10000;
+    video_glass_open_gap(v, os64_micros());
+    check(v->glass_gap_us == 10000, "glass: the plane's pictures from before a pause are not the new watch's");
+    /* The record's reading says the same, and starts again. */
+    f = fake_plane.facts;
+    DiagText t = {0};
+    video_glass_reading(&t, v, &f);
+    check(t.s != NULL && strstr(t.s, "reached the glass 181 pictures since the last reading, the longest without a "
+                                     "new one 700 ms") != NULL,
+          "glass: the record's words");
+    os64_free(t.s);
+    videos_glass_reading_restart();
+    t = (DiagText){0};
+    video_glass_reading(&t, v, &f);
+    check(t.s != NULL && strstr(t.s, "reached the glass 0 pictures since the last reading, the longest without a "
+                                     "new one 10 ms") != NULL,
+          "glass: a reading starts the words again, the open gap still counted");
+    os64_free(t.s);
+    v->placed = false;
     plane_drop();
 }
