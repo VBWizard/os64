@@ -177,6 +177,20 @@ static void plane_cases(void)
     os64_memset(&s_videos[1], 0, sizeof(s_videos[1]));
     plane_drop();
 
+    /* A see-through group laid over the whole video, whose one child draws
+     * beside the picture: opening the group draws nothing, so the video is
+     * placed. */
+    plane_page("<!doctype html><style>body{margin:0;background:#123}"
+               "#v{position:absolute;left:40px;top:40px;width:320px;height:180px}"
+               "#g{position:absolute;left:40px;top:40px;width:400px;height:180px;opacity:.8}"
+               "#c{position:absolute;left:340px;top:10px;width:20px;height:20px;background:red}</style>"
+               "<video id=v></video><div id=g><div id=c></div></div>");
+    planes_prepare();
+    d = plane_render();
+    planes_judge(&d, 0, 1);
+    check(v->place, "planes: a group over the video drawing only beside it, placed");
+    plane_drop();
+
     /* Not ready at the fitted size, and ready on an older picture than
      * `shown`'s: both not ready, both wanted. */
     plane_page(kPlanePage);

@@ -20140,7 +20140,9 @@ static void glass_group_open(void *ctx, os64_gui_rect_t bounds)
     int32_t d = gs->depth++;
     if (d >= GLASS_GROUPS)
         return;
-    os64_gui_rect_t at = on_glass(gl, bounds);
+    // Opening draws nothing: the group's boxes note what they draw, and
+    // laying it back at its close changes only pixels they drew.
+    os64_gui_rect_t at = glass_cut(gl, bounds);
     gs->open[d].at = at;
     gs->open[d].under = NULL;
     if (at.w <= 0 || at.h <= 0)
@@ -20481,7 +20483,9 @@ static bool glass_backdrop(void *ctx, const flow_box_t *b, int32_t layer,
         h = (uint32_t)vector_pixels.rect.h;
     }
     os64_gui_rect_t on = {area->x + gl->dx, area->y + gl->dy, area->w, area->h};
-    os64_gui_rect_t cut = on_glass(gl, clip);
+    os64_gui_rect_t cut = glass_cut(gl, clip), drawn;
+    if (os64_rect_intersect(cut, on, &drawn))
+        plane_note_over(gl, drawn);   // the tiles land in the area, not across the clip
     tile.at.x += gl->dx;
     tile.at.y += gl->dy;
     if (cut.w > 0 && cut.h > 0)
@@ -20556,7 +20560,7 @@ static void glass_control(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os6
     // control scrolled out of its box, or past an `overflow: hidden` edge,
     // is not drawn there.
     Glass cut = *(const Glass *)ctx;
-    cut.clip = on_glass(&cut, clip);
+    cut.clip = glass_cut(&cut, clip);    // a clip: the fills below note what they draw
     if (cut.clip.w <= 0 || cut.clip.h <= 0)
         return;
     glass_fill(&cut, c, 0xffffff);
@@ -20629,7 +20633,7 @@ static void glass_stand_in(const Glass *gl, os64_gui_rect_t c, os64_gui_rect_t c
     os64_gui_rect_t room;
     if (!os64_rect_intersect(c, clip, &room))
         return;
-    cut.clip = on_glass(&cut, room);
+    cut.clip = glass_cut(&cut, room);    // a clip: the fills below note what they draw
     if (cut.clip.w <= 0 || cut.clip.h <= 0)
         return;
     if (panel) {
