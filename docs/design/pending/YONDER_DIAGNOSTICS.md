@@ -503,7 +503,8 @@ minutes, from the moment its record begins:
   --layout-profile`, the same line gives each asker's cascades: their
   time, and how many were built fresh.
 - **What scripts forced** is each task's own count when it ends (the DOM's
-  geometry statistics, the status line's "Script forced"), so it needs no
+  geometry statistics, the status line's "Script forced" with diagnostics
+  on, never formatted with them off), so it needs no
   `ledger`; its time includes answering the read, so it can exceed the
   layouts' own.
 - **Bytes parsed**: the arriving page's bytes its parser took in the slice.
