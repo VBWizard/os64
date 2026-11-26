@@ -706,13 +706,13 @@ plane does not prevent.
   while it was placed and shown and the clock ran
   (facts.plane_placed_published). Beside it, the longest the glass went
   without a new picture of that video while it was WATCHED: its clock
-  running, its box on the view, and the glass able to show it, judged at
-  every turn of the loop. On its plane that is the kernel's own answer, the
-  plane's frames (facts.plane_shown: frames answer only a plane the kernel
-  shows); off it, only that the window is not wholly covered, since asking
-  whether one box is visible would be kernel surface for a measuring flag
-  (ruled 2026-11-26), so a box hidden behind another window while yonder
-  shows counts as watched. Judged every turn, so a pause or a scroll away is no gap while a page thread
+  running, its box on the view, the window not wholly covered, on its plane
+  or off it, judged at every turn of the loop. A window partly behind
+  another, its video hidden, still counts and reads as a gap: whether one
+  box is seen would be kernel surface for a measuring line, and a plane's
+  frames cannot say it, since a wait that runs out of patience is a display
+  stall as often as a hidden plane, and a stall must stay inside the watch
+  (ruled 2026-11-26). Judged every turn, so a pause or a scroll away is no gap while a page thread
   held for seconds (which runs no turn) is; a watch's end counts what it
   saw before it closes. The gaps come from the page's paints that drew some
   of the picture, from the player's own gaps between placed publishes

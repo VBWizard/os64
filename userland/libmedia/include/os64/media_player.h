@@ -254,8 +254,6 @@ typedef struct {
     uint64_t plane_placed_published;    // pictures published while the plane was placed and shown (its wait
                                         // answered a display frame) and the clock ran: what reached the glass
                                         // from it (`plane_published` counts hidden ones too)
-    bool plane_shown;                   // the plane is placed and the show thread's last wait (a poke aside)
-                                        // was answered by a display frame: the kernel shows it
     uint64_t plane_placed_runs;         // the runs of them begun (a run ends when the plane is not placed,
                                         // not shown, or the clock stops)
     int64_t plane_placed_first_us;      // micros() of the first of the latest run; 0 none yet
