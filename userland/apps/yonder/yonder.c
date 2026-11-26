@@ -10278,7 +10278,6 @@ static bool paint_lines(DiagText *t, DiagText *u)
         plane_reading(t, &s_videos[i], &vf);
     }
     plane_counts_reading(t);
-    heap_regions_reading(t);
 
     // The bells the loop took, then the ticker's own counts: its rings —
     // more than the bells when rings were made before the loop took one —
@@ -10682,9 +10681,12 @@ static bool effects_lines(DiagText *e)
 
 static void diag_paint(Page *p)
 {
-    DiagText t = {0}, u = {0}, w = {0};
+    DiagText t = {0}, u = {0}, w = {0}, h = {0};
     bool timed = paint_lines(&t, &u);
     yonder_diag_fact(p->diag, "paint", dt_text(&t));
+    heap_regions_reading(&h);
+    yonder_diag_fact(p->diag, "heap", dt_text(&h));
+    os64_free(h.s);
     if (timed)
         yonder_diag_fact(p->diag, "paint stages", dt_text(&u));
     else
@@ -10749,11 +10751,13 @@ static void diag_thread_reading(Page *p, uint32_t n)
 // scrolled, before they start again (diag_asked): each reading adds one.
 static void diag_paint_reading(Page *p, uint32_t n)
 {
-    DiagText t = {0}, u = {0}, v = {0}, w = {0};
+    DiagText t = {0}, u = {0}, v = {0}, w = {0}, h = {0};
     bool timed = paint_lines(&t, &u);
     bool whole = whole_lines(&w);
-    dt_put(&v, "at y %ld: %s%s%s%s%s", (long)g.sy, dt_text(&t), timed ? " | " : "", timed ? dt_text(&u) : "",
-           whole ? " | whole views: " : "", whole ? dt_text(&w) : "");
+    heap_regions_reading(&h);
+    dt_put(&v, "at y %ld: %s%s%s | %s%s%s", (long)g.sy, dt_text(&t), timed ? " | " : "", timed ? dt_text(&u) : "",
+           dt_text(&h), whole ? " | whole views: " : "", whole ? dt_text(&w) : "");
+    os64_free(h.s);
     char key[32];
     os64_snprintf(key, sizeof(key), "paint reading %u", (unsigned)n);
     yonder_diag_reading_fact(p->diag, key, dt_text(&v));
@@ -14375,15 +14379,15 @@ static void plane_reading(DiagText *t, const Video *v, const os64_media_player_f
 }
 
 // The record's words for the planes of the whole window.
-// The heap's regions since the reading began, in every reading: each a
-// kernel map or unmap made under libos64's one heap lock, which the
-// player's threads wait on too (a region is an allocation of 128 KiB or
-// more, or a pool).
+// The heap's regions since the reading began, a line of its own in every
+// reading: each a kernel map or unmap made under libos64's one heap lock,
+// which the player's threads wait on too (a region is an allocation of
+// 128 KiB or more, or a pool).
 static void heap_regions_reading(DiagText *t)
 {
     os64_heap_report_t heap;
     os64_heap_report_copy(&heap);
-    dt_put(t, "; the heap's regions taken from the kernel %lu, given back %lu",
+    dt_put(t, "the heap's regions taken from the kernel %lu, given back %lu",
            (unsigned long)(heap.calls_map - s_plane_counts.heap_maps),
            (unsigned long)(heap.calls_unmap - s_plane_counts.heap_unmaps));
 }
