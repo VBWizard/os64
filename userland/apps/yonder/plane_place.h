@@ -22,7 +22,8 @@ typedef enum {
     YONDER_PLANE_NOT_COVER,     // the paint does not copy its picture plain (a group, a cut line, covers off)
     YONDER_PLANE_BACKDROP,      // a box that reads what is beneath it may read the picture
     YONDER_PLANE_CLIP_MEETS,    // its clip meets the clip of a video placed before it at this paint
-    YONDER_PLANE_NOT_LAYER,     // what is painted over it is no layer (yonder_plane_layer's `disagree`)
+    YONDER_PLANE_NOT_LAYER,     // what is painted over it could not be taken as a layer (yonder_plane_layer's
+                                // `disagree`, or a layer that could not be made)
     YONDER_PLANE_BUDGET,        // what is painted over it needs more overlay than the kernel blends
     YONDER_PLANE_UNPAINTED,     // a part of its clip not yet painted since its picture last moved
     YONDER_PLANE_NOT_READY,     // the plane holds no picture of the fitted size, or not `shown`'s
@@ -32,7 +33,8 @@ typedef enum {
 
 typedef struct {
     bool on_view, cover, backdrop, clip_meets;
-    bool not_layer;             // a paint found what lies over it no layer, and none since found it one
+    bool not_layer;             // a paint could not take what lies over it as a layer, and the map has not
+                                // known all of the clip since (yonder_plane_map_forget)
     bool over_budget;           // its overlays' union is past the kernel's budget
     bool unpainted;             // the map does not know all of the clip (yonder_plane_map_known)
     bool ready;                 // the plane holds a picture of the fitted size
@@ -116,11 +118,13 @@ void yonder_plane_layer(const uint32_t *b, const uint32_t *w, size_t n, uint32_t
 // into one, and then, while more than `max` are left, the two whose
 // bounding box adds the least area joined. `*area` is their union's area,
 // the measure the kernel's overlay budget is in. At most `max` in `out`.
+// Past YONDER_PLANE_RUNS_MAX runs, the one rectangle bounding them all.
+// The runs are kept in storage of the function's own: one call at a time.
 #define YONDER_PLANE_RUNS_MAX 512
 uint32_t yonder_plane_map_overlays(const yonder_plane_map_t *m, yonder_plane_rect_t clip, yonder_plane_rect_t *out,
                                    uint32_t max, uint64_t *area);
 
-// The area of the union of `n` rectangles.
+// The area of the union of `n` rectangles, the first 64 of them counted.
 uint64_t yonder_plane_union_area(const yonder_plane_rect_t *r, uint32_t n);
 
 #endif

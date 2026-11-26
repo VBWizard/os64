@@ -386,6 +386,36 @@ of § 3.5's rules.
   `video-held.html` (through a three-second hold the plane published 100
   pictures and dropped none; with `--plane=off` 28 shown and 77 dropped),
   `video-leave.html` and `video-five.html`.
+- **P3b**: what the page draws over a picture rides the plane as a layer
+  (`apps/yonder/yonder.c` § Videos on planes, THE LAYERS). Where a render may
+  have drawn over a mapped video's picture, the part's bounds are painted
+  twice more from the video up (`plane_layer_paint`: `yonder_paint_from`
+  with the glass's clip empty until `pane_video` for that video, which puts
+  it back and draws nothing, so the box's own background beneath the
+  picture is skipped) over black and over white, and `yonder_plane_layer`
+  takes the layer apart; the map is inked from the layer's coverage and the
+  widgets noted over the clip, and gives the overlays
+  (`yonder_plane_map_overlays`: rows of inked tiles as runs, grown down,
+  joined by least added area to eight). The hole holds the layer, zero where
+  there is none, and a widget's pixels as painted with the top byte 255. The
+  place's edit carries the overlays, and a change of them is a change of
+  place. New reasons: not a layer (a pixel's channels disagreeing by more
+  than one, or a layer that could not be made: the part is forgotten in the
+  map until a paint can say), the overlays' budget (the kernel's 98,304
+  pixels; or more drawn over the pictures than one paint keeps account of),
+  not yet painted. The non-source-over readers (a backdrop filter, a blend
+  other than normal) were already P3a's "a backdrop reader"; every other
+  verb composes source over. `--plane-check[=N]` composes the hole with the
+  kernel's own `plane_blend` (built into yonder by `plane_blend.c`) against
+  the page's pixels, counted per video in the record. Proof: the host cases
+  in `tools/test_yonder_planes.inc` (an opaque box, black over black, a
+  filtered box, half-red controls and a caption, a widget, the budget, a
+  layer that cannot be made, a wrong layer the check finds) with hand
+  mutants, the core's in `tools/test_plane_place_host.sh` (the layer
+  arithmetic against a reference, the overlays against a per-pixel count,
+  the union's area, forgetting); on QEMU `video-controls.html`,
+  `video-header.html` and `video-pair.html` placed through their overlays,
+  `video-backdrop.html` leaving and coming back with its reader.
 - **Open**: kept pairs of smaller classes can fill
   a task's budget for its life, so a larger plane is refused until it dies
   (beside one 4K pair in use, two kept 1080p pairs leave no room in 128 MiB
@@ -534,9 +564,9 @@ the page from `shown`.
   it), so the coverage comes from **two paints** of the covered part from the
   video up, once over black and once over white, the video's own verb
   drawing nothing: B = C·a and W = C·a + 255·(1 − a), so the pixel is B with
-  a = 255 − (W − B) in its top byte, exact at 0 and 255 and within § 5.6's 1
-  between. The second paint is skipped when the walk drew nothing over the
-  part.
+  a = 255 − (W − B) in its top byte, exact at 0 and 255 and within § 5.6's
+  two between. Both paints are skipped where the render cannot have drawn
+  over the picture: no draw noted there and every pixel `shown`'s.
 - **What the two paints rest on, as a rule**: everything painted over the
   part is, pixel by pixel, content plus what lies beneath times (1 − a).
   Anything else that meets a clip (a backdrop filter, a blend mode, any
@@ -628,7 +658,12 @@ plane does not prevent.
   a channel, because several see-through paints flattened into one layer and
   blended once round differently from the same paints blended in turn (a
   channel of 192 under two blacks of alpha 64 and 192 is 36 one way and 35
-  the other). Differences of 1 are counted; anything more names the element.
+  the other), and by 2 where the coverage, measured from green, is one off
+  that channel's own (the disagreement § 5.2 allows), whose share of the
+  picture is then one off at most. Differences of 1 and of 2 are counted
+  apart; anything more, or coverage outside every overlay, is wrong, and the
+  first wrong pixel of a paint is said with where it is. (Measured on QEMU:
+  the 2s are a few in a million, all at partial coverage.)
 - Fixtures: a video while a script holds the page's thread
   (`video-held.html`); a video's session closed while its page stays, and a
   navigation that takes seconds to arrive (`video-leave.html`,
@@ -639,7 +674,8 @@ plane does not prevent.
   while scrolling, its top cut by the header; an overlay that moves and one
   that goes away across a partial repaint; two videos that overlap, with a
   translucent overlay over both; with a backdrop reader shown and hidden
-  while playing; resized while playing; five at once.
+  while playing; resized while playing; five at once (`video-controls.html`,
+  `video-header.html`, `video-pair.html`, `video-backdrop.html`).
 - The record: per video, pictures published by the plane, display frames
   missed, time on the plane against time on the page's paint and why, the
   page thread's paints the video caused (expected: none while on the plane).

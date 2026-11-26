@@ -3593,7 +3593,7 @@ typedef struct {
     uint32_t placed_name;
     os64_gui_rect_t placed_origin, placed_clip;     // window coordinates
     // This paint's plan, from planes_prepare to planes_publish.
-    bool candidate;                     // every reason allows the place but what lies over the picture
+    bool candidate;                     // every reason asked before the render allows the place (planes_judge asks the rest)
     bool mapped;                        // a cover with its map laid: the render tells the map (planes_judge)
     bool drawn;                         // its box painted in the paint part under way: a cut after it is over it
     bool not_layer;                     // a paint could not take what lies over it as a layer, and the map
@@ -3621,7 +3621,8 @@ typedef struct {
     uint64_t moves_on, moves_off, placed_paints;
     uint64_t layers_made, layer_pixels, layers_refused;     // the two paints, what they covered, and those
                                                             // that were no layer or could not be made
-    uint64_t checked, checked_near, checked_wrong;          // --plane-check: pixels, off by one, wrong
+    uint64_t checked, checked_near, checked_two, checked_wrong;     // --plane-check: pixels, off by one, by
+                                                                    // two, wrong
     // WHAT REACHED THE GLASS (the --video-rate line and the record): the
     // page's paints of a new picture in its box that their publish left off
     // its plane (videos_glass_published), and the plane's pictures
@@ -4913,8 +4914,10 @@ static bool s_planes_off_asked;
 // kernel's own blend (plane_blend, kernel/src/gui/plane_compose.c, built
 // into yonder by plane_blend.c) and compared with what the page painted
 // there: a pixel whose content is opaque or see-through must match, one
-// between may differ by one in a channel (VIDEO_PLANE.md § 5.6), and a
-// pixel with coverage outside every overlay is wrong. Counted per video in
+// between may differ by one in a channel from the blend's rounding and by
+// two where its coverage, measured from green, is one off a channel's own
+// (VIDEO_PLANE.md § 5.6), counted apart; anything more, or a pixel with
+// coverage outside every overlay, is wrong. Counted per video in
 // the record, the first wrong pixel of each paint said on the console.
 static uint32_t s_plane_check, s_plane_check_due;
 uint32_t plane_blend(uint32_t content, uint32_t picture);
@@ -11999,8 +12002,8 @@ static void glass_paint(void)
     uint32_t count = os64_ui_render_list(&g.ui, damage);
     if (count > 0)
         view_damage_check(&g.view, g.ui.ctx);
-    // A video found with something over its picture leaves its plane: its
-    // old clip, marked by the judge, is painted again with the picture, and
+    // A video that stops qualifying at the judge leaves its plane: its old
+    // clip, marked by the judge, is painted again with the picture, and
     // that render is judged in turn.
     for (uint32_t from = 0, pass = 0; count > 0 && pass < PLANE_RENDERS_AGAIN && planes_judge(damage, from, count);
          pass++) {
@@ -13535,7 +13538,7 @@ static void videos_tick(void)
         video_rate_say();
 }
 
-// ── Videos on planes (VIDEO_PLANE.md § 5, P3a) ─────────────────────────
+// ── Videos on planes (VIDEO_PLANE.md § 5) ──────────────────────────────
 //
 // A video whose player has a plane is shown by the kernel from the
 // player's own show thread, and the page paints a hole where its picture
@@ -13553,14 +13556,21 @@ static void videos_tick(void)
 //   placed has its whole clip marked, so the render paints all of it, and
 //   one leaving its plane has its old clip marked, so the picture is
 //   painted back where the hole was;
-// - planes_judge, after the render: what the render drew over each
-//   picture (the map, plane_place.h) is every cut a glass verb made after
-//   the video's own box and every shown widget painted after the view, over
-//   its clip, and every pixel of the clip that differs from `shown`, from
-//   which the render painted the picture. A video is placed only with
-//   nothing over its picture: planes_hole then sets the clip's pixels to
-//   zero, see-through (§ 3.3). A placed video found with something over it
-//   leaves, its clip painted again with the picture before the publish;
+// - planes_judge, after the render: where the render may have drawn over a
+//   picture (a cut a glass verb made after the video's own box, a shown
+//   widget painted after the view, or a pixel of the clip that differs from
+//   `shown`, from which the render painted the picture), the part is
+//   painted twice more from the video up, over black and over white, and
+//   what lies over the picture taken apart as a layer: its colour,
+//   premultiplied, and its coverage (THE LAYERS). The map (plane_place.h)
+//   keeps which tiles carry any, across partial paints, and gives the
+//   overlay rectangles, joined to the kernel's eight. A video is placed
+//   with those overlays unless what lies over it was no layer, needs more
+//   overlay than the kernel blends, or covers a part not yet painted;
+//   planes_hole then writes the layer into the clip, zero (see-through)
+//   where there is none, and keeps a widget's pixels as painted, opaque
+//   (§ 3.3). A placed video that stops qualifying leaves, its clip painted
+//   again with the picture before the publish;
 // - planes_publish: the edits, with damage covering every rectangle
 //   rendered and every clip they change (the kernel's rule 2), or the
 //   plain publishes when there are none. A refused publish is published
@@ -14062,8 +14072,8 @@ static void plane_reading(DiagText *t, const Video *v, const os64_media_player_f
                (unsigned long)v->layers_made, (unsigned long)v->layer_pixels, (unsigned long)v->layers_refused,
                v->placed ? v->placed_noverlays : 0u, (unsigned long)(v->placed ? v->overlay_area : 0));
     if (v->checked > 0)
-        dt_put(t, "; plane-check %lu pixels, off by one %lu, wrong %lu", (unsigned long)v->checked,
-               (unsigned long)v->checked_near, (unsigned long)v->checked_wrong);
+        dt_put(t, "; plane-check %lu pixels, off by one %lu, by two %lu, wrong %lu", (unsigned long)v->checked,
+               (unsigned long)v->checked_near, (unsigned long)v->checked_two, (unsigned long)v->checked_wrong);
 }
 
 // The record's words for the planes of the whole window.
@@ -14193,9 +14203,13 @@ static void plane_check_row(Video *v, int32_t x, int32_t y, const uint32_t *pain
             d = d < 0 ? -d : d;
             far = d > far ? d : far;
         }
-        bool wrong = (!inside && a != 0) || far > 1 || (far == 1 && (a == 0 || a == 255));
+        // A coverage between 0 and 255 is measured within one of each
+        // channel's own (yonder_plane_layer takes green's), which can add
+        // one to the blend's own rounding: two, counted apart.
+        bool wrong = (!inside && a != 0) || far > 2 || (far >= 1 && (a == 0 || a == 255));
         v->checked++;
         v->checked_near += !wrong && far == 1;
+        v->checked_two += !wrong && far == 2;
         v->checked_wrong += wrong;
         if (wrong && !*said) {
             *said = true;

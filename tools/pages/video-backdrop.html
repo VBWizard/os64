@@ -1,0 +1,30 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>A video under a backdrop reader</title>
+<!--
+  VIDEO_PLANE.md § 5.2, P3b's fixture for what cannot be a layer. A box
+  that blurs what lies beneath it (backdrop-filter) is shown over the
+  picture for three seconds and hidden for three. What it draws depends on
+  the picture, so while it shows the video is painted by the page (the
+  record's reason: a backdrop reader), and when it goes the video goes back
+  onto its plane.
+
+  What to read: the record's video line (`d`): the moves each way, the time
+  placed and the time by reason.
+-->
+<style>
+  body { font: 16px sans-serif; margin: 16px; background: #223; color: #ddd; }
+  #box { position: relative; width: 480px; height: 270px; }
+  video { display: block; width: 480px; height: 270px; background: #000; }
+  #glass { position: absolute; left: 60px; top: 60px; width: 200px; height: 100px;
+           backdrop-filter: blur(6px); background: rgba(255, 255, 255, .15); }
+</style>
+<h1>A video under a backdrop reader</h1>
+<div id="box">
+  <video id="v" src="bbb-480p-3s-av.mp4" autoplay muted loop></video>
+  <div id="glass"></div>
+</div>
+<script>
+  const glass = document.getElementById('glass');
+  setInterval(function () { glass.style.display = glass.style.display === 'none' ? '' : 'none'; }, 3000);
+</script>
