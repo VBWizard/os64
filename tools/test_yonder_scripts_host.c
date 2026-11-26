@@ -2175,6 +2175,7 @@ static void motion_cases(void) {
     memset(g.page.way.url,'a',sizeof(g.page.way.url)-1);
     g.page.way.url[sizeof(g.page.way.url)-1]='\0';
     g.scripts_on=true;
+    s_diag.on=true;     /* the scripts' mode is said with diagnostics on */
     say_laid_out(MOTION_COST_MS+1);
     size_t len=strlen(g.status_text);
     const char *modes="SCRIPTS ON | ANIMATIONS PAUSED: the layout took 201 ms, over 200 | aaa";
@@ -2185,6 +2186,10 @@ static void motion_cases(void) {
     check(strcmp(g.status_text,"SCRIPTS ON | ANIMATIONS PAUSED: the layout took 201 ms, over 200 | "
                  "Page says: hello")==0,
         "motion: a message in the status row keeps the pause said before it");
+    s_diag.on=false;
+    status_rest("Page says: hello");
+    check(strcmp(g.status_text,"ANIMATIONS PAUSED: the layout took 201 ms, over 200 | Page says: hello")==0,
+        "status: with diagnostics off, scripts running are not said, and the pause still is");
     g.scripts_on=false;
     os64_strcopy(g.page.way.url,sizeof(g.page.way.url),was);
     free(was);
@@ -5943,10 +5948,12 @@ static void geometry_cases(void)
         "var rects=box.getClientRects();eq(rects.length,1);eq(rects[0].width,150);eq(rects[0].height,50);"
         "box.setAttribute('data-geometry-pass','yes');"
         "</script>",true);
+    s_diag.on=true;     /* the forced layouts are said with diagnostics on */
     check(script_turn(), "geometry script task completes and rebuilds");
     const os64_html_attr_t *passed=os64_html_attr(probe_id("box"),"data-geometry-pass");
     check(passed!=NULL && os64_streq(passed->value,"yes"), "geometry script reaches every numeric assertion");
     check(strstr(g.status_text,"forced 2 layouts") != NULL, "status reports forced layouts and repeated reads reuse them");
+    s_diag.on=false;
     os64_dom_geometry_t value;
     const os64_html_node_t *fixed=probe_id("fixed");
     check(yonder_geometry_snapshot(g.page.way.doc,g.page.tree,fixed,800,600,1000,
@@ -6294,7 +6301,9 @@ static void geometry_failure_cases(void)
     /* One native layout a second longer than the page's whole task budget. */
     int64_t overrun_us=((int64_t)g.script_ms+1000)*1000;
     geometry_layout_delay=overrun_us;
+    s_diag.on=true;     /* the forced layouts are said with diagnostics on */
     script_turn();
+    s_diag.on=false;
     geometry_layout_delay=0;
     clock_us=10000000;
     os64_dom_geometry_stats_t stats=yonder_scripts_geometry_stats(g.page.scripts,false);
@@ -6685,11 +6694,16 @@ static void join_every_kind_counts(void) {
         "join: every kind of task is on its way");
     check(loop_settle() && g.page.tree!=NULL,"join: the counting page arrives");
     now_ms+=50;
+    s_diag.on=true;     /* the forced layouts are said with diagnostics on */
     check(script_turn() && status_says("Script forced 1 layouts in"),
         "join: a timer that forces a layout says so on the status line");
+    s_diag.on=false;
+    status_rest("before the click");
     input_click_at("box");
     check(attr_is(probe_id("box"),"style","height:10px;width:15px"),
         "join: the click listener ran");
+    check(strcmp(g.status_rest,"before the click")==0 && strstr(g.status_text,"Script forced")==NULL,
+        "status: with diagnostics off, a task that forced a layout says nothing and leaves the line");
     check(audit_forced("script http://fixture.test/final#inline-1",1) &&
           audit_forced("script http://fixture.test/final#inline-2",1) &&
           audit_forced("script http://fixture.test/a.js",1),
@@ -6712,7 +6726,9 @@ static void join_click_overrun(void) {
         "b.setAttribute('data-after','bad')});</script>");
     check(loop_settle() && g.page.tree!=NULL && !g.stream.active,"join: the overrunning page arrives");
     geometry_layout_delay=((int64_t)g.script_ms+1000)*1000;
+    s_diag.on=true;     /* the forced layouts are said with diagnostics on */
     input_click_at("go");
+    s_diag.on=false;
     geometry_layout_delay=0;
     clock_us=10000000;
     /* The navigation the link starts writes the status line after it; the

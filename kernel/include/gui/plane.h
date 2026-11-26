@@ -28,13 +28,16 @@
 // The most a task's planes and kept pairs may hold, pairs being prepared
 // counted: two 3840x2160-class pairs, or eight 1920x1080-class ones.
 #define GUI_PLANE_BYTES (128ull << 20)
-// The most pixels a place's overlay rectangles may cover together: about a
-// player's control strip across a 1080p picture. The compositor blends
-// each of them under kGuiLock at every picture, so this is a time bound
-// (VIDEO_PLANE.md § 3.3) for a hold of about a millisecond: the P5 priced
-// a blended pixel at 6.6 to 7.0 ns on 2026-11-25 (planetest, the composer
-// with its channels in 64-bit lanes), so this many take about 0.7 ms.
-#define GUI_PLANE_OVERLAY_PIXELS 98304u
+// The most pixels a place's overlay rectangles may cover together. The
+// compositor blends each of them under kGuiLock at every picture, so this
+// is a time bound (VIDEO_PLANE.md § 3.3): the P5 prices a blended pixel at
+// 6.6 to 7.0 ns (planetest, the composer with its channels in 64-bit lanes),
+// so all of them take about 2.7 ms. It holds a real player's controls: on
+// the P5 on 2026-11-26 a player's bar alone covered 78,896 px and its seek
+// preview 130,784 to 143,616, and with 143,616 blended at every picture the
+// compositor's late frames were 92 of 32,719 (0.28%, each shown one refresh
+// late, none torn) and the plane lock's worst hold 1.74 ms.
+#define GUI_PLANE_OVERLAY_PIXELS 393216u
 
 typedef enum {
 	GUI_PLANE_FREE,       // no plane in this slot

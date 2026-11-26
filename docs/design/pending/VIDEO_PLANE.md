@@ -134,9 +134,14 @@ so the place says where it is worth reading:
   edit is the whole list for the place, not what was just painted, so every
   content pixel inside the union must carry a true top byte, the gaps between
   two controls included.
-- **The overlay area has a budget** (`GUI_PLANE_OVERLAY_PIXELS`, one number):
-  an edit whose union is larger is refused, and the window's side paints the
-  video itself. Eight rectangles bound the list; this bounds the work.
+- **The overlay area has a budget** (`GUI_PLANE_OVERLAY_PIXELS`, one number,
+  393,216 pixels, about 2.7 ms of blending at the P5's price): an edit whose
+  union is larger is refused, and the window's side paints the video
+  itself. Eight rectangles bound the list; this bounds the work. The number
+  holds a real player's bar and its seek preview (the P5 on 2026-11-26: the
+  bar alone 78,896 px, the preview up to 143,616), and was 98,304 (about
+  0.7 ms) until those runs showed the compositor's late frames at 0.28%
+  with 143,616 blended.
 - With no overlay rectangles (a video with nothing over it) the compositor's
   work for a new picture is row copies only.
 
@@ -308,7 +313,8 @@ of § 3.5's rules.
   byte against every byte) with 22 mutants. The blend works on all four
   channels in 16-bit lanes of one 64-bit word; the P5 priced it at 6.6 to
   7.0 ns a blended pixel and about 2 ns one read and found opaque or clear
-  (2026-11-25), which `GUI_PLANE_OVERLAY_PIXELS` rests on (about 0.7 ms).
+  (2026-11-25), which `GUI_PLANE_OVERLAY_PIXELS` rests on (about 2.7 ms at
+  its 393,216 pixels).
 - **P1c**: the calls (syscalls 71 to 75: create, surface, publish, destroy,
   and `window_publish_edits`), `kernel/src/gui/plane.c`, the ABI in
   `os64/gui.h` § Planes. A pair of stores and its record are made outside
@@ -407,7 +413,7 @@ of § 3.5's rules.
   instead of asking again. New reasons: not a layer (a pixel's channels
   disagreeing by more than one, or a layer that could not be made: the part
   is forgotten in the map until a paint can say), the overlays' budget (the
-  kernel's 98,304 pixels), not yet painted. The non-source-over readers (a backdrop filter, a blend
+  kernel's budget, § 3.3), not yet painted. The non-source-over readers (a backdrop filter, a blend
   other than normal) were already P3a's "a backdrop reader"; every other
   verb composes source over. `--plane-check[=N]` composes the hole with the
   kernel's own `plane_blend` (built into yonder by `plane_blend.c`) against
@@ -421,6 +427,24 @@ of § 3.5's rules.
   the union's area, forgetting); on QEMU `video-controls.html`,
   `video-header.html` and `video-pair.html` placed through their overlays,
   `video-backdrop.html` leaving and coming back with its reader.
+- **P3c**: P3b as Chris's P5 runs found it, five things fixed. Layers only
+  where the page changed something (`planes_take_changes`: marks kept at
+  `mark_part` with the video whose own picture they marked, since libui
+  folds a page mark inside the box into the picture's rectangle; libui's
+  damage entries no mark made, for a widget's own invalidation), per
+  changed part (`yonder_plane_join`, shared with the overlays), waiting for
+  a video no layer can place and a quarter second apart for one off for no
+  layer or the budget. Buffers kept: the layers', a pass's and the check's
+  row (`plane_buf`). The edit publish's damage is what rule 2 asks (an
+  overlays-only change, its overlays) plus the damage rectangles meeting a
+  changed place's clip, each whole; the rest goes plain, first. The record:
+  no layer by cause, the disagreement's spread (2, 3, 4, 5 or more) and its
+  first pixel with the element there; the passes waited for; the buffers
+  grown; the heap's regions taken and given back; the largest overlay area
+  asked for and the largest the budget refused; a plane's end with the
+  frame wait's answer, which is also said on the console, and the asks
+  after it. The rate line's bridge to a run's first picture runs from the
+  run before's last publish when that is later than the last fold.
 - **Open**: kept pairs of smaller classes can fill
   a task's budget for its life, so a larger plane is refused until it dies
   (beside one 4K pair in use, two kept 1080p pairs leave no room in 128 MiB
@@ -555,7 +579,12 @@ lived reasons should drop `want` later.
 The plane is asked for at a video's **first cover**, from a thread of its
 own (the ask waits for the plane to be made), and kept until the session
 closes: a video that stops qualifying keeps its plane hidden, painted by
-the page from `shown`.
+the page from `shown`. A plane that **ends** while its session plays (the
+show thread's frame wait answered an error; the answer is in the record
+and on the console) is not meant to happen; it is asked for again, no
+sooner than a second after the end (and only once it is a cover in view
+again), three times a session, each counted. A refused plane is not: that
+answer does not change.
 
 ### 5.2 What the page paints instead of the picture
 
@@ -570,8 +599,30 @@ the page from `shown`.
   video up, once over black and once over white, the video's own verb
   drawing nothing: B = C·a and W = C·a + 255·(1 − a), so the pixel is B with
   a = 255 − (W − B) in its top byte, exact at 0 and 255 and within § 5.6's
-  two between. Both paints are skipped where the render cannot have drawn
-  over the picture: no draw noted there and every pixel `shown`'s.
+  two between. Both paints are made only where the page CHANGED something
+  over the picture at this paint (a view mark other than the video's own
+  picture's, another video's picture, a change of place, a rectangle the
+  render adds itself, and a widget's own invalidation, unless libui folds it
+  into the video's own picture's rectangle: that one is lost, which delays
+  only what an off-plane video's map knows, since a placed video marks no
+  picture of its own), and there only where the render may have drawn over
+  it (a draw noted, or a pixel not `shown`'s): a video's own new picture
+  repaints its box and everything over it, and asks for no layer. Each
+  changed part is its own layer, grown to the map's whole tiles so the map
+  learns every tile it meets, and joined past four a video by least added
+  area, so a moving dot costs its strip. A failed layer leaves its area
+  forgotten, and the next change that meets it at all is layered with all
+  of it. They wait for a video no layer can place (out of view, a backdrop
+  reader, another plane's clip), the changed parts forgotten and learned
+  again whole at the paint that places it; and they are made a quarter
+  second apart at most for one off its plane for no layer or the budget,
+  the parts between owed and marked again when the wait is over, while its
+  forgotten tiles keep it off as not yet painted. A placed video never
+  waits. **No pass, hole or check allocates**: their buffers are kept
+  across paints, grown when needed, let go at a paint with no video mapped
+  or no page shown (a buffer of 128 KiB or more is a kernel map and unmap
+  under libos64's one heap lock, which the player's threads wait on too;
+  allocating three a pass ran the sound dry on the P5).
 - **What the two paints rest on, as a rule**: everything painted over the
   part is, pixel by pixel, content plus what lies beneath times (1 − a).
   Anything else that meets a clip (a backdrop filter, a blend mode, any
