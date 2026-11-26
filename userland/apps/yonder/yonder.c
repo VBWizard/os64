@@ -13483,9 +13483,11 @@ static bool plane_map_on(Video *v, os64_gui_rect_t origin)
 }
 
 // WHAT WAS DRAWN OVER A PICTURE AT THIS PAINT, whatever its colours: every
-// cut a glass verb made after a video's own box in the paint part's order
-// that meets its clip (plane_note_over, from on_glass), and every shown
-// widget libui painted after the view (planes_note_widgets). A pixel that differs
+// rectangle a glass verb drew after a video's own box in the paint part's
+// order that meets its clip (plane_note_over: from on_glass for a verb whose
+// rectangle is its drawing, and from the verb itself, with its drawing's own
+// bounds, for one that hands over a clip), and every shown widget libui
+// painted after the view (planes_note_widgets). A pixel that differs
 // from `shown` says the same, but only when the colours differ: a black
 // overlay on a black frame does not.
 #define PLANE_OVER_MAX 64
@@ -13900,19 +13902,24 @@ static void planes_publish(os64_gui_rect_t *damage, uint32_t *count)
     if (rc == OS64_GUI_ERR_NO_PLANE && owed_sent) {
         // A hide owed may name a plane already gone (its show thread's
         // closing bound passed and the kernel took it out): once more
-        // without the owed hides. Taken, they were what was gone.
+        // without the owed hides, and when that is taken, each owed hide on
+        // its own, so a gone plane's is dropped and a living one's is made.
         all = plain;
         n = planes_edits(edits, &all, false);
         rc = n == 0 ? 0 : os64_gui_window_publish_edits(g.win, &all, edits, n);
         if (n == 0)
             for (uint32_t k = 0; k < *count; k++)
                 os64_draw_publish(g.ui.ctx, &damage[k]);
-        if (rc == 0)
-            for (int32_t i = 0; i < PLANE_HIDES_MAX; i++)
-                if (s_plane_hides[i].owed) {
-                    s_plane_counts.hides_dropped++;
-                    plane_hide_free(i);
-                }
+        for (int32_t i = 0; i < PLANE_HIDES_MAX && rc == 0; i++) {
+            if (!s_plane_hides[i].owed)
+                continue;
+            os64_gui_plane_edit_t hide = {.plane = s_plane_hides[i].name, .hide = 1};
+            int64_t one = os64_gui_window_publish_edits(g.win, &s_plane_hides[i].clip, &hide, 1);
+            if (one == OS64_GUI_ERR_NO_PLANE)
+                s_plane_counts.hides_dropped++;
+            if (one == 0 || one == OS64_GUI_ERR_NO_PLANE)
+                plane_hide_free(i);
+        }
     }
     if (rc == 0) {
         if (n > 0) {
@@ -20038,8 +20045,8 @@ typedef struct {
     os64_gui_rect_t whole;
 } Glass;
 
-// A glass verb's cut `r` on the window: noted over each mapped video whose
-// box this paint part has already painted and whose clip it meets.
+// What a glass verb drew, `r` on the window: noted over each mapped video
+// whose box this paint part has already painted and whose clip it meets.
 static void plane_note_over(const Glass *gl, os64_gui_rect_t r)
 {
     if (!s_plane_watch || gl->whole.w <= 0 || r.w <= 0 || r.h <= 0)
@@ -20052,15 +20059,25 @@ static void plane_note_over(const Glass *gl, os64_gui_rect_t r)
     }
 }
 
-// A verb's rectangle moved onto the glass and cut to what is being painted;
-// a cut on the window over a video's clip is noted (plane_note_over).
-static os64_gui_rect_t on_glass(const Glass *gl, os64_gui_rect_t r)
+// A rectangle moved onto the glass and cut to what is being painted, noting
+// nothing: for a verb that hands over a clip rather than what it draws,
+// which notes its drawing's own bounds (plane_note_over).
+static os64_gui_rect_t glass_cut(const Glass *gl, os64_gui_rect_t r)
 {
     r.x += gl->dx;
     r.y += gl->dy;
     os64_gui_rect_t out;
     if (!os64_rect_intersect(r, gl->clip, &out))
         return (os64_gui_rect_t){0, 0, 0, 0};
+    return out;
+}
+
+// A verb's drawing rectangle moved onto the glass and cut to what is being
+// painted; the cut is what it draws, so on the window over a video's clip
+// it is noted (plane_note_over).
+static os64_gui_rect_t on_glass(const Glass *gl, os64_gui_rect_t r)
+{
+    os64_gui_rect_t out = glass_cut(gl, r);
     plane_note_over(gl, out);
     return out;
 }
@@ -20162,13 +20179,22 @@ static void glass_group_close(void *ctx, uint8_t alpha)
 // The verbs that draw something whole — a run, a picture — cut it to
 // `clip`, the painter's view narrowed by any `overflow` that clips the box,
 // met with what is being painted.
+#define TEXT_INK_REACH 8
+
 static void glass_text(void *ctx, const flow_box_t *b, int32_t x, int32_t baseline,
                        os64_gui_rect_t clip, uint32_t colour)
 {
     const Glass *gl = ctx;
-    os64_gui_rect_t cut = on_glass(gl, clip);
+    os64_gui_rect_t cut = glass_cut(gl, clip);
     if (cut.w <= 0 || cut.h <= 0)
         return;
+    // The run's own box, grown by TEXT_INK_REACH for what a face draws past
+    // it (an italic's overhang, a descender), is what it may ink.
+    os64_gui_rect_t run = flow_box_doc_rect(b, scroll_now()), inked;
+    run = (os64_gui_rect_t){run.x + gl->dx - TEXT_INK_REACH, run.y + gl->dy - TEXT_INK_REACH,
+                            run.w + 2 * TEXT_INK_REACH, run.h + 2 * TEXT_INK_REACH};
+    if (os64_rect_intersect(run, cut, &inked))
+        plane_note_over(gl, inked);
     os64_text_draw_alpha(b->run, gl->surf, cut, x + gl->dx, baseline + gl->dy,
                          0xff000000u | colour, flow_alpha(colour));
 }
@@ -20471,7 +20497,7 @@ static bool glass_backdrop(void *ctx, const flow_box_t *b, int32_t layer,
 static void glass_image(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip)
 {
     const Glass *gl = ctx;
-    os64_gui_rect_t cut = on_glass(gl, clip);
+    os64_gui_rect_t cut = glass_cut(gl, clip);
     if (cut.w <= 0 || cut.h <= 0)
         return;
     const Page *p = &g.page;
@@ -20494,6 +20520,9 @@ static void glass_image(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_
             w = (uint32_t)vector_pixels.rect.w;
             h = (uint32_t)vector_pixels.rect.h;
         }
+        os64_gui_rect_t drawn;
+        if (os64_rect_intersect(cut, box, &drawn))
+            plane_note_over(gl, drawn);
         yonder_draw_picture(gl->surf->pixels, gl->surf->pitch_px, cut, box, !b->style->pixelated,
                             px, w, h);
         svg_picture_pixels_free(&vector_pixels);
@@ -20864,9 +20893,10 @@ static void plane_closed_paint(GlassPane *gp, const flow_box_t *b, os64_gui_rect
         if (!h->owed || h->copy == NULL || h->node != b->node || h->doc != page_doc(&g.page) ||
             g.page.tree == NULL || flow_tree_serial(g.page.tree) != h->tree_serial || g.sx != h->sx || g.sy != h->sy)
             continue;
-        os64_gui_rect_t cut = on_glass(gl, clip), met;
+        os64_gui_rect_t cut = glass_cut(gl, clip), met;
         if (!os64_rect_intersect(cut, h->clip, &met))
             continue;
+        plane_note_over(gl, met);
         for (int32_t y = met.y; y < met.y + met.h; y++)
             os64_memcpy(gl->surf->pixels + (size_t)y * gl->surf->pitch_px + met.x,
                         h->copy + (size_t)(y - h->origin.y) * h->copy_w + (met.x - h->origin.x),
@@ -20921,11 +20951,12 @@ static void pane_video(GlassPane *gp, const flow_box_t *b, os64_gui_rect_t c, os
     int64_t began = os64_micros();
     for (int32_t k = 0; k < gp->n; ++k) {
         Glass *gl = gp->now[k];
-        os64_gui_rect_t cut = on_glass(gl, clip);
+        os64_gui_rect_t cut = glass_cut(gl, clip);
         os64_gui_rect_t content = {c.x + gl->dx, c.y + gl->dy, c.w, c.h};
         os64_gui_rect_t box = {at.x + gl->dx, at.y + gl->dy, at.w, at.h};
         if (!os64_rect_intersect(cut, content, &cut) || !os64_rect_intersect(cut, box, &cut))
             continue;
+        plane_note_over(gl, cut);   // over a video painted before it, not over itself (its `drawn` is set after)
         if (fits && gp->n == 1 && gl->whole.w > 0) {
             s_cost.video_plain++;
             s_video_rate_painted++;
@@ -20967,14 +20998,17 @@ static void pane_canvas(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_
     bool consumed = gp->n > 0;
     for (int32_t k = 0; k < gp->n; ++k) {
         Glass *gl = gp->now[k];
-        os64_gui_rect_t cut = on_glass(gl, clip);
+        os64_gui_rect_t cut = glass_cut(gl, clip);
         os64_gui_rect_t content = {c.x + gl->dx, c.y + gl->dy, c.w, c.h};
         if (!os64_rect_intersect(cut, content, &cut)) continue;
         os64_gui_rect_t box = {at.x + gl->dx, at.y + gl->dy, at.w, at.h};
         // What the draw walks: the cut within the bitmap as fitted, which
         // object-fit may leave smaller than the box.
         os64_gui_rect_t walked;
-        if (os64_rect_intersect(cut, box, &walked) && s_canvas_last.targets++ == 0)
+        bool walks = os64_rect_intersect(cut, box, &walked);
+        if (walks)
+            plane_note_over(gl, walked);
+        if (walks && s_canvas_last.targets++ == 0)
             s_canvas_last.drawn = walked;
         consumed &= yonder_canvas_keep_draw(g.canvas_keeps, g.paint_cache, b->node, bitmap.revision,
                                             gl->surf->pixels, gl->surf->pitch_px, cut, box,
@@ -21260,12 +21294,15 @@ static void pane_through_close(void *ctx, uint8_t alpha, bool keep)
         const Glass *on = gp->now[k];
         double lay[6];
         yonder_warp_rebase(t->m, t->bounds.x, t->bounds.y, on->dx, on->dy, lay);
-        os64_gui_rect_t cut = on_glass(on, t->clip);
+        os64_gui_rect_t cut = glass_cut(on, t->clip);
         // What the warp walks: where the sheets land (their corners'
         // whole pixels, as yonder_warp bounds itself) within the cut.
         os64_gui_rect_t lands;
-        if (os64_rect_intersect(flow_affine_rect(lay, (os64_gui_rect_t){0, 0, t->bounds.w, t->bounds.h}), cut,
-                                &lands) && s_warp_targets++ == 0)
+        bool laid = os64_rect_intersect(flow_affine_rect(lay, (os64_gui_rect_t){0, 0, t->bounds.w, t->bounds.h}),
+                                        cut, &lands);
+        if (laid)
+            plane_note_over(on, lands);
+        if (laid && s_warp_targets++ == 0)
             s_warp_laid = lands;
         double back[6];
         if (cut.w > 0 && cut.h > 0 && flow_affine_invert(lay, back))

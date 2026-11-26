@@ -154,13 +154,15 @@ static void plane_cases(void)
     check(!v->place && v->reason == YONDER_PLANE_OVER, "planes: black over a black frame is something over it");
     plane_drop();
 
-    /* Two videos side by side, the second with a background of its own: a
-     * box painted after the first video but under the second's picture is
-     * over neither, and both are placed. */
+    /* Two videos side by side, the second with a background of its own, and
+     * text after both: a box painted after the first video but under the
+     * second's picture is over neither, and text beside them is not over
+     * them however wide the clip it is painted with; both are placed. */
     plane_page("<!doctype html><style>body{margin:0;background:#123}"
                "#v{position:absolute;left:40px;top:40px;width:320px;height:180px}"
-               "#w{position:absolute;left:400px;top:40px;width:320px;height:180px;background:#456}</style>"
-               "<video id=v></video><video id=w></video>");
+               "#w{position:absolute;left:400px;top:40px;width:320px;height:180px;background:#456}"
+               "p{position:absolute;left:730px;top:60px;width:60px;margin:0;font-size:10px}</style>"
+               "<video id=v></video><video id=w></video><p>Text after both videos, over neither.</p>");
     os64_memset(&s_videos[1], 0, sizeof(s_videos[1]));
     s_videos[1].node = probe_id("w");
     s_videos[1].width = s_videos[1].asked_w = 320;
@@ -169,7 +171,7 @@ static void plane_cases(void)
     planes_prepare();
     d = plane_render();
     planes_judge(&d, 0, 1);
-    check(v->place && s_videos[1].place, "planes: two videos side by side, both placed");
+    check(v->place && s_videos[1].place, "planes: two videos side by side and text after them, both placed");
     planes_release();
     os64_free(s_videos[1].tiles);
     os64_memset(&s_videos[1], 0, sizeof(s_videos[1]));
