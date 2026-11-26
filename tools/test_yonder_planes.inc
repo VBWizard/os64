@@ -413,6 +413,41 @@ static void plane_cases(void)
     os64_memset(&s_videos[1], 0, sizeof(s_videos[1]));
     plane_drop();
 
+    /* Two videos that overlap, the second over the first's corner: the
+     * first is placed with the second's picture in its layer (the second
+     * shares its player here, so it draws the same frame), and the layer
+     * passes that draw the second count nothing of the paint's video work. */
+    plane_page("<!doctype html><style>body{margin:0;background:#123}"
+               "#v{position:absolute;left:40px;top:40px;width:320px;height:180px}"
+               "#w{position:absolute;left:200px;top:120px;width:320px;height:180px}</style>"
+               "<video id=v></video><video id=w></video>");
+    os64_memset(&s_videos[1], 0, sizeof(s_videos[1]));
+    s_videos[1].node = probe_id("w");
+    s_videos[1].width = s_videos[1].asked_w = 320;
+    s_videos[1].height = s_videos[1].asked_h = 180;
+    s_videos[1].seen.picture = true;
+    s_plane_check = 1;
+    planes_prepare();
+    d = plane_render();
+    {
+        uint64_t plain = s_cost.video_plain, general = s_cost.video_general, us = s_cost.video_draw_us;
+        planes_judge(&d, 0, 1);
+        check(v->place && !s_videos[1].place && s_plane_nlayers >= 1,
+              "planes: two that overlap, the first placed with a layer");
+        check(s_cost.video_plain == plain && s_cost.video_general == general && s_cost.video_draw_us == us,
+              "planes: the layer passes' draws of the second video are no paint's");
+        /* The same damage twice, as a paint's renders may hand it: the
+         * check judges each pixel once, against the page's own paint. */
+        os64_gui_rect_t twice[2] = {d, d};
+        planes_hole(twice, 2);
+        check(v->checked > 0 && v->checked_wrong == 0, "planes: overlapping damage, --plane-check nothing wrong");
+    }
+    s_plane_check = 0;
+    planes_release();
+    os64_free(s_videos[1].tiles);
+    os64_memset(&s_videos[1], 0, sizeof(s_videos[1]));
+    plane_drop();
+
     /* A see-through group laid over the whole video, whose one child draws
      * beside the picture: opening the group draws nothing, so the video is
      * placed. */

@@ -14220,10 +14220,18 @@ static bool planes_judge(const os64_gui_rect_t *damage, uint32_t from, uint32_t 
 // `--plane-check`'s judgement of one row of `v`'s hole: `painted` the
 // page's pixels, `content` what the hole now holds, `n` from (x, y).
 static void plane_check_row(Video *v, int32_t x, int32_t y, const uint32_t *painted, const uint32_t *content,
-                            int32_t n, bool *said)
+                            int32_t n, const os64_gui_rect_t *earlier, uint32_t nearlier, bool *said)
 {
     const uint32_t *pic = v->view.pixels + (size_t)(y - v->origin.y) * v->view.w + (x - v->origin.x);
     for (int32_t i = 0; i < n; i++) {
+        // A pixel an earlier damage rectangle reached was judged there,
+        // against the page's own paint; here it already holds the hole.
+        bool seen = false;
+        for (uint32_t e = 0; e < nearlier && !seen; e++)
+            seen = x + i >= earlier[e].x && x + i < earlier[e].x + earlier[e].w && y >= earlier[e].y &&
+                   y < earlier[e].y + earlier[e].h;
+        if (seen)
+            continue;
         bool inside = false;
         for (uint32_t k = 0; k < v->noverlays && !inside; k++) {
             const os64_gui_rect_t *o = &v->overlays[k];
@@ -14269,18 +14277,10 @@ static void planes_hole(const os64_gui_rect_t *damage, uint32_t count)
         check = s_videos[i].node != NULL && s_videos[i].place;
     if (check)
         check = s_plane_check_due++ % s_plane_check == 0;
-    // A row of the page's pixels, kept for the check, taken before anything
-    // changes: with no memory for it every place of this publish is given
-    // up, while the clips still hold the page's paint of the picture.
-    uint32_t *painted = os64_malloc((size_t)(s->width > 0 ? s->width : 1) * 4);
-    if (painted == NULL) {
-        for (int32_t i = 0; i < VIDEOS_MAX; i++)
-            if (s_videos[i].node != NULL && s_videos[i].place) {
-                s_videos[i].place = s_videos[i].candidate = false;
-                plane_reason_set(&s_videos[i], YONDER_PLANE_NOT_LAYER);
-            }
-        return;
-    }
+    // A row of the page's pixels, for the check alone: with no memory for
+    // it this paint goes unchecked, and the holes are cut all the same.
+    uint32_t *painted = check ? os64_malloc((size_t)(s->width > 0 ? s->width : 1) * 4) : NULL;
+    check = check && painted != NULL;
     for (int32_t i = 0; i < VIDEOS_MAX; i++) {
         Video *v = &s_videos[i];
         if (v->node == NULL || !v->place)
@@ -14292,7 +14292,8 @@ static void planes_hole(const os64_gui_rect_t *damage, uint32_t count)
                 continue;
             for (int32_t y = met.y; y < met.y + met.h; y++) {
                 uint32_t *row = s->pixels + (size_t)y * s->pitch_px + met.x;
-                os64_memcpy(painted, row, (size_t)met.w * 4);
+                if (check)
+                    os64_memcpy(painted, row, (size_t)met.w * 4);
                 os64_memset(row, 0, (size_t)met.w * 4);
                 for (uint32_t l = 0; l < s_plane_nlayers; l++) {
                     const os64_gui_rect_t *a = &s_plane_layers[l].at;
@@ -14303,7 +14304,7 @@ static void planes_hole(const os64_gui_rect_t *damage, uint32_t count)
                                 (size_t)(x1 - x0) * 4);
                 }
                 if (check && v->view.pixels != NULL)
-                    plane_check_row(v, met.x, y, painted, row, met.w, &said);
+                    plane_check_row(v, met.x, y, painted, row, met.w, damage, k, &said);
             }
         }
     }
@@ -21511,17 +21512,18 @@ static void pane_video(GlassPane *gp, const flow_box_t *b, os64_gui_rect_t c, os
         drew = true;
         plane_note_over(gl, cut);   // over a video painted before it, not over itself (its `drawn` is set after)
         if (fits && gp->n == 1 && gl->whole.w > 0) {
-            s_cost.video_plain++;
+            s_cost.video_plain += s_layer.video == NULL;    // a layer pass's draw is no paint's
             for (int32_t y = cut.y; y < cut.y + cut.h; y++)
                 os64_memcpy(gl->surf->pixels + (size_t)y * gl->surf->pitch_px + cut.x,
                             pixels + (size_t)(y - box.y) * pw + (cut.x - box.x), (size_t)cut.w * 4);
         } else {
-            s_cost.video_general++;
+            s_cost.video_general += s_layer.video == NULL;
             yonder_draw_picture(gl->surf->pixels, gl->surf->pitch_px, cut, box, !b->style->pixelated, pixels, pw,
                                 ph);
         }
     }
-    s_cost.video_draw_us += (uint64_t)(os64_micros() - began);
+    if (s_layer.video == NULL)
+        s_cost.video_draw_us += (uint64_t)(os64_micros() - began);
     v->drawn = true;    // what this paint part draws from here is over it
     uint32_t serial = v->view.frame != NULL ? v->view.serial : v->frame.serial;
     if (drew && s_layer.video == NULL && serial != v->glass_serial) {   // a layer pass's draw reaches no glass
