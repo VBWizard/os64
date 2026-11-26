@@ -547,6 +547,42 @@ static void plane_cases(void)
         }
         check(v->layers_capped == capped + 1 && s_plane_counts.layer_passes == before + 1,
               "changes: not yet painted, one pass a quarter second too");
+        /* A change off the tile grid where nothing lies over the picture,
+         * waited for: forgotten and owed; the loop is woken for it; marked
+         * once the wait is over, it is layered with all it left unlearned,
+         * and the map knows those tiles again. */
+        now_ms += PLANE_LAYER_WAIT_MS;
+        v->owed_any = v->unlearned_any = false;         /* nothing owed or unlearned from the cases before */
+        os64_gui_rect_t odd = {109, 349, 3, 3};        /* below the red box, the picture bare, inside one tile */
+        for (int k = 0; k < 2; k++) {
+            g.ui.damage_count = 0;
+            g.ui.any_dirty = false;
+            mark_part(odd);
+            planes_prepare();
+            os64_gui_rect_t dd[OS64_UI_DAMAGE_MAX];
+            uint32_t nd = plane_damage_now(dd);
+            (void)plane_render();
+            planes_judge(dd, 0, nd);
+            planes_release();
+        }
+        os64_gui_rect_t w = {g.view.bounds.x + odd.x, g.view.bounds.y + odd.y, odd.w, odd.h};
+        check(v->owed_any && videos_next() == v->layer_next_ms && !yonder_plane_map_known(&v->map, to_plane_rect(w)),
+              "changes: a waited-for change is owed, forgotten, and the loop woken for it");
+        now_ms = v->layer_next_ms;
+        g.ui.damage_count = 0;
+        g.ui.any_dirty = false;
+        s_nmarks = 0;
+        videos_tick();
+        planes_prepare();
+        {
+            os64_gui_rect_t dd[OS64_UI_DAMAGE_MAX];
+            uint32_t nd = plane_damage_now(dd);
+            (void)plane_render();
+            planes_judge(dd, 0, nd);
+        }
+        planes_release();
+        check(!v->owed_any && yonder_plane_map_known(&v->map, to_plane_rect(w)),
+              "changes: marked when the wait is over, its tiles are learned again whole");
         now_ms = at;
     }
     plane_drop();

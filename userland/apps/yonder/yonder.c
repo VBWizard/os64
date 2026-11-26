@@ -11423,7 +11423,7 @@ static uint64_t plane_rate_due(void);
 // The earliest frame work the shown page has: a layout or a tick for its
 // CSS animations, the Web Animations step and requestAnimationFrame's
 // callbacks, a ResizeObserver step, the pointer's re-hit, a video's
-// picture. Each runs only in
+// picture or a layer pass it owes. Each runs only in
 // an open frame of the display; FRAME_PLAN_NEVER for none.
 static uint64_t frame_work_due(void)
 {
@@ -13283,10 +13283,16 @@ static void videos_turn(void)
 // The earliest a video wants a frame: now, or never.
 static uint64_t videos_next(void)
 {
-    for (int32_t i = 0; i < VIDEOS_MAX; i++)
+    uint64_t due = FRAME_PLAN_NEVER;
+    for (int32_t i = 0; i < VIDEOS_MAX; i++) {
         if (video_wants_frames(&s_videos[i]))
             return yonder_now_ms();
-    return FRAME_PLAN_NEVER;
+        // A layer pass owed when its wait is over (videos_tick marks it):
+        // the loop wakes for it, though nothing else may be due.
+        if (s_videos[i].node != NULL && s_videos[i].owed_any && s_videos[i].layer_next_ms < due)
+            due = s_videos[i].layer_next_ms;
+    }
+    return due;
 }
 
 // `--video-rate[=S]`: every S seconds (5 unless said) while a video on the
@@ -14428,6 +14434,26 @@ static uint32_t plane_changed_parts(const Video *v, const os64_gui_rect_t *damag
     return n;
 }
 
+// `n` layer parts with every two that meet made one (their bounds), so no
+// pixel is painted by two passes. The count left.
+static uint32_t plane_parts_unoverlapped(yonder_plane_rect_t *r, uint32_t n)
+{
+    for (bool joined = true; joined;) {
+        joined = false;
+        for (uint32_t i = 0; i < n && !joined; i++)
+            for (uint32_t j = i + 1; j < n && !joined; j++) {
+                os64_gui_rect_t a = {r[i].x, r[i].y, r[i].w, r[i].h}, b = {r[j].x, r[j].y, r[j].w, r[j].h}, met;
+                if (!os64_rect_intersect(a, b, &met))
+                    continue;
+                os64_gui_rect_t u = os64_rect_union(a, b);
+                r[i] = (yonder_plane_rect_t){u.x, u.y, u.w, u.h};
+                r[j] = r[--n];
+                joined = true;
+            }
+    }
+    return n;
+}
+
 // Whether a pass for `v` waits (VIDEO_PLANE.md § 5.2): it cannot be placed
 // at this paint for a reason no layer cures (out of view, a backdrop
 // reader, another plane's clip; relearned whole at the paint that places
@@ -14506,11 +14532,16 @@ static bool planes_judge(const os64_gui_rect_t *damage, uint32_t from, uint32_t 
         bool capped = false;
         if (nparts > 0 && plane_layers_wait(v, &capped)) {
             for (uint32_t k = 0; k < nparts; k++) {
+                // Forgotten, and unlearned: the next change that meets it
+                // (the owed mark among them) is layered with all of it on
+                // whole tiles, whether or not anything is over it then.
+                os64_gui_rect_t r = {parts[k].x, parts[k].y, parts[k].w, parts[k].h};
                 yonder_plane_map_forget(&v->map, parts[k]);
+                v->unlearned = v->unlearned_any ? os64_rect_union(v->unlearned, r) : r;
+                v->unlearned_any = true;
                 if (capped) {
                     // Owed: marked again once the wait is over, so the last
                     // change of a burst is not dropped.
-                    os64_gui_rect_t r = {parts[k].x, parts[k].y, parts[k].w, parts[k].h};
                     v->owed = v->owed_any ? os64_rect_union(v->owed, r) : r;
                     v->owed_any = true;
                 }
@@ -14541,6 +14572,7 @@ static bool planes_judge(const os64_gui_rect_t *damage, uint32_t from, uint32_t 
                 }
                 v->unlearned_any = false;
             }
+            nlayers = plane_parts_unoverlapped(layers, nlayers);
             nlayers = yonder_plane_join(layers, nlayers, PLANE_LAYERS_A_VIDEO);
             bool made[PLANE_PARTS_MAX];
             for (uint32_t k = 0; k < nlayers; k++)
