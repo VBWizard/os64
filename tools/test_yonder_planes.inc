@@ -136,45 +136,92 @@ static void plane_cases(void)
         planes_release();
     }
 
-    /* Placed, then the page draws over the picture: it leaves, its old clip
+    /* Placed, then what lies over it cannot be taken as a layer (here the
+     * layers' room is full when one is needed): it leaves, its old clip
      * marked to be painted again, and the next edit is its hide. */
     planes_prepare();
     d = plane_render();
     plane_screen.surf.pixels[(size_t)(v->clip.y + 10) * 800 + v->clip.x + 10] ^= 0x00ffffffu;
-    check(planes_judge(&d, 0, 1) && !v->place && v->reason == YONDER_PLANE_OVER,
-          "planes: placed, something drawn over it: it leaves");
+    s_plane_nlayers = PLANE_LAYERS_MAX;
+    check(planes_judge(&d, 0, 1) && !v->place && v->reason == YONDER_PLANE_NOT_LAYER && v->not_layer,
+          "planes: placed, no layer of what lies over it: it leaves");
+    s_plane_nlayers = 0;
     all = d;
     n = planes_edits(edits, &all, true);
     check(n == 1 && edits[0].hide && edits[0].plane == 257, "planes: the leaving video's hide");
     planes_commit();
     check(!v->placed && v->moves_off == 1, "planes: committed, one move off it");
     planes_release();
-    /* The ink goes: the next render tells the map, though the video is no
-     * candidate, and the paint after places it again. */
+    /* The next render tells the map, though the video is no candidate, and
+     * the part forgotten is known again; the paint after places it. */
     planes_prepare();
-    check(!v->candidate && v->reason == YONDER_PLANE_OVER && v->mapped, "planes: inked, still mapped");
+    check(!v->candidate && v->reason == YONDER_PLANE_NOT_LAYER && v->mapped, "planes: no layer, still mapped");
     d = plane_render();
     (void)planes_judge(&d, 0, 1);
+    check(!v->not_layer, "planes: the part painted again is a layer, known");
     planes_release();
     planes_prepare();
-    check(v->candidate, "planes: the ink gone, a candidate again");
+    check(v->candidate, "planes: a candidate again");
     plane_drop();
 
-    /* Something over the picture from the start: never placed. */
+    /* Something opaque over the picture from the start: placed, with an
+     * overlay over it in the edit, the box's pixels opaque in the hole and
+     * the rest of the clip see-through; --plane-check finds nothing wrong. */
     plane_page("<!doctype html><style>body{margin:0;background:#123}"
-               "#v{position:absolute;left:40px;top:40px;width:320px;height:180px}"
+               "#v{position:absolute;left:40px;top:40px;width:320px;height:180px;background:#456}"
                "#o{position:absolute;left:60px;top:60px;width:50px;height:20px;background:red}</style>"
                "<video id=v></video><div id=o></div>");
+    s_plane_check = 1;
     planes_prepare();
     d = plane_render();
     planes_judge(&d, 0, 1);
+    planes_hole(&d, 1);
     all = d;
-    check(!v->place && v->reason == YONDER_PLANE_OVER && planes_edits(edits, &all, true) == 0,
-          "planes: something over it: not placed, no edit");
+    n = planes_edits(edits, &all, true);
+    {
+        os64_gui_rect_t red = {g.view.bounds.x + 60, g.view.bounds.y + 60, 50, 20};
+        bool covered = true, opaque = true, clear = true;
+        for (int32_t y = v->clip.y; y < v->clip.y + v->clip.h; y++)
+            for (int32_t x = v->clip.x; x < v->clip.x + v->clip.w; x++) {
+                uint32_t px = plane_screen.surf.pixels[(size_t)y * 800 + x];
+                bool in_red = x >= red.x && x < red.x + red.w && y >= red.y && y < red.y + red.h;
+                if (in_red) {
+                    opaque &= px == 0xffff0000u;
+                    bool in = false;
+                    for (uint32_t k = 0; k < edits[0].noverlays && !in; k++)
+                        in = x >= edits[0].overlay[k].x && x < edits[0].overlay[k].x + edits[0].overlay[k].w &&
+                             y >= edits[0].overlay[k].y && y < edits[0].overlay[k].y + edits[0].overlay[k].h;
+                    covered &= in;
+                } else {
+                    clear &= px == 0;
+                }
+            }
+        check(v->place && n == 1 && !edits[0].hide && edits[0].noverlays >= 1, "planes: an opaque box over it: placed, overlays in the edit");
+        check(opaque && covered, "planes: the box opaque in the hole, inside the overlays");
+        check(clear, "planes: the rest of the clip see-through");
+        check(v->checked > 0 && v->checked_wrong == 0, "planes: --plane-check, nothing wrong");
+    }
+    planes_release();
+    /* A layer gone wrong (its red made green) is what --plane-check is for. */
+    planes_prepare();
+    d = plane_render();
+    planes_judge(&d, 0, 1);
+    for (uint32_t k = 0; k < s_plane_nlayers; k++) {
+        os64_gui_rect_t at = s_plane_layers[k].at;
+        for (size_t i = 0; i < (size_t)at.w * (size_t)at.h; i++)
+            if (s_plane_layers[k].px[i] == 0xffff0000u)
+                s_plane_layers[k].px[i] = 0xff00ff00u;
+    }
+    {
+        uint64_t wrong = v->checked_wrong;
+        planes_hole(&d, 1);
+        check(v->checked_wrong > wrong, "planes: --plane-check finds a wrong layer");
+    }
+    s_plane_check = 0;
     plane_drop();
 
     /* An overlay the colour of the picture under it (black over a black
-     * frame): its cut is noted, so it is something over it all the same. */
+     * frame): its cut is noted, so its layer is made, opaque black. */
     plane_page("<!doctype html><style>body{margin:0;background:#123}"
                "#v{position:absolute;left:40px;top:40px;width:320px;height:180px}"
                "#o{position:absolute;left:60px;top:60px;width:50px;height:20px;background:#000}</style>"
@@ -184,7 +231,10 @@ static void plane_cases(void)
     planes_prepare();
     d = plane_render();
     planes_judge(&d, 0, 1);
-    check(!v->place && v->reason == YONDER_PLANE_OVER, "planes: black over a black frame is something over it");
+    planes_hole(&d, 1);
+    check(v->place && v->noverlays >= 1 &&
+              plane_screen.surf.pixels[(size_t)(g.view.bounds.y + 65) * 800 + g.view.bounds.x + 70] == 0xff000000u,
+          "planes: black over a black frame is a layer, opaque black");
     plane_drop();
 
     /* The same overlay filtered: its boxes draw on a layer's sheets, and
@@ -199,7 +249,89 @@ static void plane_cases(void)
     planes_prepare();
     d = plane_render();
     planes_judge(&d, 0, 1);
-    check(!v->place && v->reason == YONDER_PLANE_OVER, "planes: a filtered black overlay on a black frame is over it");
+    check(v->place && v->noverlays >= 1, "planes: a filtered black overlay on a black frame is a layer over it");
+    plane_drop();
+
+    /* See-through over it: half-red controls and a caption's text, whose
+     * edges are partly covered. Placed; the layer's coverage between 0 and
+     * 255, and --plane-check off by one at most. */
+    plane_page("<!doctype html><style>body{margin:0;background:#123}"
+               "#v{position:absolute;left:40px;top:40px;width:320px;height:180px}"
+               "#c{position:absolute;left:40px;top:180px;width:320px;height:40px;background:rgba(255,0,0,.5)}"
+               "#t{position:absolute;left:60px;top:150px;margin:0;font-size:14px;color:#fff}</style>"
+               "<video id=v></video><div id=c></div><p id=t>A caption over the picture</p>");
+    s_plane_check = 1;
+    planes_prepare();
+    d = plane_render();
+    planes_judge(&d, 0, 1);
+    planes_hole(&d, 1);
+    {
+        uint32_t half = plane_screen.surf.pixels[(size_t)(g.view.bounds.y + 200) * 800 + g.view.bounds.x + 100];
+        check(v->place && (half >> 24) >= 126 && (half >> 24) <= 129 && (half & 0xff0000u) >> 16 >= 126 &&
+                  (half & 0xffffu) == 0,
+              "planes: half-red controls are a half-covered layer, premultiplied");
+        check(v->checked > 0 && v->checked_wrong == 0, "planes: see-through and text, --plane-check nothing wrong");
+    }
+    s_plane_check = 0;
+    plane_drop();
+
+    /* More over it than the kernel blends: an opaque box over most of a
+     * 640x360 picture needs overlays past the budget, so it is not placed. */
+    plane_page("<!doctype html><style>body{margin:0;background:#123}"
+               "#v{position:absolute;left:40px;top:40px;width:640px;height:360px}"
+               "#o{position:absolute;left:40px;top:40px;width:640px;height:300px;background:red}</style>"
+               "<video id=v></video><div id=o></div>");
+    {
+        /* The page's picture made larger than the budget's worth: 640x360. */
+        static uint32_t big[640 * 360];
+        for (uint32_t i = 0; i < 640u * 360u; i++)
+            big[i] = 0xff204060u;
+        fake_plane.pixels = big;
+        fake_plane.w = s_videos[0].width = s_videos[0].asked_w = 640;
+        fake_plane.h = s_videos[0].height = s_videos[0].asked_h = 360;
+        fake_plane.facts.plane_pic_w = 640;
+        fake_plane.facts.plane_pic_h = 360;
+    }
+    planes_prepare();
+    d = plane_render();
+    planes_judge(&d, 0, 1);
+    check(v->mapped && !v->place && v->reason == YONDER_PLANE_BUDGET && v->overlay_area > PLANE_OVERLAY_BUDGET,
+          "planes: more over it than the budget: not placed, the budget its reason");
+    plane_drop();
+
+    /* A widget libui paints over the clip, after the view: kept opaque,
+     * as painted, inside the overlays. */
+    plane_page(kPlanePage);
+    {
+        os64_ui_widget_t root = {0}, over = {0};
+        os64_ui_widget_t *saved_root = g.ui.root, *saved_next = g.view.next_sibling;
+        root.first_child = &g.view;
+        g.view.next_sibling = &over;
+        over.bounds = (os64_gui_rect_t){g.view.bounds.x + 100, g.view.bounds.y + 100, 40, 20};
+        g.ui.root = &root;
+        planes_prepare();
+        d = plane_render();
+        planes_judge(&d, 0, 1);
+        planes_hole(&d, 1);
+        uint32_t px = plane_screen.surf.pixels[(size_t)(over.bounds.y + 5) * 800 + over.bounds.x + 5];
+        uint32_t pic = plane_pic[(size_t)(over.bounds.y + 5 - v->origin.y) * 320 + over.bounds.x + 5 - v->origin.x];
+        check(v->place && v->noverlays >= 1 && px == (pic | 0xff000000u),
+              "planes: a widget over it kept as painted, opaque, with an overlay");
+        check(plane_screen.surf.pixels[(size_t)(over.bounds.y + 30) * 800 + over.bounds.x + 5] == 0,
+              "planes: beside the widget, see-through");
+        /* Placed with that overlay; a different overlay next paint is a new
+         * place, an edit of its own. */
+        all = d;
+        n = planes_edits(edits, &all, true);
+        planes_commit();
+        check(n == 1 && plane_place_same(v), "planes: committed with its overlays");
+        v->overlays[0].w--;
+        check(!plane_place_same(v), "planes: other overlays, another place");
+        v->overlays[0].w++;
+        planes_release();
+        g.ui.root = saved_root;
+        g.view.next_sibling = saved_next;
+    }
     plane_drop();
 
     /* Two videos side by side, the second with a background of its own, and
