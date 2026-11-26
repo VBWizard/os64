@@ -178,14 +178,16 @@ static void plane_cases(void)
     check(s_plane_hides[0].owed && s_plane_hides[0].copy != NULL && s_plane_hides[0].name == 257 &&
               fake_plane.pins == 0,
           "planes: closed placed, a hide owed with a copy");
-    planes_hides_paint();
+    os64_memset(v, 0, sizeof(*v));
+    (void)plane_render();
+    planes_hides_let_go();
+    check(s_plane_hides[0].owed && s_plane_hides[0].copy == NULL, "planes: the copy let go after its render");
     bool back = true;
     for (int32_t y = clip.y; y < clip.y + clip.h && back; y++)
         for (int32_t x = clip.x; x < clip.x + clip.w && back; x++)
             back = plane_screen.surf.pixels[(size_t)y * 800 + x] ==
                    plane_pic[(size_t)(y - origin.y) * 320 + (x - origin.x)];
-    check(back, "planes: the last picture painted back where the hole was");
-    os64_memset(v, 0, sizeof(*v));
+    check(back, "planes: the last picture painted back where the hole was, in the box's own paint");
     all = d;
     n = planes_edits(edits, &all, true);
     check(n == 1 && edits[0].hide && edits[0].plane == 257, "planes: the owed hide in the next publish");
@@ -206,11 +208,14 @@ static void plane_cases(void)
     plane_close(v);
     v->tiles = NULL;
     os64_memset(v, 0, sizeof(*v));
+    origin = s_plane_hides[0].origin;
     g.sy += 40;
-    planes_hides_paint();
+    (void)plane_render();
     g.sy -= 40;
-    check(plane_screen.surf.pixels[(size_t)(clip.y + 5) * 800 + clip.x + 5] == 0 && s_plane_hides[0].owed &&
-              s_plane_hides[0].copy == NULL,
+    planes_hides_let_go();
+    check(plane_screen.surf.pixels[(size_t)(clip.y + 5) * 800 + clip.x + 5] !=
+                  plane_pic[(size_t)(clip.y + 5 - origin.y) * 320 + (clip.x + 5 - origin.x)] &&
+              s_plane_hides[0].owed && s_plane_hides[0].copy == NULL,
           "planes: scrolled since the close, the copy not painted, and let go");
     plane_drop();
 

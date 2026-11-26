@@ -3621,13 +3621,15 @@ static Video *video_of(const os64_html_node_t *node)
     return NULL;
 }
 
-// The picture `v`'s box shows: with its plane on, the `shown` view pinned
-// for the paint under way (its player refuses `frame` then, and outside a
-// paint no view is pinned); otherwise the last frame call's. False with
+// The picture `v`'s box shows: the `shown` view pinned for the paint under
+// way, from the plane's ask on (the show thread may take the pace from then,
+// retiring the picture the last frame call gave, and its player refuses
+// `frame` once the plane is on); with the plane on and no view pinned
+// (outside a paint), none; otherwise the last frame call's. False with
 // none.
 static bool video_picture(const Video *v, const uint32_t **pixels, uint32_t *w, uint32_t *h)
 {
-    if (v->plane_state == OS64_MEDIA_PLANE_ON) {
+    if (v->view.frame != NULL || v->plane_state == OS64_MEDIA_PLANE_ON) {
         *pixels = v->view.pixels;
         *w = v->view.w;
         *h = v->view.h;
@@ -11909,7 +11911,7 @@ static void view_damage_check(os64_ui_widget_t *w, os64_draw_ctx_t *ctx);
 static void planes_prepare(void);
 static bool planes_judge(const os64_gui_rect_t *damage, uint32_t from, uint32_t count);
 static void planes_hole(const os64_gui_rect_t *damage, uint32_t count);
-static void planes_hides_paint(void);
+static void planes_hides_let_go(void);
 static void planes_publish(os64_gui_rect_t *damage, uint32_t *count);
 static void planes_release(void);
 
@@ -11973,7 +11975,7 @@ static void glass_paint(void)
         return;
     }
     planes_hole(damage, count);
-    planes_hides_paint();
+    planes_hides_let_go();
     cost_begin(PS_PUBLISH);
     planes_publish(damage, &count);
     cost_end(PS_PUBLISH);
@@ -13362,12 +13364,13 @@ static void videos_tick(void)
 // paint that places it, or the glass would step back to an older one. Once
 // placed, the plane shows its own pictures and the serial is not asked.
 //
-// NO BLACK HOLE WHERE A VIDEO WAS (plane_close, planes_hides_paint): a
+// NO BLACK HOLE WHERE A VIDEO WAS (plane_close, plane_closed_paint): a
 // session that closes with its plane placed leaves a hide owed, a copy of
-// its last picture and its clip marked; the next publish, in the same turn
-// of the loop, paints that copy back into the clip when the page that held
-// it is still the one shown, unchanged, and hides the plane. The player's
-// close waits for that hide (os64/media_player.h § A plane, CLOSING).
+// its last picture and its clip marked; the next paint, in the same turn of
+// the loop, paints that copy in the box's own turn of the walk when the
+// page that held it is still the one shown, unchanged, and its publish
+// hides the plane. The player's close waits for that hide
+// (os64/media_player.h § A plane, CLOSING).
 
 #define PLANE_HIDES_MAX OS64_GUI_PLANES
 #define PLANE_HOLD_OFF_MS 1000
@@ -13382,6 +13385,8 @@ static struct {
     const os64_html_document_t *doc;    // the page it was on, its tree's serial and its scroll then
     uint64_t tree_serial;
     int32_t sx, sy;
+    const os64_html_node_t *node;       // its element, compared and never read: on an unchanged tree
+                                        // it is still that element
 } s_plane_hides[PLANE_HIDES_MAX];
 
 // The window's counts for the record, started again with every other
@@ -13535,12 +13540,15 @@ static void planes_prepare(void)
                 s_plane_counts.asks++;
                 (void)yonder_media_plane_ask(v->session, g.win);
             }
-            continue;
         }
+        // From the ask until a verdict that hands `frame` back, the page
+        // paints from a pinned `shown`: the show thread may take the pace
+        // at any moment of it (video_picture).
+        bool handed_back = f.plane_state == OS64_MEDIA_PLANE_REFUSED || f.plane_state == OS64_MEDIA_PLANE_ENDED;
+        if ((v->plane_asked || f.plane_state != OS64_MEDIA_PLANE_NONE) && !handed_back && v->view.frame == NULL)
+            (void)yonder_media_shown(v->session, &v->view);
         if (f.plane_state != OS64_MEDIA_PLANE_ON)
             continue;
-        if (v->view.frame == NULL)
-            (void)yonder_media_shown(v->session, &v->view);
         os64_gui_rect_t origin = {0}, clip = {0};
         bool cover = b != NULL && plane_geometry(v, b, &origin, &clip);
         bool meets = false;
@@ -13708,29 +13716,14 @@ static void planes_hole(const os64_gui_rect_t *damage, uint32_t count)
     }
 }
 
-// The hides owed by closed sessions: each one's last picture painted back
-// into its clip when the page it was on is still the one shown, laid out
-// and scrolled as it was, so the place shows that picture, as it showed
-// before the plane, and not a hole. Once: the copy goes with its first
-// paint, and a later paint of the place is the page's as it now is.
-static void planes_hides_paint(void)
+// After the render that painted the closed sessions' boxes (their clips
+// marked at the close): the copies go. A later paint of the place is the
+// page's as it now is, as it always was once a video's session had closed.
+static void planes_hides_let_go(void)
 {
-    os64_gui_surface_t *s = &g.ui.ctx->surf;
     for (int32_t i = 0; i < PLANE_HIDES_MAX; i++) {
-        __typeof__(s_plane_hides[0]) *h = &s_plane_hides[i];
-        if (!h->owed || h->copy == NULL)
-            continue;
-        os64_gui_rect_t met;
-        if (h->doc == page_doc(&g.page) && g.page.tree != NULL && flow_tree_serial(g.page.tree) == h->tree_serial &&
-            g.sx == h->sx && g.sy == h->sy && os64_rect_intersect(h->clip, g.view.bounds, &met)) {
-            for (int32_t y = met.y; y < met.y + met.h; y++)
-                os64_memcpy(s->pixels + (size_t)y * s->pitch_px + met.x,
-                            h->copy + (size_t)(y - h->origin.y) * h->copy_w + (met.x - h->origin.x),
-                            (size_t)met.w * sizeof(uint32_t));
-            s_plane_counts.hides_copied++;
-        }
-        os64_free(h->copy);
-        h->copy = NULL;
+        os64_free(s_plane_hides[i].copy);
+        s_plane_hides[i].copy = NULL;
     }
 }
 
@@ -13874,8 +13867,20 @@ static void planes_publish(os64_gui_rect_t *damage, uint32_t *count)
         retry[i] = v->placed;
         v->place = v->placed;   // what the kernel holds
     }
-    if (repaint)
+    if (repaint) {
+        // That render may meet a place the kernel keeps unchanged: its hole
+        // is cut again (planes_hole cuts where `place` stands, which is now
+        // what the kernel holds; a refused move's new clip is no longer a
+        // place, and a placed one's old clip is marked for the next paint).
+        uint32_t from = *count;
         *count += os64_ui_render_list(&g.ui, damage + *count);
+        for (int32_t i = 0; i < VIDEOS_MAX; i++)
+            if (s_videos[i].node != NULL && s_videos[i].place && !plane_place_same(&s_videos[i]))
+                s_videos[i].place = false;
+        planes_hole(damage + from, *count - from);
+        for (int32_t i = 0; i < VIDEOS_MAX; i++)
+            s_videos[i].place = s_videos[i].node != NULL && s_videos[i].placed;
+    }
     for (uint32_t k = 0; k < *count; k++)
         os64_draw_publish(g.ui.ctx, &damage[k]);
     for (int32_t i = 0; i < VIDEOS_MAX; i++)
@@ -13913,7 +13918,7 @@ static void plane_close(Video *v)
             *h = (__typeof__(*h)){.owed = true, .name = v->placed_name, .origin = v->placed_origin,
                                   .clip = v->placed_clip, .doc = page_doc(&g.page),
                                   .tree_serial = g.page.tree != NULL ? flow_tree_serial(g.page.tree) : 0,
-                                  .sx = g.sx, .sy = g.sy};
+                                  .sx = g.sx, .sy = g.sy, .node = v->node};
             os64_media_player_view_t last;
             if (yonder_media_shown(v->session, &last)) {
                 if (last.w == (uint32_t)v->placed_origin.w && last.h == (uint32_t)v->placed_origin.h) {
@@ -20746,6 +20751,33 @@ static bool video_fitted(const Video *v, const flow_box_t *b, os64_gui_rect_t c,
     return video_picture(v, &px, &w, &h) && w == (uint32_t)at->w && h == (uint32_t)at->h;
 }
 
+// A closed session's box painted (pane_video, for an element whose video
+// slot has gone): its last picture, the copy its hide owed keeps, at its
+// place, when the page it was on is still the one shown, laid out and
+// scrolled as it was. Painted in the box's own turn of the walk, so what
+// the page paints above the video is laid over it, the place showing that
+// picture as it showed before the plane, and not a hole.
+static void plane_closed_paint(GlassPane *gp, const flow_box_t *b, os64_gui_rect_t clip)
+{
+    if (gp->n != 1 || gp->now[0]->whole.w <= 0)
+        return;     // a group's sheet: the copy is in window pixels
+    Glass *gl = gp->now[0];
+    for (int32_t i = 0; i < PLANE_HIDES_MAX; i++) {
+        const __typeof__(s_plane_hides[0]) *h = &s_plane_hides[i];
+        if (!h->owed || h->copy == NULL || h->node != b->node || h->doc != page_doc(&g.page) ||
+            g.page.tree == NULL || flow_tree_serial(g.page.tree) != h->tree_serial || g.sx != h->sx || g.sy != h->sy)
+            continue;
+        os64_gui_rect_t cut = on_glass(gl, clip), met;
+        if (!os64_rect_intersect(cut, h->clip, &met))
+            continue;
+        for (int32_t y = met.y; y < met.y + met.h; y++)
+            os64_memcpy(gl->surf->pixels + (size_t)y * gl->surf->pitch_px + met.x,
+                        h->copy + (size_t)(y - h->origin.y) * h->copy_w + (met.x - h->origin.x),
+                        (size_t)met.w * sizeof(uint32_t));
+        s_plane_counts.hides_copied++;
+    }
+}
+
 // The paint of a video's box (the painter's retained-pixels verb): the
 // latest picture (video_picture), fitted by object-fit and object-position,
 // the rest of the box the element's own background, and nothing before the
@@ -20760,7 +20792,11 @@ static bool video_fitted(const Video *v, const flow_box_t *b, os64_gui_rect_t c,
 static void pane_video(GlassPane *gp, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip)
 {
     Video *v = video_of(b->node);
-    if (v == NULL || v->width == 0 || v->height == 0)
+    if (v == NULL) {
+        plane_closed_paint(gp, b, clip);
+        return;
+    }
+    if (v->width == 0 || v->height == 0)
         return;
     os64_gui_rect_t at;
     bool fits = video_fitted(v, b, c, &at);

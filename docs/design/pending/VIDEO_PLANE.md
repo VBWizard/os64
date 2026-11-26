@@ -600,9 +600,10 @@ reason).
 From a session's close to the publish that hides its plane, the glass shows
 the plane's last picture. The publish that hides a closed session's plane
 comes in the **same turn of the loop as the close**, and paints the last
-picture back into the clip, from a copy the page took at the close, when the
-page that held it is still the one shown and laid out as it was; otherwise
-the page paints the place as it now is. On a navigation the old page's
+picture back into the clip, from a copy the page took at the close, in the
+box's own turn of the paint (so what the page paints above the video lies
+over it), when the page that held it is still the one shown, laid out and
+scrolled as it was; otherwise the page paints the place as it now is. On a navigation the old page's
 sessions close when the new page is installed, so the hides ride the new
 page's first paint, which repaints the whole view. A hide refused because
 the plane is already gone (the show thread's closing bound passed and the
