@@ -649,13 +649,20 @@ plane does not prevent.
   paint and the page's thread is held, the picks go on and the glass does
   not change. So `--video-rate`'s rate and the record's reading count the
   pictures that reached the glass: the page's paints of a new picture in the
-  video's box, at their publish, and the plane's publishes while it was
-  placed and the clock ran (facts.plane_placed_published). Beside it, the
-  longest the glass went without a new picture of that video while it played
-  in view, from the page's paints, from the player's own gaps between
-  placed publishes (`os64_media_player_plane_gap_take`), and from a gap
-  still open when the line is written. The picks keep columns of their own,
-  named as picks, and the line's legend prints once.
+  video's box that the publish left off its plane, and the plane's publishes
+  while it was placed and shown and the clock ran
+  (facts.plane_placed_published). Beside it, the longest the glass went
+  without a new picture of that video while it was WATCHED: its clock
+  running, its box on the view, the window not covered, judged at every turn
+  of the loop, so a pause or a scroll away is no gap while a page thread
+  held for seconds (which runs no turn) is. The gaps come from the page's
+  paints, from the player's own gaps between placed publishes
+  (`os64_media_player_plane_gap_take`), from the page's last picture to a
+  plane run's first, and from a gap still open when a line or a reading is
+  written. An open gap is never cut: each line and each reading counts the
+  longest gap that ended or is open in its interval, and the picture ending
+  a hold counts it whole. The picks keep columns of their own, named as
+  picks, and the line's legend prints once.
 
 ## 6. gplay
 

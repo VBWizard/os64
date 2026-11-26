@@ -3612,15 +3612,17 @@ typedef struct {
     uint64_t reason_us[YONDER_PLANE_REASONS];
     uint64_t moves_on, moves_off, placed_paints;
     // WHAT REACHED THE GLASS (the --video-rate line and the record): the
-    // page's paints of a new picture in its box, and the plane's pictures
-    // published while it was placed (facts.plane_placed_published); and the
-    // longest time the glass went without a new picture of it while it
-    // played in view (video_glass_fold).
+    // page's paints of a new picture in its box that their publish left off
+    // its plane (videos_glass_published), and the plane's pictures
+    // published while it was placed and shown (facts.plane_placed_published);
+    // and the longest time the glass went without a new picture of it while
+    // it was watched (videos_glass_watch).
     uint32_t glass_serial;              // the picture the page last painted in its box
     bool painted_new;                   // this render painted a new picture in its box
     uint64_t page_pictures;
-    int64_t glass_last_us;              // when its last new picture reached the glass; 0 not measured
-    int64_t glass_gap_us;               // the longest gap since the last rate line
+    int64_t glass_watch_from_us;        // when the current watch began; 0 not watched
+    int64_t glass_last_us;              // its last new picture on the glass in this watch, or the watch's start
+    int64_t glass_gap_us;               // the longest gap ended or open since the last rate line
     int64_t glass_gap_reading_us;       // and since the record's last reading
     uint64_t reading_pictures;          // what had reached the glass at the record's last reading
 } Video;
@@ -13220,11 +13222,12 @@ static uint64_t videos_next(void)
 // per video, comma-separated, after a legend line once:
 // `video-rate,<ms since boot>,<video>,<glass>,<glass a second>,<longest gap>,<picked>,<dropped>,<picked a second>,<dropped a second>,<placed>`.
 // `glass` is the pictures of it that reached the glass since the player
-// began (the page's paints of a new picture in its box, and its plane's
-// publishes while placed), and `glass a second` the same since that
-// video's last line, in tenths; `longest gap` is the longest the glass went
-// without a new picture of it since its last line, in ms, while it played
-// in view, a gap still open counted to now (and its rest in the next line).
+// began (the page's paints of a new picture in its box that left it off
+// its plane, and its plane's publishes while placed and shown), and `glass a second` the same since
+// that video's last line, in tenths; `longest gap` is the longest the glass
+// went without a new picture of it, in ms, among the gaps that ended since
+// its last line or are still open, counted while it was watched: its clock
+// running, its box on the view, the window not covered.
 // `picked` and `dropped` are its
 // player's pace (the show thread's picks while its plane is on, which keep
 // the clock's pace whether or not a picture reaches the glass), with their
@@ -13245,8 +13248,8 @@ static void video_rate_tenths(char *out, size_t cap, uint64_t n, uint64_t ms)
     os64_snprintf(out, cap, "%lu.%lu", (unsigned long)(tenths / 10), (unsigned long)(tenths % 10));
 }
 
-// Whether the glass's pictures of `v` are measured: it plays, its box is on
-// the view, and the window is not covered.
+// Whether the glass's pictures of `v` are measured: its clock runs, its box
+// is on the view, and the window is not covered.
 static bool video_glass_watched(const Video *v)
 {
     os64_gui_rect_t part;
@@ -13261,29 +13264,53 @@ static void video_glass_gap(Video *v, int64_t gap)
         v->glass_gap_reading_us = gap;
 }
 
-// The plane's share since the last fold: the longest gap between pictures
-// it published while placed, and its last such picture as the glass's
-// latest new one of `v`. Unwatched, nothing is measured, and a watch
-// starting now measures from now.
-static void video_glass_fold(Video *v, int64_t now)
+// Every turn of the loop: a watch begins when a video becomes watched and
+// ends when it stops being, so a pause, a scroll away or a covered window
+// is no gap. (A page thread held for seconds runs no turn, and the video
+// plays on: that is the gap this measures.) The plane's gaps that ended
+// outside a watch are let go as one begins and as it ends.
+static void videos_glass_watch(void)
 {
-    int64_t plane_gap = yonder_media_plane_gap_take(v->session);
-    if (!video_glass_watched(v)) {
-        v->glass_last_us = 0;
-        return;
+    int64_t now = os64_micros();
+    for (int32_t i = 0; i < VIDEOS_MAX; i++) {
+        Video *v = &s_videos[i];
+        if (v->node == NULL)
+            continue;
+        bool watched = video_glass_watched(v);
+        if (watched && v->glass_watch_from_us == 0) {
+            v->glass_watch_from_us = v->glass_last_us = now;
+            (void)yonder_media_plane_gap_take(v->session);
+        } else if (!watched && v->glass_watch_from_us != 0) {
+            v->glass_watch_from_us = v->glass_last_us = 0;
+            (void)yonder_media_plane_gap_take(v->session);
+        }
     }
-    video_glass_gap(v, plane_gap);
+}
+
+// The plane's share since the last fold, inside the watch: the player's
+// gaps between two of its placed pictures, the gap from the glass's last
+// picture before a run of them to the run's first, and the run's last as
+// the glass's latest picture. `glass_last_us` is never before the watch's
+// start, so a picture before it, from an earlier watch, changes nothing.
+static void video_glass_fold(Video *v)
+{
+    if (v->glass_watch_from_us == 0)
+        return;
+    video_glass_gap(v, yonder_media_plane_gap_take(v->session));
     os64_media_player_facts_t f;
-    if (yonder_media_player_facts(v->session, &f) && f.plane_placed_publish_us > v->glass_last_us)
-        v->glass_last_us = f.plane_placed_publish_us;
-    if (v->glass_last_us == 0)
-        v->glass_last_us = now;
+    if (!yonder_media_player_facts(v->session, &f))
+        return;
+    if (f.plane_placed_first_us > v->glass_last_us)
+        video_glass_gap(v, f.plane_placed_first_us - v->glass_last_us);
+    if (f.plane_placed_last_us > v->glass_last_us)
+        v->glass_last_us = f.plane_placed_last_us;
 }
 
 // After a publish: each video whose box it painted with a new picture, and
 // which the publish left off its plane, has that picture on the glass now,
-// the time since its last one a gap. A placed video's box is rendered too,
-// but the publish cuts it to a hole, and what shows there is the plane's.
+// the time since its last one in the watch a gap. A placed video's box is
+// rendered too, but the publish cuts it to a hole, and what shows there is
+// the plane's.
 static void videos_glass_published(void)
 {
     int64_t now = os64_micros();
@@ -13295,8 +13322,8 @@ static void videos_glass_published(void)
         if (v->placed)
             continue;
         v->page_pictures++;
-        video_glass_fold(v, now);
-        if (v->glass_last_us != 0) {
+        video_glass_fold(v);
+        if (v->glass_watch_from_us != 0) {
             video_glass_gap(v, now - v->glass_last_us);
             v->glass_last_us = now;
         }
@@ -13309,16 +13336,15 @@ static uint64_t video_glass_pictures(const Video *v, const os64_media_player_fac
     return v->page_pictures + f->plane_placed_published;
 }
 
-// The gap still open at `now`, counted into the maxima, and measured from
-// now on: what is left of it belongs to the next interval, or the picture
-// that ends it would count it again in the next line.
+// The gap still open at `now`, counted into the maxima so far. It stays
+// open: the picture that ends it counts it whole, so a hold longer than
+// the interval between lines reads as growing in each line it touches and
+// whole in the line that sees it end, and a reading is cut by no line.
 static void video_glass_open_gap(Video *v, int64_t now)
 {
-    video_glass_fold(v, now);
-    if (v->glass_last_us != 0) {
+    video_glass_fold(v);
+    if (v->glass_watch_from_us != 0)
         video_glass_gap(v, now - v->glass_last_us);
-        v->glass_last_us = now;
-    }
 }
 
 static void video_rate_say(void)
@@ -13330,7 +13356,7 @@ static void video_rate_say(void)
     if (!s_video_rate_legend) {
         s_video_rate_legend = true;
         os64_printf("video-rate legend: ms since boot, video, pictures that reached the glass, those a second, the "
-                    "longest the glass went without a new one (ms, playing in view), pictures the pace picked, "
+                    "longest the glass went without a new one (ms, watched), pictures the pace picked, "
                     "pictures dropped, picks a second, drops a second, placed on its plane (1) or not (0)\n");
     }
     for (int32_t i = 0; i < VIDEOS_MAX; i++) {
@@ -13404,8 +13430,11 @@ static os64_gui_rect_t video_frame_mark(const Video *v, os64_gui_rect_t part)
 // reader may read the box (backdrop_read_meets).
 static bool planes_placed_any(void);
 
+static void videos_glass_watch(void);
+
 static void videos_tick(void)
 {
+    videos_glass_watch();
     if (!s_frames.open) {
         if (planes_placed_any())
             video_rate_say();
