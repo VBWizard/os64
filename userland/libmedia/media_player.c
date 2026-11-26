@@ -144,7 +144,7 @@ struct os64_media_player {
     bool plane_poke;                      // a poke owed: unlock gives it, after the lock
     bool show_paces;                      // the show thread owns the pace: `frame` is refused
     bool show_quit;                       // the plane call's tripwire: the show thread is to end
-    int plane_refusal;                    // the GUI's answer when the plane could not be had
+    int plane_refusal;                    // the GUI's answer when the plane could not be had, or that ended it
     int64_t show_thread;
     os64_bell_t show_bell;                // the show thread's first verdict, to the plane call
     os64_media_show_t show;
@@ -936,6 +936,7 @@ static int64_t show_thread(void *arg)
         if (act.end) {
             os64_lock_acquire(&p->lock);
             p->plane_state = OS64_MEDIA_PLANE_ENDED;
+            p->plane_refusal = gone ? (int)rc : 0;  // the frame wait's answer that ended it; 0 for a close
             p->show_paces = false;
             p->plane_name = 0;
             look(p);
@@ -950,6 +951,19 @@ int os64_media_player_plane(os64_media_player_t *p, int64_t win)
     if (p == NULL || win <= 0 || (p->cfg.want & OS64_MEDIA_WANT_PICTURE) == 0)
         return OS64_MEDIA_BAD_ARGS;
     os64_lock_acquire(&p->lock);
+    if (p->plane_state == OS64_MEDIA_PLANE_ENDED && !p->quit && p->show_thread > 0) {
+        // A plane that ended while the player plays may be asked for again:
+        // its show thread has returned, so it is joined and a new one
+        // starts as the first did.
+        int64_t ended = p->show_thread;
+        p->show_thread = 0;
+        p->plane_state = OS64_MEDIA_PLANE_NONE;
+        p->show_quit = false;
+        os64_lock_release(&p->lock);
+        (void)os64_thread_join((int32_t)ended, NULL);
+        os64_close((int32_t)ended);
+        os64_lock_acquire(&p->lock);
+    }
     if (p->plane_state != OS64_MEDIA_PLANE_NONE) {
         os64_lock_release(&p->lock);
         return OS64_MEDIA_BUSY;

@@ -390,6 +390,201 @@ static void plane_cases(void)
     }
     plane_drop();
 
+    /* WHAT CHANGED OVER IT (P3c): off its plane (not ready), the video's own
+     * new picture repaints its box and what is over it, which makes no
+     * layer pass; a change over it makes one. */
+    plane_page("<!doctype html><style>body{margin:0;background:#123}"
+               "#v{position:absolute;left:40px;top:40px;width:320px;height:180px}"
+               "#o{position:absolute;left:60px;top:180px;width:200px;height:30px;background:rgba(255,0,0,.5)}</style>"
+               "<video id=v></video><div id=o></div>");
+    fake_plane.facts.plane_ready = false;
+    planes_prepare();
+    (void)plane_render();
+    planes_release();
+    {
+        os64_gui_rect_t box = {40, 40, 320, 180};       /* the page's coordinates of the box */
+        uint64_t passes = s_plane_counts.layer_passes;
+        g.ui.damage_count = 0;
+        g.ui.any_dirty = false;
+        s_frame_marking = 0;
+        mark_part(box);
+        s_frame_marking = -1;
+        planes_prepare();
+        check(v->mapped && !v->candidate && v->nchanges == 0 && !v->changes_all,
+              "changes: the video's own new picture is no change over it");
+        d = plane_render();
+        planes_judge(&d, 0, 1);
+        planes_release();
+        check(s_plane_counts.layer_passes == passes, "changes: and it makes no layer pass");
+        g.ui.damage_count = 0;
+        g.ui.any_dirty = false;
+        s_frame_marking = 0;
+        mark_part(box);
+        s_frame_marking = -1;
+        mark_part((os64_gui_rect_t){60, 180, 200, 30});  /* the page changes the box over it */
+        planes_prepare();
+        check(v->nchanges >= 1 && !v->changes_all, "changes: a page mark inside its box is a change, though libui folds it into the picture's");
+        d = plane_render();
+        planes_judge(&d, 0, 1);
+        check(s_plane_counts.layer_passes == passes + 1 && s_plane_nlayers == 1 &&
+                  s_plane_layers[0].at.h <= 30 + 1,
+              "changes: it makes one pass, over the change alone");
+        planes_release();
+    }
+    plane_drop();
+
+    /* A layer cures no backdrop reader: a change over its video makes no
+     * pass, and the part it painted is forgotten in the map. */
+    plane_page("<!doctype html><style>body{margin:0;background:#123}"
+               "#v{position:absolute;left:40px;top:40px;width:320px;height:180px}"
+               "#g{position:absolute;left:60px;top:60px;width:100px;height:60px;backdrop-filter:blur(4px)}</style>"
+               "<video id=v></video><div id=g></div>");
+    planes_prepare();
+    d = plane_render();
+    planes_judge(&d, 0, 1);
+    planes_release();
+    {
+        uint64_t passes = s_plane_counts.layer_passes;
+        g.ui.damage_count = 0;
+        g.ui.any_dirty = false;
+        mark_part((os64_gui_rect_t){200, 150, 40, 20});
+        planes_prepare();
+        check(v->mapped && v->reason == YONDER_PLANE_BACKDROP, "changes: a backdrop reader keeps it off");
+        d = plane_render();
+        planes_judge(&d, 0, 1);
+        os64_gui_rect_t w = {g.view.bounds.x + 200, g.view.bounds.y + 150, 40, 20};
+        check(s_plane_counts.layer_passes == passes && !yonder_plane_map_known(&v->map, to_plane_rect(w)),
+              "changes: no pass for it, and the part forgotten");
+        planes_release();
+    }
+    plane_drop();
+
+    /* Off its plane for the budget: at most one pass a quarter second for
+     * changes over it, the rest waited for, counted, their parts forgotten. */
+    plane_page("<!doctype html><style>body{margin:0;background:#123}"
+               "#v{position:absolute;left:40px;top:40px;width:640px;height:360px}"
+               "#o{position:absolute;left:40px;top:40px;width:640px;height:300px;background:red}</style>"
+               "<video id=v></video><div id=o></div>");
+    {
+        static uint32_t big[640 * 360];
+        for (uint32_t i = 0; i < 640u * 360u; i++)
+            big[i] = 0xff204060u;
+        fake_plane.pixels = big;
+        fake_plane.w = s_videos[0].width = s_videos[0].asked_w = 640;
+        fake_plane.h = s_videos[0].height = s_videos[0].asked_h = 360;
+        fake_plane.facts.plane_pic_w = 640;
+        fake_plane.facts.plane_pic_h = 360;
+        planes_prepare();
+        d = plane_render();
+        planes_judge(&d, 0, 1);
+        planes_release();
+        uint64_t passes = s_plane_counts.layer_passes, at = now_ms;
+        for (int k = 0; k < 3; k++) {
+            g.ui.damage_count = 0;
+            g.ui.any_dirty = false;
+            mark_part((os64_gui_rect_t){100, 100, 40, 20});
+            planes_prepare();
+            d = plane_render();
+            planes_judge(&d, 0, 1);
+            planes_release();
+            if (k == 1)
+                now_ms += 300;
+        }
+        check(v->reason == YONDER_PLANE_BUDGET && v->layers_capped == 1 && s_plane_counts.layer_passes == passes + 2,
+              "changes: off for the budget, one pass a quarter second, the one between waited for");
+        now_ms = at;
+    }
+    plane_drop();
+
+    /* Two changes far apart over a placed video: two small layers, not
+     * one box around both. */
+    plane_page(kPlanePage);
+    planes_prepare();
+    d = plane_render();
+    planes_judge(&d, 0, 1);
+    planes_hole(&d, 1);
+    all = d;
+    (void)planes_edits(edits, &all, true);
+    planes_commit();
+    planes_release();
+    {
+        g.ui.damage_count = 0;
+        g.ui.any_dirty = false;
+        mark_part((os64_gui_rect_t){50, 45, 30, 10});
+        mark_part((os64_gui_rect_t){300, 200, 30, 10});
+        planes_prepare();
+        d = plane_render();
+        plane_screen.surf.pixels[(size_t)(g.view.bounds.y + 48) * 800 + g.view.bounds.x + 55] ^= 0xffffffu;
+        plane_screen.surf.pixels[(size_t)(g.view.bounds.y + 203) * 800 + g.view.bounds.x + 305] ^= 0xffffffu;
+        planes_judge(&d, 0, 1);
+        bool small = s_plane_nlayers == 2;
+        for (uint32_t k = 0; k < s_plane_nlayers; k++)
+            small &= s_plane_layers[k].at.w <= 30 && s_plane_layers[k].at.h <= 10;
+        check(v->placed && small, "changes: two changes far apart, two small layers");
+        planes_release();
+    }
+    plane_drop();
+
+    /* A plane that ended while its session plays is asked for again, a
+     * second after the end, at most three times; a refused one is not. */
+    plane_page(kPlanePage);
+    v->frame = (os64_media_player_frame_t){plane_pic, 320, 180, 1, true};
+    planes_prepare();
+    planes_release();
+    v->plane_asked = true;
+    {
+        uint64_t at = now_ms;
+        int asks = fake_plane.asks;
+        fake_plane.facts.plane_state = OS64_MEDIA_PLANE_ENDED;
+        fake_plane.facts.plane_refusal = -3;
+        planes_prepare();
+        planes_release();
+        check(fake_plane.asks == asks && v->plane_state == OS64_MEDIA_PLANE_ENDED, "ended: not asked again at once");
+        now_ms += 1000;
+        planes_prepare();
+        planes_release();
+        check(fake_plane.asks == asks + 1 && v->asks_again == 1, "ended: asked again a second later");
+        for (int k = 0; k < 5; k++) {
+            v->plane_asked = true;      /* each ask's plane ends again */
+            now_ms += 1000;
+            planes_prepare();
+            planes_release();
+        }
+        check(fake_plane.asks == asks + 3 && v->asks_again == 3, "ended: three times a session at most");
+        fake_plane.facts.plane_state = OS64_MEDIA_PLANE_REFUSED;
+        v->asks_again = 0;
+        v->plane_asked = true;
+        now_ms += 1000;
+        planes_prepare();
+        planes_release();
+        check(fake_plane.asks == asks + 3, "ended: a refused plane is not asked again");
+        now_ms = at;
+    }
+    plane_drop();
+
+    /* The record's line for a layer that was no layer. */
+    plane_page(kPlanePage);
+    planes_prepare();
+    {
+        yonder_plane_layer_counts_t c = {0};
+        c.disagree = 3;
+        c.spread[0] = 2;
+        c.spread[3] = 1;
+        c.first = 320 * 2 + 5;
+        c.first_b = 0xff102030u;
+        c.first_w = 0xff8f8a8fu;
+        plane_disagreement_note(v, (os64_gui_rect_t){v->clip.x, v->clip.y, 320, 180}, &c);
+        os64_media_player_facts_t f = fake_plane.facts;
+        DiagText t = {0};
+        plane_reading(&t, v, &f);
+        check(t.s != NULL && strstr(t.s, "no layer: channels disagreed 1 (pixels 2 apart 2, 3 0, 4 0, 5 or more 1), "
+                                         "the first at 5,2 of the clip, over black 102030 and over white 8f8a8f") != NULL,
+              "changes: the record names how far apart, and the first pixel");
+        os64_free(t.s);
+    }
+    planes_release();
+    plane_drop();
+
     /* Two videos side by side, the second with a background of its own, and
      * text after both: a box painted after the first video but under the
      * second's picture is over neither, and text beside them is not over

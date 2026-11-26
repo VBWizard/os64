@@ -173,8 +173,15 @@ void yonder_plane_layer(const uint32_t *b, const uint32_t *w, size_t n, uint32_t
             lo = a[c] < lo ? a[c] : lo;
             hi = a[c] > hi ? a[c] : hi;
         }
-        if (hi - lo > 1)
+        if (hi - lo > 1) {
+            if (counts->disagree == 0) {
+                counts->first = i;
+                counts->first_b = b[i];
+                counts->first_w = w[i];
+            }
             counts->disagree++;
+            counts->spread[hi - lo >= 5 ? 3 : hi - lo - 2]++;
+        }
         if (a[1] > 0)
             counts->inked++;
         out[i] = (uint32_t)a[1] << 24 | (b[i] & 0x00ffffffu);
@@ -228,6 +235,29 @@ static yonder_plane_rect_t bound(yonder_plane_rect_t a, yonder_plane_rect_t b)
     return (yonder_plane_rect_t){x0, y0, x1 - x0, y1 - y0};
 }
 
+uint32_t yonder_plane_join(yonder_plane_rect_t *r, uint32_t n, uint32_t max)
+{
+    if (max == 0)
+        return 0;
+    while (n > max) {
+        uint32_t bi = 0, bj = 1;
+        int64_t best = INT64_MAX;
+        for (uint32_t i = 0; i < n; i++)
+            for (uint32_t j = i + 1; j < n; j++) {
+                yonder_plane_rect_t u = bound(r[i], r[j]);
+                int64_t cost = (int64_t)u.w * u.h - (int64_t)r[i].w * r[i].h - (int64_t)r[j].w * r[j].h;
+                if (cost < best) {
+                    best = cost;
+                    bi = i;
+                    bj = j;
+                }
+            }
+        r[bi] = bound(r[bi], r[bj]);
+        r[bj] = r[--n];
+    }
+    return n;
+}
+
 uint32_t yonder_plane_map_overlays(const yonder_plane_map_t *m, yonder_plane_rect_t clip, yonder_plane_rect_t *out,
                                    uint32_t max, uint64_t *area)
 {
@@ -276,22 +306,7 @@ uint32_t yonder_plane_map_overlays(const yonder_plane_map_t *m, yonder_plane_rec
         *area = (uint64_t)all.w * (uint64_t)all.h;
         return 1;
     }
-    while (n > max) {
-        uint32_t bi = 0, bj = 1;
-        int64_t best = INT64_MAX;
-        for (uint32_t i = 0; i < n; i++)
-            for (uint32_t j = i + 1; j < n; j++) {
-                yonder_plane_rect_t u = bound(runs[i], runs[j]);
-                int64_t cost = (int64_t)u.w * u.h - (int64_t)runs[i].w * runs[i].h - (int64_t)runs[j].w * runs[j].h;
-                if (cost < best) {
-                    best = cost;
-                    bi = i;
-                    bj = j;
-                }
-            }
-        runs[bi] = bound(runs[bi], runs[bj]);
-        runs[bj] = runs[--n];
-    }
+    n = yonder_plane_join(runs, n, max);
     for (uint32_t i = 0; i < n; i++)
         out[i] = runs[i];
     *area = yonder_plane_union_area(out, n);

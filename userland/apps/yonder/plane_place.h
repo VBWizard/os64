@@ -105,13 +105,23 @@ void yonder_plane_map_forget(yonder_plane_map_t *m, yonder_plane_rect_t part);
 // layer is b with a = 255 − (w − b) in its top byte, a taken from green.
 // A pixel whose a from its three channels differ by more than 1 is no
 // layer's (something there depends on what lies beneath it otherwise than
-// by its own coverage): counted in `disagree`. `n` pixels; `out` may be `b`.
+// by its own coverage): counted in `disagree`, by how far apart in
+// `spread`, the first one's index and pixels kept. `n` pixels; `out` may be
+// `b`.
 typedef struct {
     size_t inked;       // pixels with a > 0
     size_t disagree;    // pixels whose channels' a differ by more than 1
+    size_t spread[4];   // of those, the channels' a 2, 3, 4, and 5 or more apart
+    size_t first;       // the first of them, its index, and its two passes' pixels (when `disagree` > 0)
+    uint32_t first_b, first_w;
 } yonder_plane_layer_counts_t;
 void yonder_plane_layer(const uint32_t *b, const uint32_t *w, size_t n, uint32_t *out,
                         yonder_plane_layer_counts_t *counts);
+
+// `n` rectangles joined until at most `max` are left, the two whose bounding
+// box adds the least area (over their own two) first, the bound taking the
+// first's place. The count left.
+uint32_t yonder_plane_join(yonder_plane_rect_t *r, uint32_t n, uint32_t max);
 
 // The overlay rectangles of the inked tiles meeting `clip`, each cut to it:
 // rows of tiles as runs, runs of the same columns in rows that touch joined

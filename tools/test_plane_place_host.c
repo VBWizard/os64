@@ -342,6 +342,14 @@ static void layer_cases(void)
     yonder_plane_layer(b1, w1, 2, o1, &counts);
     CHECK(counts.disagree == 0 && (o1[0] >> 24) == 255 - 0x37, "layer: one apart agrees; the coverage is green's");
     CHECK((o1[1] >> 24) == 255, "layer: a coverage past opaque is opaque");
+    // How far apart, and the first.
+    uint32_t bs[4] = {0xff000000u, 0xff000000u, 0xff000000u, 0xff000000u};
+    uint32_t ws[4] = {0xff7f7f7fu, 0xff7f7d7fu, 0xff7f7c7fu, 0xff7f787fu};   // green 2, 3, 7 apart from red and blue
+    uint32_t os[4];
+    yonder_plane_layer(bs, ws, 4, os, &counts);
+    CHECK(counts.disagree == 3 && counts.spread[0] == 1 && counts.spread[1] == 1 && counts.spread[2] == 0 &&
+              counts.spread[3] == 1 && counts.first == 1 && counts.first_b == 0xff000000u && counts.first_w == 0xff7f7d7fu,
+          "layer: the disagreement by how far apart, and the first");
     // Out in place.
     yonder_plane_layer(b, w, N, b, &counts);
     CHECK(memcmp(b, out, sizeof(out)) == 0, "layer: written over the black pass gives the same");
@@ -362,6 +370,29 @@ static uint64_t brute_area(const yonder_plane_rect_t *r, uint32_t n)
                 }
         }
     return area;
+}
+
+static void join_cases(void)
+{
+    yonder_plane_rect_t r[12], in[12];
+    for (int round = 0; round < 500; round++) {
+        uint32_t n = 1 + rnd(12), max = 1 + rnd(6);
+        for (uint32_t i = 0; i < n; i++)
+            in[i] = r[i] = (yonder_plane_rect_t){(int)rnd(W - 40), (int)rnd(H - 40), 1 + (int)rnd(40), 1 + (int)rnd(40)};
+        uint32_t got = yonder_plane_join(r, n, max);
+        bool held = true;
+        for (uint32_t i = 0; i < n; i++) {
+            bool in_one = false;
+            for (uint32_t k = 0; k < got && !in_one; k++)
+                in_one = inside(in[i], r[k]);
+            held &= in_one;
+        }
+        CHECK(got == (n < max ? n : max), "join round %d: %u left of %u, the cap %u", round, got, n, max);
+        CHECK(held, "join round %d: a rectangle left out", round);
+    }
+    // The cheapest pair joins first: two that touch, not the far one.
+    yonder_plane_rect_t three[3] = {{0, 0, 10, 10}, {10, 0, 10, 10}, {200, 100, 10, 10}};
+    CHECK(yonder_plane_join(three, 3, 2) == 2 && three[0].w == 20 && three[1].x == 200, "join: the touching pair first");
 }
 
 static void forget_cases(void)
@@ -472,6 +503,7 @@ int main(void)
     map_properties();
     layer_cases();
     forget_cases();
+    join_cases();
     overlay_cases();
     if (s_failed) {
         printf("plane_place: %d failed\n", s_failed);

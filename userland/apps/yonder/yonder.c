@@ -1616,6 +1616,18 @@ static bool s_tick_marking;
 // A video's new picture marks its box: no group holding a video is kept
 // (paint.c spoil), so no kept drawing changed and the stamp holds.
 static bool s_video_marking;
+// The video whose own new picture is being marked (s_videos' index), -1 for
+// every other mark, and the marks since the last paint (window
+// coordinates), each with the video it was for: a paint tells a video's
+// own pictures from changes over it (planes_take_changes).
+static int32_t s_frame_marking = -1;
+#define PLANE_MARKS_MAX 32
+static struct {
+    os64_gui_rect_t r;
+    int32_t video;                  // the video whose own picture it marked; -1 any other mark
+} s_marks[PLANE_MARKS_MAX];
+static uint32_t s_nmarks;
+static bool s_marks_lost;           // more than PLANE_MARKS_MAX: every mark counts as a change
 // What the kept drawings may hold (keep.h), sheets and all: a lit
 // Lamplighter, its beam and eight lamps' rays at 150%, keeps about 16 MiB.
 #define KEEPS_BUDGET ((size_t)64 << 20)
@@ -3584,6 +3596,8 @@ typedef struct {
     // player's plane is asked for at its first cover; while it is on,
     // `frame` is refused and the page paints `shown` instead.
     bool plane_asked;
+    uint32_t asks_again;                // asked again after its plane ended (at most PLANE_ASKS_AGAIN)
+    uint64_t ask_again_ms;              // not before then
     bool frame_fresh;                   // a frame call answered with a picture since `frame` was handed back
     int plane_state;                    // the player's (OS64_MEDIA_PLANE_*), at the last read
     os64_media_player_view_t view;      // `shown`, pinned for one paint; pixels NULL for none
@@ -3599,6 +3613,23 @@ typedef struct {
     bool not_layer;                     // a paint could not take what lies over it as a layer, and the map
                                         // has not known all of its clip since (yonder_plane_map_forget)
     bool layers_failed;                 // this paint: a layer of it could not be made, or was no layer
+    // WHAT CHANGED OVER IT (VIDEO_PLANE.md § 5.2, layers only where the
+    // page changed something): this paint's changes over its clip
+    // (planes_take_changes, from the marks s_marks kept).
+    os64_gui_rect_t changes[16];
+    uint32_t nchanges;
+    bool changes_all;                   // every part of the clip counts as changed
+    uint64_t layer_next_ms;             // off its plane for no layer or the budget: no pass before then
+    uint64_t layers_capped;             // passes that wait skipped
+    // Why a layer was no layer: its channels disagreed (by how far apart,
+    // 2, 3, 4, 5 or more, and the first such pixel since the reading), or it
+    // could not be made (the layers' room full, no memory, the walk never
+    // reached the video).
+    uint64_t no_layer_disagree, no_layer_spread[4], no_layer_full, no_layer_memory, no_layer_reach;
+    bool first_disagree_said;
+    int32_t first_disagree_x, first_disagree_y;     // in the clip
+    uint32_t first_disagree_b, first_disagree_w;
+    char first_disagree_at[64];
     uint32_t noverlays;                 // a place's overlays at this paint (window coordinates), and their
     os64_gui_rect_t overlays[OS64_GUI_PLANE_OVERLAYS];      // union's area
     uint64_t overlay_area;
@@ -10967,6 +10998,10 @@ static void mark_part(os64_gui_rect_t r)
         else
             os64_strcopy(s_cost.mark_who, sizeof(s_cost.mark_who), "the page");
     }
+    if (s_nmarks < PLANE_MARKS_MAX)
+        s_marks[s_nmarks++] = (__typeof__(s_marks[0])){part.bounds, s_frame_marking};
+    else
+        s_marks_lost = true;
     os64_ui_mark_dirty(&g.ui, &part);
 }
 
@@ -13523,7 +13558,9 @@ static void videos_tick(void)
             s_cost.video_pictures++;
             lt_mark(g.page.diag, YONDER_LT_MARK_PICTURE);
             s_video_marking = true;
+            s_frame_marking = i;
             mark_part(part);
+            s_frame_marking = -1;
             s_video_marking = false;
             continue;
         }
@@ -13546,7 +13583,9 @@ static void videos_tick(void)
         lt_mark(g.page.diag, YONDER_LT_MARK_PICTURE);
         part = video_frame_mark(v, part);
         s_video_marking = true;
+        s_frame_marking = i;
         mark_part(part);
+        s_frame_marking = -1;
         s_video_marking = false;
     }
     if (asked || planes_placed_any())
@@ -13607,6 +13646,7 @@ static void videos_tick(void)
 
 #define PLANE_HIDES_MAX OS64_GUI_PLANES
 #define PLANE_HOLD_OFF_MS 1000
+#define PLANE_ASKS_AGAIN 3
 
 static struct {
     bool owed;
@@ -13637,6 +13677,8 @@ static struct {
 static void planes_counts_restart(void)
 {
     os64_memset(&s_plane_counts, 0, sizeof(s_plane_counts));
+    for (int32_t i = 0; i < VIDEOS_MAX; i++)
+        s_videos[i].first_disagree_said = false;   // a reading names its own first
 }
 
 // A window rectangle marked for the render, as a part of the page view.
@@ -13773,10 +13815,12 @@ static void planes_note_widgets(os64_ui_widget_t *w, bool *after)
 // by painting that part again from the video up, once over black and once
 // over white (plane_layer_paint), and taken apart by yonder_plane_layer:
 // the colour over black, premultiplied, with its coverage in the top byte.
-// One a video a render, over the bounds of the parts it touched; let go
-// when the paint ends (planes_release). A later render's layer of a part
-// is the one that holds.
+// One for each part a render changed and touched, joined to
+// PLANE_LAYERS_A_VIDEO a video a render by least added area; let go when
+// the paint ends (planes_release). A later layer of a pixel is the one
+// that holds.
 #define PLANE_LAYERS_MAX 32
+#define PLANE_LAYERS_A_VIDEO 4          // a render's parts joined to this many layers a video
 static struct {
     int32_t video;
     os64_gui_rect_t at;             // window coordinates
@@ -13867,6 +13911,32 @@ static void plane_write(os64_gui_rect_t part, const uint32_t *in)
                     (size_t)part.w * 4);
 }
 
+// A layer that was no layer, for the record: counted by how far apart its
+// channels' coverages were, and the first such pixel since the reading
+// kept, where it is in the clip, its two passes' pixels and the element
+// there (flow_hit, once a reading).
+static void plane_disagreement_note(Video *v, os64_gui_rect_t at, const yonder_plane_layer_counts_t *counts)
+{
+    v->no_layer_disagree++;
+    for (int32_t k = 0; k < 4; k++)
+        v->no_layer_spread[k] += counts->spread[k];
+    if (v->first_disagree_said)
+        return;
+    v->first_disagree_said = true;
+    int32_t x = at.x + (int32_t)(counts->first % (size_t)at.w), y = at.y + (int32_t)(counts->first / (size_t)at.w);
+    v->first_disagree_x = x - v->clip.x;
+    v->first_disagree_y = y - v->clip.y;
+    v->first_disagree_b = counts->first_b;
+    v->first_disagree_w = counts->first_w;
+    os64_strcopy(v->first_disagree_at, sizeof(v->first_disagree_at), "?");
+    const flow_box_t *hit = g.page.tree != NULL ? flow_hit(g.page.tree, x - g.view.bounds.x + g.sx,
+                                                            y - g.view.bounds.y + g.sy, scroll_now())
+                                                : NULL;
+    const os64_html_node_t *el = box_element(hit);
+    if (el != NULL)
+        element_named(v->first_disagree_at, sizeof(v->first_disagree_at), "", el);
+}
+
 // The layer of what lies over `v` in `at` (window coordinates, inside its
 // clip): the render's pixels kept, the two passes made and read, the
 // render's put back. False, and none kept, when a pass could not be made,
@@ -13878,10 +13948,13 @@ static bool plane_layer_make(Video *v, os64_gui_rect_t at)
     if (s_plane_nlayers == PLANE_LAYERS_MAX) {
         v->layers_made++;
         v->layers_refused++;
+        v->no_layer_full++;
         return false;
     }
     uint32_t *kept = os64_malloc(n * 4), *black = os64_malloc(n * 4), *white = os64_malloc(n * 4);
-    bool made = kept != NULL && black != NULL && white != NULL;
+    bool made = kept != NULL && black != NULL && white != NULL, reached = true;
+    if (!made)
+        v->no_layer_memory++;
     yonder_plane_layer_counts_t counts = {0};
     if (made) {
         bool watch = s_plane_watch;
@@ -13904,8 +13977,13 @@ static bool plane_layer_make(Video *v, os64_gui_rect_t at)
             s_plane_counts.layer_us_most = us;
         if (s_cost.depth[PS_RENDER] > 0)
             s_cost.began[PS_RENDER] += cycles_since(began);
+        reached = made;
         if (made)
             yonder_plane_layer(black, white, n, black, &counts);
+        if (!reached)
+            v->no_layer_reach++;
+        if (counts.disagree > 0)
+            plane_disagreement_note(v, at, &counts);
         made = made && counts.disagree == 0;
     }
     os64_free(kept);
@@ -13946,6 +14024,47 @@ static bool plane_over_budget(Video *v, os64_gui_rect_t clip)
     return v->overlay_area > PLANE_OVERLAY_BUDGET;
 }
 
+// THE CHANGES OVER A PICTURE AT THIS PAINT (VIDEO_PLANE.md § 5.2): for each
+// mapped video, every view mark since the last paint (s_marks, kept by
+// mark_part with the video whose own new picture it marked) but its own,
+// and every damage entry libui holds for the render that is none of its own
+// marks (a widget's own invalidation, which reaches libui without a view
+// mark), each cut to its clip. Its own picture changes nothing over it; a
+// page mark, another video's picture, prepare's marks of a place and a
+// widget all do. A widget's invalidation that libui folds into the video's
+// own picture's rectangle is lost to this; it delays only what an
+// off-plane video's map knows, since a placed video marks no picture of its
+// own. With no list to tell changes by (none kept, or more than s_marks
+// holds), every part of the clip counts. Taken once a paint, after prepare
+// has marked, and the marks let go for the next.
+static void planes_take_changes(void)
+{
+    for (int32_t i = 0; i < VIDEOS_MAX; i++) {
+        Video *v = &s_videos[i];
+        v->nchanges = 0;
+        v->changes_all = !g.ui.any_dirty || s_marks_lost;
+        if (v->node == NULL || !v->mapped || v->changes_all)
+            continue;
+        for (uint32_t k = 0; k < s_nmarks + g.ui.damage_count; k++) {
+            os64_gui_rect_t met, d = k < s_nmarks ? s_marks[k].r : g.ui.damage[k - s_nmarks];
+            // A mark is its own entry unless it was this video's picture; a
+            // damage entry is taken only when no mark made it, since every
+            // mark reaches libui's list too.
+            bool skip = k < s_nmarks && s_marks[k].video == i;
+            for (uint32_t m = 0; m < s_nmarks && k >= s_nmarks && !skip; m++)
+                skip = os64_memcmp(&s_marks[m].r, &d, sizeof(d)) == 0;
+            if (skip || !os64_rect_intersect(d, v->clip, &met))
+                continue;
+            if (v->nchanges < sizeof(v->changes) / sizeof(v->changes[0]))
+                v->changes[v->nchanges++] = met;
+            else
+                v->changes_all = true;
+        }
+    }
+    s_nmarks = 0;
+    s_marks_lost = false;
+}
+
 // Before the render: each video's facts, its plane asked for at its first
 // cover, `shown` pinned for the paint, and the reasons asked with what the
 // map knew so far.
@@ -13968,7 +14087,12 @@ static void planes_prepare(void)
         if (f.plane_state != OS64_MEDIA_PLANE_ON && v->plane_state == OS64_MEDIA_PLANE_ON) {
             // The plane went (ended, or refused at a new size): the player
             // is gone from it and so is the kernel's place; the box is the
-            // page's again, painted from `frame`.
+            // page's again, painted from `frame`. Said on the console with
+            // the GUI's answer, since a plane ending under a live window is
+            // not meant to happen.
+            os64_printf("plane: video %d's plane %s (the GUI's answer %d)\n", (int)i,
+                        f.plane_state == OS64_MEDIA_PLANE_ENDED ? "ended" : "was refused", f.plane_refusal);
+            v->ask_again_ms = yonder_now_ms() + PLANE_HOLD_OFF_MS;
             if (v->placed)
                 plane_mark_window(v->placed_clip);
             v->placed = false;
@@ -13985,7 +14109,17 @@ static void planes_prepare(void)
         const flow_box_t *b = flow_box_for(g.page.tree, v->node);
         os64_gui_rect_t part;
         bool on_view = video_on_view(v, &part);
-        if (f.plane_state == OS64_MEDIA_PLANE_NONE) {
+        if (f.plane_state == OS64_MEDIA_PLANE_ENDED && v->plane_asked && v->asks_again < PLANE_ASKS_AGAIN &&
+            yonder_now_ms() >= v->ask_again_ms) {
+            // A plane that ended while its session plays is not meant to
+            // happen; it is asked for again, a second apart at most,
+            // PLANE_ASKS_AGAIN times a session, counted. A refused one is
+            // not: that answer does not change.
+            v->plane_asked = false;
+            v->asks_again++;
+            v->ask_again_ms = yonder_now_ms() + PLANE_HOLD_OFF_MS;
+        }
+        if (f.plane_state == OS64_MEDIA_PLANE_NONE || (f.plane_state == OS64_MEDIA_PLANE_ENDED && !v->plane_asked)) {
             os64_gui_rect_t c;
             if (s_planes && !v->plane_asked && on_view && v->seen.picture && b != NULL && video_cover_rect(v, b, &c)) {
                 v->plane_asked = true;
@@ -14058,6 +14192,7 @@ static void planes_prepare(void)
                 plane_reason_set(v, verdict.reason);
         }
     }
+    planes_take_changes();
 }
 
 // The record's words for `v`'s plane (P3's design state § 10): its state,
@@ -14069,7 +14204,7 @@ static void plane_reading(DiagText *t, const Video *v, const os64_media_player_f
     if (f->plane_state == OS64_MEDIA_PLANE_NONE)
         return;
     dt_put(t, ", its plane %s", (unsigned)f->plane_state < 5 ? kState[f->plane_state] : "?");
-    if (f->plane_state == OS64_MEDIA_PLANE_REFUSED)
+    if (f->plane_state == OS64_MEDIA_PLANE_REFUSED || f->plane_state == OS64_MEDIA_PLANE_ENDED)
         dt_put(t, " (the GUI's answer %d)", f->plane_refusal);
     dt_put(t, " %u %ux%u: published %lu, display frames missed %lu, recreates %lu, waits ended by patience %lu, %s",
            f->plane_name, f->plane_cap_w, f->plane_cap_h, (unsigned long)f->plane_published,
@@ -14093,12 +14228,32 @@ static void plane_reading(DiagText *t, const Video *v, const os64_media_player_f
             first = false;
         }
     }
+    if (v->asks_again > 0)
+        dt_put(t, "; asked again after it ended %u", (unsigned)v->asks_again);
     dt_put(t, "; moves onto the plane %lu, off %lu; the page's paints of its clip while placed %lu",
            (unsigned long)v->moves_on, (unsigned long)v->moves_off, (unsigned long)v->placed_paints);
     if (v->layers_made > 0)
         dt_put(t, "; layers of what lies over it %lu (%lu pixels), no layer %lu, overlays %u (%lu pixels)",
                (unsigned long)v->layers_made, (unsigned long)v->layer_pixels, (unsigned long)v->layers_refused,
                v->placed ? v->placed_noverlays : 0u, (unsigned long)(v->placed ? v->placed_overlay_area : 0));
+    if (v->no_layer_disagree + v->no_layer_full + v->no_layer_memory + v->no_layer_reach > 0) {
+        dt_put(t, "; no layer: channels disagreed %lu (pixels 2 apart %lu, 3 %lu, 4 %lu, 5 or more %lu)",
+               (unsigned long)v->no_layer_disagree, (unsigned long)v->no_layer_spread[0],
+               (unsigned long)v->no_layer_spread[1], (unsigned long)v->no_layer_spread[2],
+               (unsigned long)v->no_layer_spread[3]);
+        if (v->first_disagree_said) {
+            uint32_t b = v->first_disagree_b, w = v->first_disagree_w;
+            dt_put(t, ", the first at %d,%d of the clip, over black %06x and over white %06x, coverages %d %d %d, "
+                   "in %s", (int)v->first_disagree_x, (int)v->first_disagree_y, (unsigned)(b & 0xffffffu),
+                   (unsigned)(w & 0xffffffu), 255 - (int)((w >> 16 & 0xff) - (b >> 16 & 0xff)),
+                   255 - (int)((w >> 8 & 0xff) - (b >> 8 & 0xff)), 255 - (int)((w & 0xff) - (b & 0xff)),
+                   v->first_disagree_at);
+        }
+        dt_put(t, "; could not be made: the layers' room full %lu, no memory %lu, the walk never reached it %lu",
+               (unsigned long)v->no_layer_full, (unsigned long)v->no_layer_memory, (unsigned long)v->no_layer_reach);
+    }
+    if (v->layers_capped > 0)
+        dt_put(t, "; layer passes waited for (off its plane, a quarter second apart) %lu", (unsigned long)v->layers_capped);
     if (v->checked > 0)
         dt_put(t, "; plane-check %lu pixels, off by one %lu, by two %lu, wrong %lu, the largest difference %d",
                (unsigned long)v->checked, (unsigned long)v->checked_near, (unsigned long)v->checked_two,
@@ -14128,22 +14283,55 @@ static void plane_counts_reading(DiagText *t)
                dt_ms(s_plane_counts.layer_us_most).text);
 }
 
-// A render's layer of what lies over `v`, over the bounds of the parts of
-// `damage[from..count)` in its clip that it may have drawn over; the bounds
-// in `*at`. False when one was needed and could not be made (or was no
-// layer): `*at` then holds what the map is to forget.
-static bool plane_layers_of_render(Video *v, const os64_gui_rect_t *damage, uint32_t from, uint32_t count,
-                                   os64_gui_rect_t *at)
+// The parts of `damage[from..count)` in `v`'s clip that changed over its
+// picture: met with this paint's changes on the first render, whole on a
+// later one (a render the judge asked for, whose marks are the picture
+// painted back where a plane was, a change over anything under it). At most
+// `cap` in `out`, joined by least added area when more come.
+#define PLANE_PARTS_MAX 32
+static uint32_t plane_changed_parts(const Video *v, const os64_gui_rect_t *damage, uint32_t from, uint32_t count,
+                                    yonder_plane_rect_t *out)
 {
-    bool any = false;
+    uint32_t n = 0;
     for (uint32_t k = from; k < count; k++) {
         os64_gui_rect_t part;
-        if (!os64_rect_intersect(damage[k], v->clip, &part) || (v->view.pixels != NULL && !plane_part_touched(v, part)))
+        if (!os64_rect_intersect(damage[k], v->clip, &part))
             continue;
-        *at = any ? os64_rect_union(*at, part) : part;
-        any = true;
+        bool whole = from > 0 || v->changes_all;
+        for (uint32_t c = 0; c < (whole ? 1u : v->nchanges); c++) {
+            os64_gui_rect_t piece = part;
+            if (!whole && !os64_rect_intersect(part, v->changes[c], &piece))
+                continue;
+            if (n == PLANE_PARTS_MAX)
+                n = yonder_plane_join(out, n, PLANE_PARTS_MAX - 1);
+            out[n++] = to_plane_rect(piece);
+        }
     }
-    return !any || plane_layer_make(v, *at);
+    return n;
+}
+
+// Whether a pass for `v` waits (VIDEO_PLANE.md § 5.2): it cannot be placed
+// at this paint for a reason no layer cures (out of view, a backdrop
+// reader, another plane's clip), or it is off its plane for no layer or the
+// budget and asked less than PLANE_LAYER_WAIT_MS ago, which a change at the
+// display's rate would otherwise ask at its own. A placed video never waits.
+#define PLANE_LAYER_WAIT_MS 250
+static bool plane_layers_wait(Video *v)
+{
+    if (v->candidate || v->placed)
+        return false;
+    if (v->reason == YONDER_PLANE_OUT_OF_VIEW || v->reason == YONDER_PLANE_BACKDROP ||
+        v->reason == YONDER_PLANE_CLIP_MEETS)
+        return true;
+    if (v->reason != YONDER_PLANE_NOT_LAYER && v->reason != YONDER_PLANE_BUDGET)
+        return false;
+    uint64_t now = yonder_now_ms();
+    if (now < v->layer_next_ms) {
+        v->layers_capped++;
+        return true;
+    }
+    v->layer_next_ms = now + PLANE_LAYER_WAIT_MS;
+    return false;
 }
 
 // After a render that painted `damage[from..count)`: each mapped video's
@@ -14178,15 +14366,34 @@ static bool planes_judge(const os64_gui_rect_t *damage, uint32_t from, uint32_t 
             continue;
         if (from == 0)
             v->layers_failed = false;
-        os64_gui_rect_t failed = {0, 0, 0, 0};
-        bool made = plane_layers_of_render(v, damage, from, count, &failed);
-        for (uint32_t k = from; k < count; k++)
-            yonder_plane_map_paint(&v->map, to_plane_rect(damage[k]), to_plane_rect(v->clip), plane_ink, v);
-        if (!made) {
-            // Told nothing over it there by the missing layer: forgotten
-            // instead, until a paint can say.
-            v->layers_failed = true;
-            yonder_plane_map_forget(&v->map, to_plane_rect(failed));
+        // Only what changed over the picture is layered and told to the
+        // map: a part painted again for the video's own picture keeps what
+        // the map knew. A pass that waits leaves the changed parts
+        // forgotten, as one that fails does, since a part the render
+        // painted with no layer would read as nothing over the picture.
+        yonder_plane_rect_t parts[PLANE_PARTS_MAX], layers[PLANE_PARTS_MAX];
+        uint32_t nparts = plane_changed_parts(v, damage, from, count, parts);
+        if (nparts > 0 && plane_layers_wait(v)) {
+            for (uint32_t k = 0; k < nparts; k++)
+                yonder_plane_map_forget(&v->map, parts[k]);
+        } else if (nparts > 0) {
+            uint32_t nlayers = 0;
+            for (uint32_t k = 0; k < nparts; k++) {
+                os64_gui_rect_t r = {parts[k].x, parts[k].y, parts[k].w, parts[k].h};
+                if (v->view.pixels == NULL || plane_part_touched(v, r))
+                    layers[nlayers++] = parts[k];
+            }
+            nlayers = yonder_plane_join(layers, nlayers, PLANE_LAYERS_A_VIDEO);
+            bool made[PLANE_PARTS_MAX];
+            for (uint32_t k = 0; k < nlayers; k++)
+                made[k] = plane_layer_make(v, (os64_gui_rect_t){layers[k].x, layers[k].y, layers[k].w, layers[k].h});
+            for (uint32_t k = 0; k < nparts; k++)
+                yonder_plane_map_paint(&v->map, parts[k], to_plane_rect(v->clip), plane_ink, v);
+            for (uint32_t k = 0; k < nlayers; k++)
+                if (!made[k]) {
+                    v->layers_failed = true;
+                    yonder_plane_map_forget(&v->map, layers[k]);
+                }
         }
         yonder_plane_rect_t clip = to_plane_rect(v->clip);
         bool known = yonder_plane_map_known(&v->map, clip);

@@ -239,8 +239,9 @@ typedef struct {
     // The plane (OS64_MEDIA_PLANE_*), as the show thread holds it.
     int plane_state;
     uint32_t plane_name;            // the GUI's name for it, 0 none
-    int plane_refusal;              // the GUI's answer when none could be had (0: no GUI answer, the show
-                                    // thread could not start or the start tripwire passed)
+    int plane_refusal;              // REFUSED: the GUI's answer when none could be had (0: no GUI answer,
+                                    // the show thread could not start or the start tripwire passed);
+                                    // ENDED: the frame wait's answer that ended it (0: the player's close)
     uint32_t plane_cap_w, plane_cap_h, plane_pic_w, plane_pic_h;
     bool plane_ready;               // it holds a picture of the size being converted to (the size asked)
     bool plane_stale;               // a picture of another size was picked while it was placed; until the
@@ -276,7 +277,9 @@ void os64_media_player_facts(os64_media_player_t *p, os64_media_player_facts_t *
 // thread's verdict: 0, the plane made; OS64_MEDIA_NO_PLANE, none (the
 // GUI's reason in facts.plane_refusal), the player going on as without one;
 // OS64_MEDIA_BAD_ARGS without a picture asked for; OS64_MEDIA_BUSY asked
-// twice. The wait is as long as a create: milliseconds for the small
+// while a plane is starting, on or refused, or while closing. A plane that
+// ENDED while the player plays may be asked for again: its show thread is
+// joined and a new one starts. The wait is as long as a create: milliseconds for the small
 // classes, more to zero a large pair, so a caller whose thread must not
 // wait asks from one that may.
 int os64_media_player_plane(os64_media_player_t *p, int64_t win);
