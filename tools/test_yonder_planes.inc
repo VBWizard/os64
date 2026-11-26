@@ -6,6 +6,8 @@
  * make). */
 
 static uint32_t plane_pic[320 * 180];
+static os64_gui_rect_t edit_clips[PLANE_EDIT_CLIPS];  /* planes_edits' clips, which the cases do not read */
+static uint32_t nedit_clips;
 static os64_draw_ctx_t plane_screen;
 static os64_draw_ctx_t *plane_saved_ctx;
 
@@ -46,6 +48,7 @@ static void plane_page(const char *html)
 static void plane_drop(void)
 {
     planes_release();
+    planes_buffers_free();
     os64_free(s_videos[0].tiles);
     os64_memset(&s_videos[0], 0, sizeof(s_videos[0]));
     for (int32_t i = 0; i < PLANE_HIDES_MAX; i++)
@@ -103,7 +106,7 @@ static void plane_cases(void)
     check(plane_screen.surf.pixels[(size_t)(v->clip.y - 1) * 800 + v->clip.x] != 0, "planes: above the clip, not");
     os64_gui_plane_edit_t edits[OS64_GUI_PLANE_EDITS_MAX];
     os64_gui_rect_t all = d;
-    uint32_t n = planes_edits(edits, &all, true);
+    uint32_t n = planes_edits(edits, &all, true, edit_clips, &nedit_clips);
     check(n == 1 && edits[0].plane == 257 && !edits[0].hide && edits[0].origin.w == 320 && edits[0].origin.h == 180 &&
               os64_memcmp(&edits[0].clip, &v->clip, sizeof(v->clip)) == 0,
           "planes: one place edit, the fitted picture its origin");
@@ -123,7 +126,7 @@ static void plane_cases(void)
         check(!planes_judge(&d, 0, 1) && v->place, "planes: moved, still placed");
         planes_hole(&d, 1);
         all = d;
-        n = planes_edits(edits, &all, true);
+        n = planes_edits(edits, &all, true, edit_clips, &nedit_clips);
         check(n == 1 && !edits[0].hide && edits[0].origin.y == was_origin.y - 20 &&
                   edits[0].origin.x == was_origin.x && edits[0].clip.y == was.y - 20,
               "planes: the moved place rides the paint of the moved page, from its scroll");
@@ -138,7 +141,7 @@ static void plane_cases(void)
         (void)planes_judge(&d, 0, 1);
         planes_hole(&d, 1);
         all = d;
-        (void)planes_edits(edits, &all, true);
+        (void)planes_edits(edits, &all, true, edit_clips, &nedit_clips);
         planes_commit();
         planes_release();
     }
@@ -154,7 +157,7 @@ static void plane_cases(void)
           "planes: placed, no layer of what lies over it: it leaves");
     s_plane_nlayers = 0;
     all = d;
-    n = planes_edits(edits, &all, true);
+    n = planes_edits(edits, &all, true, edit_clips, &nedit_clips);
     check(n == 1 && edits[0].hide && edits[0].plane == 257, "planes: the leaving video's hide");
     planes_commit();
     check(!v->placed && v->moves_off == 1, "planes: committed, one move off it");
@@ -184,7 +187,7 @@ static void plane_cases(void)
     planes_judge(&d, 0, 1);
     planes_hole(&d, 1);
     all = d;
-    n = planes_edits(edits, &all, true);
+    n = planes_edits(edits, &all, true, edit_clips, &nedit_clips);
     {
         os64_gui_rect_t red = {g.view.bounds.x + 60, g.view.bounds.y + 60, 50, 20};
         bool covered = true, opaque = true, clear = true;
@@ -328,6 +331,8 @@ static void plane_cases(void)
     planes_judge(&d, 0, 1);
     check(v->mapped && !v->place && v->reason == YONDER_PLANE_BUDGET && v->overlay_area > PLANE_OVERLAY_BUDGET,
           "planes: more over it than the budget: not placed, the budget its reason");
+    check(v->budget_refused_most == v->overlay_area && v->overlay_area_most >= v->overlay_area,
+          "planes: the record keeps the largest asked for and the largest the budget refused");
     plane_drop();
 
     /* A widget libui paints over the clip, after the view: a pill the very
@@ -361,7 +366,7 @@ static void plane_cases(void)
         /* Placed with that overlay; a different overlay next paint is a new
          * place, an edit of its own. */
         all = d;
-        n = planes_edits(edits, &all, true);
+        n = planes_edits(edits, &all, true, edit_clips, &nedit_clips);
         planes_commit();
         check(n == 1 && plane_place_same(v), "planes: committed with its overlays");
         v->overlays[0].w--;
@@ -504,7 +509,7 @@ static void plane_cases(void)
     planes_judge(&d, 0, 1);
     planes_hole(&d, 1);
     all = d;
-    (void)planes_edits(edits, &all, true);
+    (void)planes_edits(edits, &all, true, edit_clips, &nedit_clips);
     planes_commit();
     planes_release();
     {
@@ -559,6 +564,42 @@ static void plane_cases(void)
         planes_release();
         check(fake_plane.asks == asks + 3, "ended: a refused plane is not asked again");
         now_ms = at;
+    }
+    plane_drop();
+
+    /* An overlays-only change asks the publish to cover its new overlays
+     * alone (the kernel's rule 2), not the clip; the damage that rides with
+     * it is whatever meets the clip at all, whole; the rest goes plain. */
+    plane_page(kPlanePage);
+    planes_prepare();
+    d = plane_render();
+    planes_judge(&d, 0, 1);
+    planes_hole(&d, 1);
+    all = (os64_gui_rect_t){0, 0, 0, 0};
+    (void)planes_edits(edits, &all, true, edit_clips, &nedit_clips);
+    planes_commit();
+    planes_release();
+    {
+        v->place = true;
+        v->noverlays = 1;
+        v->overlays[0] = (os64_gui_rect_t){v->clip.x + 16, v->clip.y + 16, 32, 16};
+        all = (os64_gui_rect_t){0, 0, 0, 0};
+        n = planes_edits(edits, &all, true, edit_clips, &nedit_clips);
+        check(n == 1 && os64_memcmp(&all, &v->overlays[0], sizeof(all)) == 0 && nedit_clips == 1,
+              "publish: an overlays-only change covers its new overlays, not the clip");
+        os64_gui_rect_t dmg[3] = {
+            {v->clip.x - 10, v->clip.y + 40, 30, 10},      /* across the clip's left edge */
+            {v->clip.x + 100, v->clip.y + 100, 20, 20},    /* inside it */
+            {2, 2, 40, 10},                                /* far from it: plain */
+        };
+        bool sent[3] = {false, false, true};               /* the far one already published: no syscall here */
+        int64_t area;
+        planes_publish_split(dmg, 3, edit_clips, nedit_clips, &all, sent, &area);
+        os64_gui_rect_t hold;
+        check(!sent[0] && !sent[1] && area == 30 * 10 + 20 * 20 && os64_rect_intersect(all, dmg[0], &hold) &&
+                  hold.w == 30 && !os64_rect_intersect(all, dmg[2], &hold),
+              "publish: the damage meeting the clip rides whole with the edit, the rest stays out");
+        v->place = false;
     }
     plane_drop();
 
@@ -686,7 +727,7 @@ static void plane_cases(void)
     planes_judge(&d, 0, 1);
     planes_hole(&d, 1);
     all = d;
-    (void)planes_edits(edits, &all, true);
+    (void)planes_edits(edits, &all, true, edit_clips, &nedit_clips);
     planes_commit();
     planes_release();
     os64_gui_rect_t clip = v->placed_clip, origin = v->placed_origin;
@@ -706,7 +747,7 @@ static void plane_cases(void)
                    plane_pic[(size_t)(y - origin.y) * 320 + (x - origin.x)];
     check(back, "planes: the last picture painted back where the hole was, in the box's own paint");
     all = d;
-    n = planes_edits(edits, &all, true);
+    n = planes_edits(edits, &all, true, edit_clips, &nedit_clips);
     check(n == 1 && edits[0].hide && edits[0].plane == 257, "planes: the owed hide in the next publish");
     plane_drop();
 
@@ -718,7 +759,7 @@ static void plane_cases(void)
     planes_judge(&d, 0, 1);
     planes_hole(&d, 1);
     all = d;
-    (void)planes_edits(edits, &all, true);
+    (void)planes_edits(edits, &all, true, edit_clips, &nedit_clips);
     planes_commit();
     planes_release();
     clip = v->placed_clip;
@@ -777,6 +818,7 @@ static void glass_plane_publishes(int n, int64_t step, bool fresh)
         clock_us += step;
         fake_plane.facts.plane_placed_published++;
         if (fresh && k == 0) {
+            fake_plane.facts.plane_placed_prev_last_us = fake_plane.facts.plane_placed_last_us;
             fake_plane.facts.plane_placed_first_us = clock_us;
             fake_plane.facts.plane_placed_runs++;
         }
@@ -880,6 +922,17 @@ static void glass_cases(void)
     clock_us += 10000;
     video_glass_open_gap(v, os64_micros());
     check(v->glass_gap_us == 10000, "glass: the plane's pictures from before a pause are not the new watch's");
+    /* A run that went on publishing while no fold saw it (the page's
+     * thread held), then a new one 66 ms after its last: the bridge runs
+     * from that last, not from the last fold. */
+    v->glass_gap_us = 0;
+    video_glass_open_gap(v, os64_micros());
+    v->glass_gap_us = 0;
+    glass_plane_publishes(15, 33000, false);        /* unseen by any fold */
+    glass_plane_publishes(1, 66000, true);          /* the new run's first */
+    fake_plane.gap = 0;
+    video_glass_fold(v);
+    check(v->glass_gap_us == 66000, "glass: the bridge runs from the run before's last, not the last fold");
     /* Two runs begun between folds: the time before the latest holds the
      * earlier run's pictures, so no bridge is counted from the last fold. */
     v->glass_gap_us = 0;
@@ -905,7 +958,7 @@ static void glass_cases(void)
     f = fake_plane.facts;
     DiagText t = {0};
     video_glass_reading(&t, v, &f);
-    check(t.s != NULL && strstr(t.s, "reached the glass 241 pictures since the last reading, the longest without a "
+    check(t.s != NULL && strstr(t.s, "reached the glass 257 pictures since the last reading, the longest without a "
                                      "new one 10 ms") != NULL,
           "glass: the record's words");
     os64_free(t.s);

@@ -3636,6 +3636,9 @@ typedef struct {
     uint32_t placed_noverlays;          // the kernel's, and their union's area
     os64_gui_rect_t placed_overlays[OS64_GUI_PLANE_OVERLAYS];
     uint64_t placed_overlay_area;
+    uint64_t overlay_area_most;         // the largest union of overlays asked for
+    uint64_t budget_refused_most;       // the largest that kept it off its plane for the budget (so the
+                                        // budget can be set from runs)
     uint64_t overlays_refused_area;     // the kernel refused overlays of this union's area (PLANE_OVERLAP):
                                         // as large again is the budget's reason, not another refusal
     bool place;                         // the place this paint's publish carries
@@ -13370,9 +13373,9 @@ static void videos_glass_watch(void)
 }
 
 // The plane's share since the last fold, inside the watch: the player's
-// gaps between two of its placed pictures; the gap from the glass's last
-// picture to the first of a run, when that run is the only one begun since
-// the last fold (with more, the earlier runs' pictures lie between, and
+// gaps between two of its placed pictures; the gap to the first of a run
+// from the later of the glass's last picture and the run before's last,
+// when that run is the only one begun since the last fold (with more, the earlier runs' pictures lie between, and
 // the time before the latest is not known to be a gap); and the last
 // placed picture as the glass's latest. `glass_last_us` is never before the
 // watch's start, so a picture before it, from an earlier watch, changes
@@ -13385,8 +13388,12 @@ static void video_glass_fold(Video *v)
     os64_media_player_facts_t f;
     if (!yonder_media_player_facts(v->session, &f))
         return;
-    if (f.plane_placed_runs == v->glass_runs + 1 && f.plane_placed_first_us > v->glass_last_us)
-        video_glass_gap(v, f.plane_placed_first_us - v->glass_last_us);
+    // The bridge runs from the later of the glass's latest folded picture
+    // and the run before's last publish: while the page's thread was held,
+    // that run may have published pictures no fold saw.
+    int64_t from = f.plane_placed_prev_last_us > v->glass_last_us ? f.plane_placed_prev_last_us : v->glass_last_us;
+    if (f.plane_placed_runs == v->glass_runs + 1 && f.plane_placed_first_us > from)
+        video_glass_gap(v, f.plane_placed_first_us - from);
     v->glass_runs = f.plane_placed_runs;
     if (f.plane_placed_last_us > v->glass_last_us)
         v->glass_last_us = f.plane_placed_last_us;
@@ -13671,12 +13678,18 @@ static struct {
     // The layer passes (plane_layer_make): how many, their time, the longest;
     // none of it counted in the paint's own cost.
     uint64_t layer_passes, layer_us, layer_us_most;
+    uint64_t layer_buffers_grown;       // a kept layer buffer made larger (plane_buf)
+    uint64_t heap_maps, heap_unmaps;    // libos64's heap's regions taken and given back, at the restart
     uint64_t overlay_retries;           // a refused publish whose places changed only their overlays
 } s_plane_counts;
 
 static void planes_counts_restart(void)
 {
     os64_memset(&s_plane_counts, 0, sizeof(s_plane_counts));
+    os64_heap_report_t heap;
+    os64_heap_report_copy(&heap);
+    s_plane_counts.heap_maps = heap.calls_map;
+    s_plane_counts.heap_unmaps = heap.calls_unmap;
     for (int32_t i = 0; i < VIDEOS_MAX; i++)
         s_videos[i].first_disagree_said = false;   // a reading names its own first
 }
@@ -13824,9 +13837,47 @@ static void planes_note_widgets(os64_ui_widget_t *w, bool *after)
 static struct {
     int32_t video;
     os64_gui_rect_t at;             // window coordinates
-    uint32_t *px;                   // at.w * at.h
+    uint32_t *px;                   // at.w * at.h, in the slot's own kept buffer
+    size_t cap;                     // that buffer's pixels
 } s_plane_layers[PLANE_LAYERS_MAX];
 static uint32_t s_plane_nlayers;
+
+// THE LAYER PASSES ALLOCATE NOTHING: the render's pixels kept, the white
+// pass, and each slot's layer live in buffers kept across paints, grown when
+// a part needs more and let go when no video is mapped (planes_prepare). A
+// buffer of 128 KiB or more is a region of its own in libos64's heap, taken
+// from and given back to the kernel under the heap's one lock, so allocating
+// three a pass made every pass six such calls under it, and the player's
+// decoding and sound threads waited on that lock (the sound ran dry on the
+// P5).
+static uint32_t *s_layer_kept, *s_layer_white;
+static size_t s_layer_kept_cap, s_layer_white_cap;
+
+// `*buf` holding at least `n` pixels, grown (its contents not kept) when it
+// holds fewer; NULL with no memory, the old buffer let go.
+static uint32_t *plane_buf(uint32_t **buf, size_t *cap, size_t n)
+{
+    if (*cap >= n && *buf != NULL)
+        return *buf;
+    os64_free(*buf);
+    s_plane_counts.layer_buffers_grown++;
+    *buf = os64_malloc(n * 4);
+    *cap = *buf != NULL ? n : 0;
+    return *buf;
+}
+
+static void planes_buffers_free(void)
+{
+    os64_free(s_layer_kept);
+    os64_free(s_layer_white);
+    s_layer_kept = s_layer_white = NULL;
+    s_layer_kept_cap = s_layer_white_cap = 0;
+    for (uint32_t k = 0; k < PLANE_LAYERS_MAX; k++) {
+        os64_free(s_plane_layers[k].px);
+        s_plane_layers[k].px = NULL;
+        s_plane_layers[k].cap = 0;
+    }
+}
 
 // The kernel's overlay budget (GUI_PLANE_OVERLAY_PIXELS, kernel/include/gui/
 // plane.h, which the ABI does not carry): a place whose overlays' union is
@@ -13951,7 +14002,9 @@ static bool plane_layer_make(Video *v, os64_gui_rect_t at)
         v->no_layer_full++;
         return false;
     }
-    uint32_t *kept = os64_malloc(n * 4), *black = os64_malloc(n * 4), *white = os64_malloc(n * 4);
+    uint32_t *kept = plane_buf(&s_layer_kept, &s_layer_kept_cap, n);
+    uint32_t *white = plane_buf(&s_layer_white, &s_layer_white_cap, n);
+    uint32_t *black = plane_buf(&s_plane_layers[s_plane_nlayers].px, &s_plane_layers[s_plane_nlayers].cap, n);
     bool made = kept != NULL && black != NULL && white != NULL, reached = true;
     if (!made)
         v->no_layer_memory++;
@@ -13986,27 +14039,22 @@ static bool plane_layer_make(Video *v, os64_gui_rect_t at)
             plane_disagreement_note(v, at, &counts);
         made = made && counts.disagree == 0;
     }
-    os64_free(kept);
-    os64_free(white);
     v->layers_made++;
     v->layer_pixels += n;
     if (!made) {
-        os64_free(black);
         v->layers_refused++;
         return false;
     }
-    s_plane_layers[s_plane_nlayers++] = (__typeof__(s_plane_layers[0])){(int32_t)(v - s_videos), at, black};
+    s_plane_layers[s_plane_nlayers].video = (int32_t)(v - s_videos);
+    s_plane_layers[s_plane_nlayers].at = at;
+    s_plane_nlayers++;
     return true;
 }
 
 static void planes_release(void)
 {
     s_plane_watch = false;
-    for (uint32_t k = 0; k < s_plane_nlayers; k++) {
-        os64_free(s_plane_layers[k].px);
-        s_plane_layers[k].px = NULL;
-    }
-    s_plane_nlayers = 0;
+    s_plane_nlayers = 0;     // the slots' buffers are kept for the next paint
     for (int32_t i = 0; i < VIDEOS_MAX; i++)
         if (s_videos[i].node != NULL && s_videos[i].view.frame != NULL)
             yonder_media_shown_done(s_videos[i].session, &s_videos[i].view);
@@ -14021,6 +14069,10 @@ static bool plane_over_budget(Video *v, os64_gui_rect_t clip)
                                              &v->overlay_area);
     for (uint32_t k = 0; k < v->noverlays; k++)
         v->overlays[k] = (os64_gui_rect_t){ov[k].x, ov[k].y, ov[k].w, ov[k].h};
+    if (v->overlay_area > v->overlay_area_most)
+        v->overlay_area_most = v->overlay_area;
+    if (v->overlay_area > PLANE_OVERLAY_BUDGET && v->overlay_area > v->budget_refused_most)
+        v->budget_refused_most = v->overlay_area;
     return v->overlay_area > PLANE_OVERLAY_BUDGET;
 }
 
@@ -14037,6 +14089,8 @@ static bool plane_over_budget(Video *v, os64_gui_rect_t clip)
 // own. With no list to tell changes by (none kept, or more than s_marks
 // holds), every part of the clip counts. Taken once a paint, after prepare
 // has marked, and the marks let go for the next.
+static void planes_buffers_free(void);
+
 static void planes_take_changes(void)
 {
     for (int32_t i = 0; i < VIDEOS_MAX; i++) {
@@ -14193,6 +14247,11 @@ static void planes_prepare(void)
         }
     }
     planes_take_changes();
+    bool any_mapped = false;
+    for (int32_t i = 0; i < VIDEOS_MAX && !any_mapped; i++)
+        any_mapped = s_videos[i].node != NULL && s_videos[i].mapped;
+    if (!any_mapped)
+        planes_buffers_free();      // no video's layers to make: their buffers go back
 }
 
 // The record's words for `v`'s plane (P3's design state § 10): its state,
@@ -14233,9 +14292,12 @@ static void plane_reading(DiagText *t, const Video *v, const os64_media_player_f
     dt_put(t, "; moves onto the plane %lu, off %lu; the page's paints of its clip while placed %lu",
            (unsigned long)v->moves_on, (unsigned long)v->moves_off, (unsigned long)v->placed_paints);
     if (v->layers_made > 0)
-        dt_put(t, "; layers of what lies over it %lu (%lu pixels), no layer %lu, overlays %u (%lu pixels)",
+        dt_put(t, "; layers of what lies over it %lu (%lu pixels), no layer %lu, overlays %u (%lu pixels), the "
+               "most asked for %lu pixels, the most kept off its plane for the budget %lu (the budget %u)",
                (unsigned long)v->layers_made, (unsigned long)v->layer_pixels, (unsigned long)v->layers_refused,
-               v->placed ? v->placed_noverlays : 0u, (unsigned long)(v->placed ? v->placed_overlay_area : 0));
+               v->placed ? v->placed_noverlays : 0u, (unsigned long)(v->placed ? v->placed_overlay_area : 0),
+               (unsigned long)v->overlay_area_most, (unsigned long)v->budget_refused_most,
+               (unsigned)PLANE_OVERLAY_BUDGET);
     if (v->no_layer_disagree + v->no_layer_full + v->no_layer_memory + v->no_layer_reach > 0) {
         dt_put(t, "; no layer: channels disagreed %lu (pixels 2 apart %lu, 3 %lu, 4 %lu, 5 or more %lu)",
                (unsigned long)v->no_layer_disagree, (unsigned long)v->no_layer_spread[0],
@@ -14279,8 +14341,17 @@ static void plane_counts_reading(DiagText *t)
         dt_put(t, ", refused overlay changes kept for the next paint %lu", (unsigned long)s_plane_counts.overlay_retries);
     if (s_plane_counts.layer_passes > 0)
         dt_put(t, "; layer passes (what lies over a picture, painted twice, not in the paint's cost) %lu, %s in all, "
-               "the longest %s", (unsigned long)s_plane_counts.layer_passes, dt_ms(s_plane_counts.layer_us).text,
-               dt_ms(s_plane_counts.layer_us_most).text);
+               "the longest %s, their buffers grown %lu times", (unsigned long)s_plane_counts.layer_passes,
+               dt_ms(s_plane_counts.layer_us).text, dt_ms(s_plane_counts.layer_us_most).text,
+               (unsigned long)s_plane_counts.layer_buffers_grown);
+    // The heap's regions since the reading began: each a kernel map or unmap
+    // made under libos64's one heap lock, which the player's threads wait
+    // on too (a region is an allocation of 128 KiB or more, or a pool).
+    os64_heap_report_t heap;
+    os64_heap_report_copy(&heap);
+    dt_put(t, "; the heap's regions taken from the kernel %lu, given back %lu",
+           (unsigned long)(heap.calls_map - s_plane_counts.heap_maps),
+           (unsigned long)(heap.calls_unmap - s_plane_counts.heap_unmaps));
 }
 
 // The parts of `damage[from..count)` in `v`'s clip that changed over its
@@ -14539,14 +14610,27 @@ static void plane_hide_free(int32_t i)
 }
 
 // The edits this publish carries: the places that change, then (with
-// `owed`) the hides owed by closed sessions. Their clips, old and new, grow `*all`. A window
-// has at most OS64_GUI_PLANES planes, so the live videos' edits always fit;
-// a hide owed for a plane the kernel has already taken out could make one
-// edit too many, and it is the one that waits for the next publish, never
-// a place whose hole is already painted.
-static uint32_t planes_edits(os64_gui_plane_edit_t *edits, os64_gui_rect_t *all, bool owed)
+// `owed`) the hides owed by closed sessions. What the kernel's rule 2 asks
+// the publish's damage to cover grows `*all`: a place whose overlays alone
+// change, its new overlays; one shown, hidden or moved, its old clip and its
+// new. The clips of the places that change, old and new, go to `clips` (at
+// most PLANE_EDIT_CLIPS), for the damage that must ride with the edits
+// (planes_publish). A window has at most OS64_GUI_PLANES planes, so the live
+// videos' edits always fit; a hide owed for a plane the kernel has already
+// taken out could make one edit too many, and it is the one that waits for
+// the next publish, never a place whose hole is already painted.
+#define PLANE_EDIT_CLIPS (2 * OS64_GUI_PLANE_EDITS_MAX)
+
+// `*all` grown to hold `r`; an empty `*all` becomes `r`.
+static void plane_reach(os64_gui_rect_t *all, os64_gui_rect_t r)
+{
+    *all = all->w > 0 && all->h > 0 ? os64_rect_union(*all, r) : r;
+}
+static uint32_t planes_edits(os64_gui_plane_edit_t *edits, os64_gui_rect_t *all, bool owed, os64_gui_rect_t *clips,
+                             uint32_t *nclips)
 {
     uint32_t n = 0;
+    *nclips = 0;
     for (int32_t i = 0; i < VIDEOS_MAX && n < OS64_GUI_PLANE_EDITS_MAX; i++) {
         const Video *v = &s_videos[i];
         if (v->node == NULL)
@@ -14558,19 +14642,32 @@ static uint32_t planes_edits(os64_gui_plane_edit_t *edits, os64_gui_rect_t *all,
                                        .noverlays = v->noverlays};
             os64_memcpy(e.overlay, v->overlays, sizeof(v->overlays[0]) * v->noverlays);
             edits[n++] = e;
-            *all = os64_rect_union(*all, v->clip);
-            if (v->placed)
-                *all = os64_rect_union(*all, v->placed_clip);
+            bool overlays_only = v->placed && v->placed_name == v->name &&
+                                 os64_memcmp(&v->placed_origin, &v->origin, sizeof(v->origin)) == 0 &&
+                                 os64_memcmp(&v->placed_clip, &v->clip, sizeof(v->clip)) == 0;
+            if (overlays_only) {
+                for (uint32_t k = 0; k < v->noverlays; k++)
+                    plane_reach(all, v->overlays[k]);
+            } else {
+                plane_reach(all, v->clip);
+                if (v->placed)
+                    plane_reach(all, v->placed_clip);
+            }
+            clips[(*nclips)++] = v->clip;
+            if (v->placed && !overlays_only)
+                clips[(*nclips)++] = v->placed_clip;
         } else if (v->placed) {
             edits[n++] = (os64_gui_plane_edit_t){.plane = v->placed_name, .hide = 1};
-            *all = os64_rect_union(*all, v->placed_clip);
+            plane_reach(all, v->placed_clip);
+            clips[(*nclips)++] = v->placed_clip;
         }
     }
     for (int32_t i = 0; i < PLANE_HIDES_MAX; i++) {
         s_plane_hides[i].sent = owed && s_plane_hides[i].owed && n < OS64_GUI_PLANE_EDITS_MAX;
         if (s_plane_hides[i].sent) {
             edits[n++] = (os64_gui_plane_edit_t){.plane = s_plane_hides[i].name, .hide = 1};
-            *all = os64_rect_union(*all, s_plane_hides[i].clip);
+            plane_reach(all, s_plane_hides[i].clip);
+            clips[(*nclips)++] = s_plane_hides[i].clip;
         }
     }
     return n;
@@ -14610,22 +14707,50 @@ static void planes_commit(void)
 // The render's damage published: with the planes' edits when there are
 // any, in one publish whose damage covers every rectangle rendered and
 // every clip the edits change; plainly otherwise.
+// The damage rectangles that ride with the edits (those meeting a changed
+// place's clip at all, each whole, never cut at the clip, so a box across
+// the video's edge reaches the glass in one publish) grow `*all`; the
+// others are published plain, first, and marked `sent`. Their area, the
+// rectangles' own, in `*area`. Between the plain publishes and the edit
+// one the glass may show unrelated parts of the window a frame apart,
+// which no reader can tell from a slower paint: none of them is a place's,
+// and the parts that meet one are all in the edit publish.
+static void planes_publish_split(const os64_gui_rect_t *damage, uint32_t count, const os64_gui_rect_t *clips,
+                                 uint32_t nclips, os64_gui_rect_t *all, bool *sent, int64_t *area)
+{
+    *area = 0;
+    for (uint32_t k = 0; k < count; k++) {
+        bool meets = false;
+        for (uint32_t c = 0; c < nclips && !meets; c++) {
+            os64_gui_rect_t met;
+            meets = os64_rect_intersect(damage[k], clips[c], &met);
+        }
+        if (!meets) {
+            if (!sent[k])
+                os64_draw_publish(g.ui.ctx, &damage[k]);
+            sent[k] = true;
+            continue;
+        }
+        plane_reach(all, damage[k]);
+        *area += (int64_t)damage[k].w * damage[k].h;
+    }
+}
+
 static void planes_publish(os64_gui_rect_t *damage, uint32_t *count)
 {
     os64_gui_plane_edit_t edits[OS64_GUI_PLANE_EDITS_MAX];
-    os64_gui_rect_t all = *count > 0 ? damage[0] : (os64_gui_rect_t){0, 0, 0, 0};
+    os64_gui_rect_t clips[PLANE_EDIT_CLIPS];
+    uint32_t nclips;
+    bool sent[PAINT_DAMAGE_MAX] = {false};
+    os64_gui_rect_t all = {0, 0, 0, 0};
     int64_t plain_area = 0;
-    for (uint32_t k = 0; k < *count; k++) {
-        all = os64_rect_union(all, damage[k]);
-        plain_area += (int64_t)damage[k].w * damage[k].h;
-    }
-    os64_gui_rect_t plain = all;
-    uint32_t n = planes_edits(edits, &all, true);
+    uint32_t n = planes_edits(edits, &all, true, clips, &nclips);
     if (n == 0) {
         for (uint32_t k = 0; k < *count; k++)
             os64_draw_publish(g.ui.ctx, &damage[k]);
         return;
     }
+    planes_publish_split(damage, *count, clips, nclips, &all, sent, &plain_area);
     int64_t rc = os64_gui_window_publish_edits(g.win, &all, edits, n);
     bool owed_sent = false;
     for (int32_t i = 0; i < PLANE_HIDES_MAX; i++)
@@ -14635,11 +14760,12 @@ static void planes_publish(os64_gui_rect_t *damage, uint32_t *count)
         // closing bound passed and the kernel took it out): once more
         // without the owed hides, and when that is taken, each owed hide on
         // its own, so a gone plane's is dropped and a living one's is made.
-        all = plain;
-        n = planes_edits(edits, &all, false);
+        all = (os64_gui_rect_t){0, 0, 0, 0};
+        n = planes_edits(edits, &all, false, clips, &nclips);
+        planes_publish_split(damage, *count, clips, nclips, &all, sent, &plain_area);
         rc = n == 0 ? 0 : os64_gui_window_publish_edits(g.win, &all, edits, n);
-        if (n == 0)
-            for (uint32_t k = 0; k < *count; k++)
+        for (uint32_t k = 0; k < *count && n == 0; k++)
+            if (!sent[k])
                 os64_draw_publish(g.ui.ctx, &damage[k]);
         for (int32_t i = 0; i < PLANE_HIDES_MAX && rc == 0; i++) {
             if (!s_plane_hides[i].owed)
@@ -14718,7 +14844,8 @@ static void planes_publish(os64_gui_rect_t *damage, uint32_t *count)
             s_videos[i].place = s_videos[i].node != NULL && s_videos[i].placed;
     }
     for (uint32_t k = 0; k < *count; k++)
-        os64_draw_publish(g.ui.ctx, &damage[k]);
+        if (!sent[k])           // the split published the rest already
+            os64_draw_publish(g.ui.ctx, &damage[k]);
     for (int32_t i = 0; i < VIDEOS_MAX; i++)
         if (retry[i])
             plane_mark_window(s_videos[i].placed_clip);

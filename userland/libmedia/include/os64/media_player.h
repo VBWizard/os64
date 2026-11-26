@@ -258,6 +258,7 @@ typedef struct {
     uint64_t plane_placed_runs;         // the runs of them begun (a run ends when the plane is not placed,
                                         // not shown, or the clock stops)
     int64_t plane_placed_first_us;      // micros() of the first of the latest run; 0 none yet
+    int64_t plane_placed_prev_last_us;  // micros() of the last of the run before it; 0 none
     int64_t plane_placed_last_us;       // micros() of the last of them, kept after the run ends; 0 none yet
     uint64_t waits_patience;        // the show thread's waits ended by their patience
     uint64_t frame_refused;         // the caller's frame calls while the plane paced

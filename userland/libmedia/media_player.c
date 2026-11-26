@@ -152,14 +152,14 @@ struct os64_media_player {
     // What reached the glass from the plane: pictures published while it was
     // placed and shown (the pass's wait answered a display frame) and the
     // clock ran; how many runs of them there have been; when the first of
-    // the current run of them was and the last
+    // the current run of them was, the last of the run before it, and the last
     // (kept after the run ends, for the caller to read); the run's anchor,
     // the last of them while the run lasts and 0 once it ends (not placed,
     // the clock still, or a wait whose patience ended: not shown); and the
     // longest time between two of them in one run since the last
     // os64_media_player_plane_gap_take.
     uint64_t placed_published, placed_runs;
-    int64_t placed_first_us, placed_last_us, placed_anchor_us, placed_gap_max_us;
+    int64_t placed_first_us, placed_last_us, placed_prev_last_us, placed_anchor_us, placed_gap_max_us;
     uint32_t pinned;                      // frames pinned by `shown` (at most two)
 
     os64_bell_t decode_bell, picture_bell;   // picture_bell only with a picture asked for
@@ -921,6 +921,7 @@ static int64_t show_thread(void *arg)
                 int64_t at = now_us();
                 p->placed_published++;
                 if (p->placed_anchor_us == 0) {
+                    p->placed_prev_last_us = p->placed_last_us;     // the run before ended there
                     p->placed_first_us = at;
                     p->placed_runs++;
                 } else if (at - p->placed_anchor_us > p->placed_gap_max_us)
@@ -1757,6 +1758,7 @@ void os64_media_player_facts(os64_media_player_t *p, os64_media_player_facts_t *
     f.plane_placed_published = p->placed_published;
     f.plane_placed_runs = p->placed_runs;
     f.plane_placed_first_us = p->placed_first_us;
+    f.plane_placed_prev_last_us = p->placed_prev_last_us;
     f.plane_placed_last_us = p->placed_last_us;
     f.waits_patience = p->waits_patience;
     f.frame_refused = p->frame_refused;
