@@ -643,6 +643,19 @@ plane does not prevent.
 - The record: per video, pictures published by the plane, display frames
   missed, time on the plane against time on the page's paint and why, the
   page thread's paints the video caused (expected: none while on the plane).
+- **What reached the glass is the measure, not the pace.** With a plane on,
+  the pace's picks are the show thread's, and they keep the clock's pace
+  whether or not a picture reaches the glass: while a video is on the page's
+  paint and the page's thread is held, the picks go on and the glass does
+  not change. So `--video-rate`'s rate and the record's reading count the
+  pictures that reached the glass: the page's paints of a new picture in the
+  video's box, at their publish, and the plane's publishes while it was
+  placed and the clock ran (facts.plane_placed_published). Beside it, the
+  longest the glass went without a new picture of that video while it played
+  in view, from the page's paints, from the player's own gaps between
+  placed publishes (`os64_media_player_plane_gap_take`), and from a gap
+  still open when the line is written. The picks keep columns of their own,
+  named as picks, and the line's legend prints once.
 
 ## 6. gplay
 
