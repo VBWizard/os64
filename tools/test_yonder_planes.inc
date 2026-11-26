@@ -94,7 +94,7 @@ static void plane_cases(void)
     check(plane_screen.surf.pixels[(size_t)(v->clip.y - 1) * 800 + v->clip.x] != 0, "planes: above the clip, not");
     os64_gui_plane_edit_t edits[OS64_GUI_PLANE_EDITS_MAX];
     os64_gui_rect_t all = d;
-    uint32_t n = planes_edits(edits, &all);
+    uint32_t n = planes_edits(edits, &all, true);
     check(n == 1 && edits[0].plane == 257 && !edits[0].hide && edits[0].origin.w == 320 && edits[0].origin.h == 180 &&
               os64_memcmp(&edits[0].clip, &v->clip, sizeof(v->clip)) == 0,
           "planes: one place edit, the fitted picture its origin");
@@ -111,10 +111,20 @@ static void plane_cases(void)
     check(planes_judge(&d, 0, 1) && !v->place && v->reason == YONDER_PLANE_OVER,
           "planes: placed, something drawn over it: it leaves");
     all = d;
-    n = planes_edits(edits, &all);
+    n = planes_edits(edits, &all, true);
     check(n == 1 && edits[0].hide && edits[0].plane == 257, "planes: the leaving video's hide");
     planes_commit();
     check(!v->placed && v->moves_off == 1, "planes: committed, one move off it");
+    planes_release();
+    /* The ink goes: the next render tells the map, though the video is no
+     * candidate, and the paint after places it again. */
+    planes_prepare();
+    check(!v->candidate && v->reason == YONDER_PLANE_OVER && v->mapped, "planes: inked, still mapped");
+    d = plane_render();
+    (void)planes_judge(&d, 0, 1);
+    planes_release();
+    planes_prepare();
+    check(v->candidate, "planes: the ink gone, a candidate again");
     plane_drop();
 
     /* Something over the picture from the start: never placed. */
@@ -126,7 +136,7 @@ static void plane_cases(void)
     d = plane_render();
     planes_judge(&d, 0, 1);
     all = d;
-    check(!v->place && v->reason == YONDER_PLANE_OVER && planes_edits(edits, &all) == 0,
+    check(!v->place && v->reason == YONDER_PLANE_OVER && planes_edits(edits, &all, true) == 0,
           "planes: something over it: not placed, no edit");
     plane_drop();
 
@@ -159,7 +169,7 @@ static void plane_cases(void)
     planes_judge(&d, 0, 1);
     planes_hole(&d, 1);
     all = d;
-    (void)planes_edits(edits, &all);
+    (void)planes_edits(edits, &all, true);
     planes_commit();
     planes_release();
     os64_gui_rect_t clip = v->placed_clip, origin = v->placed_origin;
@@ -177,8 +187,31 @@ static void plane_cases(void)
     check(back, "planes: the last picture painted back where the hole was");
     os64_memset(v, 0, sizeof(*v));
     all = d;
-    n = planes_edits(edits, &all);
+    n = planes_edits(edits, &all, true);
     check(n == 1 && edits[0].hide && edits[0].plane == 257, "planes: the owed hide in the next publish");
+    plane_drop();
+
+    /* Closed placed, then scrolled before the publish: the copy is not
+     * painted where the page has moved, and it goes all the same. */
+    plane_page(kPlanePage);
+    planes_prepare();
+    d = plane_render();
+    planes_judge(&d, 0, 1);
+    planes_hole(&d, 1);
+    all = d;
+    (void)planes_edits(edits, &all, true);
+    planes_commit();
+    planes_release();
+    clip = v->placed_clip;
+    plane_close(v);
+    v->tiles = NULL;
+    os64_memset(v, 0, sizeof(*v));
+    g.sy += 40;
+    planes_hides_paint();
+    g.sy -= 40;
+    check(plane_screen.surf.pixels[(size_t)(clip.y + 5) * 800 + clip.x + 5] == 0 && s_plane_hides[0].owed &&
+              s_plane_hides[0].copy == NULL,
+          "planes: scrolled since the close, the copy not painted, and let go");
     plane_drop();
 
     /* No plane yet: asked at the first cover, once; not at all with planes

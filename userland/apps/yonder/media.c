@@ -151,6 +151,7 @@ struct yonder_media {
     // returns: the player must outlive the call.
     bool plane_asked;               // yonder_media_plane_ask was made
     bool plane_helper_started;      // a helper may be running
+    bool plane_helper_in_ask;       // the helper is inside os64_media_player_plane
     bool plane_helper_done;         // the helper's last touch of the session
     bool plane_close_owed;          // closed while the helper asked: it closes the player
     int64_t plane_win;              // the window the plane is asked of
@@ -1246,15 +1247,15 @@ yonder_media_t *yonder_media_open(const yonder_media_request_t *r)
 
 // A session's player closed, once: its decoding thread's read fails on the
 // stop already set (store_read), and it frees itself. Window. While the
-// plane's helper is still asking, the close is owed to the helper, which
-// makes it as its ask returns (plane_helper): the player is freed after its
+// plane's helper is inside its ask, the close is owed to the helper, which
+// makes it as the ask returns (plane_helper): the player is freed after its
 // close, and the ask must not be inside it then.
 static void player_close(yonder_media_t *m)
 {
     os64_lock_acquire(&m->lock);
     os64_media_player_t *p = m->player_closed ? NULL : m->player;
     m->player_closed = true;
-    if (p != NULL && m->plane_helper_started && !m->plane_helper_done) {
+    if (p != NULL && m->plane_helper_in_ask) {
         m->plane_close_owed = true;
         p = NULL;
     }
@@ -1388,27 +1389,33 @@ bool yonder_media_player_facts(yonder_media_t *m, os64_media_player_facts_t *out
 }
 
 // The plane's helper: the ask, which waits for the plane to be made or
-// refused, then the close the window owed it, if it did.
+// refused, then the close the window owed it, if it did. Whether it is
+// inside the ask is said under the session's lock, so a close is owed to it
+// only while it is (player_close), and a helper that never ran, or one
+// that finds the player closed already, is owed nothing. The close owed is
+// read in the same locked section that says the helper is done, so none
+// can arrive unseen between the two; the session outlives the close made
+// after it, since its player cannot finish before it is closed.
 static int64_t plane_helper(void *arg)
 {
     yonder_media_t *m = arg;
     os64_lock_acquire(&m->lock);
     os64_media_player_t *p = m->player;
     int64_t win = m->plane_win;
-    bool closing = m->plane_close_owed;
+    bool ask = !m->player_closed;
+    m->plane_helper_in_ask = ask;
     os64_lock_release(&m->lock);
-    if (!closing)
+    if (ask)
         (void)os64_media_player_plane(p, win);
     os64_lock_acquire(&m->lock);
+    m->plane_helper_in_ask = false;
     bool close = m->plane_close_owed;
+    m->plane_helper_done = true;
     os64_lock_release(&m->lock);
     if (close)
         os64_media_player_close(p);
     // The window reads the verdict from the player's facts at its next turn.
     ring_window();
-    os64_lock_acquire(&m->lock);
-    m->plane_helper_done = true;
-    os64_lock_release(&m->lock);
     return 0;
 }
 
