@@ -3,10 +3,11 @@
 yonder (VIDEO.md § 9, V8 slice 2): paint.c's top layer (the backdrop, then
 the element's boxes alone), libflow's hit walk kept inside one box
 (flow_hit_within), the user-agent rules that make the element cover the
-view (style.c), and yonder's pointer through them (page_hit), against the
-scripts host's planes case for a full-screen container
-(tools/test_yonder_scripts_host.sh with YONDER_COVER_ONLY,
-test_yonder_planes.inc, plane_fullscreen_container). A mutant is CAUGHT
+view (style.c), and yonder's pointer and widgets through them (page_hit,
+page_covered_at), against the scripts host's planes case for a
+full-screen container (tools/test_yonder_scripts_host.sh with
+YONDER_COVER_ONLY, test_yonder_planes.inc, plane_fullscreen_container).
+A mutant is CAUGHT
 when the cases fail, MISSED when they pass, which means a test is missing
 and gets written. A break that changes nothing a rule promises is not in
 the list; the comment after it says which and why. A build failure is
@@ -52,6 +53,8 @@ mutants = [
     # The pointer: kept inside the element.
     ('the-hit-not-kept-inside', FLOW, '        if (top != NULL && !within(b, top))\n            continue;',
      '        if (0)\n            continue;'),
+    ('a-widget-outside-not-covered', YONDER, '    if (!fs_layer())\n        return flow_box_covered_at(g.page.tree, b, x, y, scroll);',
+     '    if (1)\n        return flow_box_covered_at(g.page.tree, b, x, y, scroll);'),
     ('yonder-hits-the-whole-page', YONDER, '    return top != NULL ? flow_hit_within(g.page.tree, x, y, scroll, top) : NULL;',
      '    return flow_hit(g.page.tree, x, y, scroll);'),
     # The user-agent rules.
@@ -69,6 +72,12 @@ mutants = [
 # - the group verbs' in_top guards (top_open, top_close, top_inside): an
 #   open and its close come for the same box, so a guard broken on one
 #   pairs nothing new; the container case has no group outside the element.
+# - flow_box_covered_within's early answer for a box outside `top`: the hit
+#   kept inside `top` gives the same answer wherever the element covers the
+#   view, which its user-agent rules make it do.
+# - yonder's leaving when the page goes or its scripts are retired
+#   (fs_page_going, fs_turn's first check): no scripted fixture navigates or
+#   retires a host under a full-screen element; QEMU's pages prove them.
 # - libgarb's :fullscreen (select.c): held by the DOM host suite's
 #   --fullscreen probe (`:fullscreen matches v alone`), which links libgarb
 #   as an object the DOM harness does not mutate; it was broken by hand

@@ -4641,14 +4641,22 @@ bool flow_text_processed(const flow_box_t *b, size_t source, uint32_t *processed
     return true;
 }
 
-bool flow_box_covered_at(const flow_tree_t *tree, const flow_box_t *box, int32_t x, int32_t y, flow_point_t scroll)
+bool flow_box_covered_within(const flow_tree_t *tree, const flow_box_t *box, int32_t x, int32_t y,
+                             flow_point_t scroll, const flow_box_t *top)
 {
     if (tree == NULL || box == NULL)
         return false;
-    const flow_box_t *h = hit_at(tree, x, y, scroll, NULL, box, NULL);
+    if (top != NULL && !within(box, top))
+        return true;
+    const flow_box_t *h = hit_at(tree, x, y, scroll, NULL, box, top);
     while (h != NULL && h != box)
         h = h->parent;
     return h == NULL;
+}
+
+bool flow_box_covered_at(const flow_tree_t *tree, const flow_box_t *box, int32_t x, int32_t y, flow_point_t scroll)
+{
+    return flow_box_covered_within(tree, box, x, y, scroll, NULL);
 }
 
 bool flow_box_covered(const flow_tree_t *tree, const flow_box_t *box, flow_point_t scroll)

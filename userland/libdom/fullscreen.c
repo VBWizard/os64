@@ -12,7 +12,9 @@
  * (`pending`: asked of the host, its answer not yet in), FULL (`element`),
  * LEAVING (`element` and `leaving`: the host asked to bring the window
  * back). A request while ENTERING or LEAVING is refused (the standard lets
- * them race; a departure), and so is an exit with no fullscreen element.
+ * them race; a departure), and so is an exit unless the state is FULL.
+ * The drain ends in NONE, the element's bit cleared, since the document
+ * may outlive the binding.
  *
  * EVERY EVENT AND EVERY SETTLED PROMISE IS A TASK, queued here and fired
  * one a call from the view step (HTML's "update the rendering", after its
@@ -312,11 +314,27 @@ void d_fullscreen_drain(os64_dom_t *dom)
     f->tail = NULL;
     promise_release(dom, &f->enter);
     promise_release(dom, &f->leave);
+    /* The document may outlive the binding (a retired host's page stays on
+     * screen), so the element stops matching :fullscreen and loses the
+     * user-agent rules here, while its wrapper still holds it, and nothing
+     * is full screen in this document from now on. The listener is already
+     * stopped, so the change reaches no consumer. */
+    if (f->element != NULL)
+        set_bit(dom, f->element, false);
+    f->element = f->pending = NULL;
     JS_FreeValueRT(dom->engine, f->element_wrapper);
     JS_FreeValueRT(dom->engine, f->pending_wrapper);
-    /* The record goes with the drain, its mutation consumer inside it, as
-     * media's does (the listener is not called past the drain). */
-    d_free(dom, f);
+    f->element_wrapper = f->pending_wrapper = JS_UNDEFINED;
+    f->has_provider = f->leaving = f->check = false;
+}
+
+/* The record itself goes with the binding's other records: a child whose
+ * installation was abandoned is freed without a drain. */
+void d_fullscreen_free(os64_dom_t *dom)
+{
+    if (dom->fullscreen == NULL)
+        return;
+    d_free(dom, dom->fullscreen);
     dom->fullscreen = NULL;
 }
 

@@ -157,8 +157,9 @@ typedef struct {
     // The media elements' host (dom/media.h), with its own opaque; zeroed,
     // a media element plays nothing.
     os64_dom_media_provider_t media;
-    // The Fullscreen API's host (dom/fullscreen.h), with its own opaque;
-    // zeroed, the page is not allowed full screen (a frame's document).
+    // The Fullscreen API's host (dom/fullscreen.h), with its own opaque,
+    // given to the page's own document alone (a frame's document has none,
+    // so is never allowed full screen); zeroed, neither is the page's.
     os64_dom_fullscreen_provider_t fullscreen;
     os64_dom_text_provider_t canvas_text;
     os64_dom_history_t history;

@@ -1600,6 +1600,7 @@ static void binding_free(os64_dom_t *dom)
     d_resizes_free(dom);
     d_media_elements_free(dom);
     d_media_session_free(dom);
+    d_fullscreen_free(dom);
     d_walkers_free(dom);
     d_ranges_free(dom);
     if (dom->body_context != NULL) os64_html_release(dom->document, dom->body_context);

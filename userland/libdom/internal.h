@@ -1585,10 +1585,12 @@ void d_media_elements_cancel(os64_dom_t *dom);
 void d_media_elements_drain(os64_dom_t *dom);
 /* The Fullscreen API (fullscreen.c; dom/fullscreen.h is the host's side):
  * its row, its turn in the view step (one queued event or promise a call;
- * true when it ran one), and its share of the drain. */
+ * true when it ran one), its share of the drain (the values, and the
+ * element's state bit), and the record's free with the binding's. */
 int d_fullscreen_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 bool d_fullscreen_step(os64_dom_t *dom, os64_js_outcome_t *outcome);
 void d_fullscreen_drain(os64_dom_t *dom);
+void d_fullscreen_free(os64_dom_t *dom);
 void d_media_elements_free(os64_dom_t *dom);
 /* For the media session (media_session.c): the page's AUDIBLE elements
  * (not muted, a volume, no error) as the window's state reads them (one not

@@ -2,7 +2,8 @@
  * state's Part B): the members and their prefixed names, a request with
  * and without the person's activation, the host's answers (in, refused,
  * out), exitFullscreen, the element removed while full screen, a request
- * for another element, and a document with no host. A fake host records
+ * for another element, the binding drained under a full-screen element,
+ * and a document with no host. A fake host records
  * what it was asked; the view step fires the events, one a call. The page
  * records each event it hears in L as "type@where". */
 
@@ -205,6 +206,20 @@ static void dom_fullscreen_cases(void)
     fs_script(&f, "const h=heard();assert(h==='fullscreenchange@v fullscreenchange@doc webkitfullscreenchange@v "
                   "webkitfullscreenchange@doc'&&document.fullscreenElement===null,'the host left: '+h);",
               "fullscreen: the host's exit");
+
+    /* The binding drained under a full-screen element, its document kept (a
+     * retired host's page stays on screen): the element's bit is cleared,
+     * and nothing is full screen any more. */
+    fs_host.activated = true;
+    fs_script(&f, "v.requestFullscreen();", "fullscreen: in before the drain");
+    os64_dom_fullscreen_settled(f.binding, true);
+    fs_steps(&f, "fullscreen: in before the drain, settled");
+    const os64_html_node_t *held = fs_host.asked;
+    check(held != NULL && (held->state & OS64_HTML_STATE_FULLSCREEN) != 0 &&
+          os64_dom_fullscreen_element(f.binding) == held, "fullscreen: in before the drain");
+    os64_dom_drain(f.binding);
+    check((held->state & OS64_HTML_STATE_FULLSCREEN) == 0 && os64_dom_fullscreen_element(f.binding) == NULL,
+          "fullscreen: the drain clears the element's state and names none");
     fixture_free(&f);
 
     /* A document with no host: not enabled, and refused. */

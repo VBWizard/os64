@@ -317,6 +317,8 @@ mutants = [
     ('fs-no-webkit-twin', 'fullscreen', 'fullscreen', 'if (d_delivery_active(dom) && os64_dom_listens(dom, prefixed))', 'if (false && os64_dom_listens(dom, prefixed))'),
     ('fs-error-named-change', 'fullscreen', 'fullscreen', 'const char *type = t->error ? "fullscreenerror" : "fullscreenchange";', 'const char *type = "fullscreenchange";'),
     ('fs-no-provider-allowed', 'fullscreen', 'fullscreen', '    if (f == NULL || !f->has_provider)\n        refusal', '    if (f == NULL)\n        refusal'),
+    ('fs-drain-keeps-the-bit', 'fullscreen', 'fullscreen', '    if (f->element != NULL)\n        set_bit(dom, f->element, false);', '    (void)0;'),
+    ('fs-record-never-freed', 'fullscreen', 'fullscreen', '    d_free(dom, dom->fullscreen);\n    dom->fullscreen = NULL;', '    dom->fullscreen = NULL;'),
 ]
 
 # Runtime output is bounded independently of compiler object sizes. Never read

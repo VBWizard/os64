@@ -1266,15 +1266,18 @@ static void preloads_free(Page *p);
 
 // Full screen (the section beside layout, which says what these are):
 // leave it before anything that needs a hidden row or asks the person
-// something (the design state's C.7), with `notify` false when the page
-// is going and hears nothing; a page that goes; and the provider a
+// something (the design state's C.7), with `notify` false when the page's
+// scripts are gone and hear nothing; a page that goes; and the provider a
 // page's scripts are given.
 static struct {
     uint64_t serial;                // the page that asked
     bool enter_owed, leave_owed;
     bool active;
     bool ours;
-    const os64_html_node_t *element;    // the element while `active` (libdom's), for the paint and the pointer
+    bool relayout_owed;             // a page went while full screen: the rows come back at the next turn
+    const os64_html_node_t *element;    // libdom's while `active`, held (fs_name)
+    const os64_html_document_t *held;   // the document `element` is held on
+    const os64_html_node_t *top;        // the top layer: `element`, or NULL for the root element
 } s_fs;
 static void fs_leave(bool notify);
 static void fs_page_going(Page *p);
@@ -1282,9 +1285,17 @@ static bool fs_consume(void *opaque);
 static void fs_enter_asked(void *opaque, const os64_html_node_t *element);
 static void fs_leave_asked(void *opaque);
 // What the pointer at the document point (x, y) is over on the page: what
-// flow_hit finds, or while an element is full screen, what it finds inside
-// that element alone (nothing outside it is there).
+// flow_hit finds, or while an element other than the root is full screen,
+// what it finds inside that element alone (nothing outside it is there).
 static const flow_box_t *page_hit(int32_t x, int32_t y, flow_point_t scroll);
+// Whether a widget drawn over the page's box `b` is covered at the
+// document point (x, y), or at the box's centre: flow_box_covered's rule,
+// within the top layer while there is one.
+static bool page_covered_at(const flow_box_t *b, int32_t x, int32_t y, flow_point_t scroll);
+static bool page_covered(const flow_box_t *b, flow_point_t scroll);
+// Whether an element other than the root is full screen: what is shown,
+// hit and scrolled is that element alone.
+static bool fs_layer(void);
 
 static void page_clear(Page *p)
 {
@@ -13016,7 +13027,7 @@ static void forms_place(void)
         if (gadget(b, widget_control(fw)) || !b->replaced)
             cls = unpainted_class(fw->own_class);
         bool shown = x < (int64_t)v.x + v.w && y < (int64_t)v.y + v.h && x + at.w > v.x && y + at.h > v.y &&
-                     at.w > 0 && at.h > 0 && !flow_box_covered(g.page.tree, b, scroll_now()) && cls != NULL;
+                     at.w > 0 && at.h > 0 && !page_covered(b, scroll_now()) && cls != NULL;
         fw->w->clipped = true;
         fw->w->clip = v;
         if (cls != NULL && cls != fw->w->cls) {
@@ -15106,8 +15117,8 @@ static void players_place(void)
         bool shown = b != NULL && b->replaced && b->style->visibility == FLOW_VISIBLE && cls != NULL &&
                      at.w > 0 && at.h > 0 && x < (int64_t)v.x + v.w && y < (int64_t)v.y + v.h &&
                      x + at.w > v.x && y + at.h > v.y &&
-                     !flow_box_covered_at(g.page.tree, b, (int32_t)((int64_t)at.x + at.w / 2),
-                                          (int32_t)((int64_t)at.y + at.h / 2), scroll_now());
+                     !page_covered_at(b, (int32_t)((int64_t)at.x + at.w / 2),
+                                      (int32_t)((int64_t)at.y + at.h / 2), scroll_now());
         if (cls != NULL && cls != w->cls) {
             w->cls = cls;
             os64_ui_mark_dirty(&g.ui, w);
@@ -23968,8 +23979,9 @@ static bool view_event(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_event_
             return false;
         int32_t dx = ev->mouse.dx * 3 * line_step(), dy = ev->mouse.dy * 3 * line_step();
         // In full screen the wheel reaches scrollers inside the element and
-        // never the document beneath it (the design state's B.5).
-        if (!wheel_box(ev->mouse.x, ev->mouse.y, dx, dy) && !s_fs.active)
+        // never the document beneath it (the design state's B.5), unless
+        // the element is the root, which is the document.
+        if (!wheel_box(ev->mouse.x, ev->mouse.y, dx, dy) && !fs_layer())
             scroll_to(g.sx + dx, g.sy + dy);
         return true;
     }
@@ -24015,8 +24027,9 @@ static bool view_event(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_event_
     }
     case OS64_GUI_EVENT_KEY_DOWN:
         // The document's scroll keys go nowhere in full screen: what is shown
-        // is the element, which the document's scroll does not move.
-        if (s_fs.active)
+        // is the element, which the document's scroll does not move (the
+        // root's full screen shows the document, which they scroll).
+        if (fs_layer())
             return view_key(ev) != KEY_NONE || g.seq != 0;
         switch (view_key(ev)) {
         case KEY_UP: scroll_to(g.sx, g.sy - line_step()); return true;
@@ -25470,8 +25483,9 @@ static void layout_place(os64_ui_widget_t *w, os64_gui_rect_t r, bool staged)
 // element, unless the person already put it there with the window manager's
 // Ctrl+Alt+F: `ours` says which, so leaving the element's full screen
 // leaves the window manager's only when the element put it there. While an
-// element is full screen (`active`) the rows are hidden (layout_window) and
-// the page paints the element alone (yonder_paint_set_top).
+// element is full screen (`active`) the rows are hidden (layout_window) and,
+// unless it is the root, the page paints the element alone
+// (yonder_paint_set_top).
 static const os64_gui_rect_t kNoRect = {0, 0, 0, 0};
 
 static void fs_enter_asked(void *opaque, const os64_html_node_t *element)
@@ -25501,14 +25515,45 @@ static bool window_full_screen(void)
     return os64_gui_window_get_state(g.win, &st) == 0 && (st.flags & OS64_GUI_WINDOW_FULL_SCREEN) != 0;
 }
 
-// The rows go or come back, and the page is laid out for its new view.
-static void fs_relayout(void)
+// Names the element full screen, holding it (libhtml's hold) so that the
+// paint and the pointer may name it until yonder lets go, whatever becomes
+// of libdom's record: a retired host's drain lets go of its wrapper, which
+// may be the last thing keeping a removed element. NULL lets go. The root
+// element names no top layer, since the standard gives it none of the
+// user-agent rules: the page is shown, hit and scrolled whole, as other
+// browsers do.
+static void fs_name(const os64_html_node_t *element)
 {
-    s_fs.element = s_fs.active ? yonder_scripts_fullscreen_element(g.page.scripts) : NULL;
-    yonder_paint_set_top(s_fs.element);
+    if (element == s_fs.element)
+        return;
+    if (s_fs.element != NULL)
+        os64_html_release(s_fs.held, s_fs.element);
+    s_fs.element = element;
+    s_fs.held = element != NULL ? page_doc(&g.page) : NULL;
+    if (element != NULL)
+        os64_html_hold(s_fs.held, element);
+    bool root = element != NULL && element->parent != NULL && element->parent->kind == OS64_HTML_DOCUMENT;
+    s_fs.top = root ? NULL : element;
+    yonder_paint_set_top(s_fs.top);
+}
+
+static bool fs_layer(void)
+{
+    return s_fs.active && s_fs.top != NULL;
+}
+
+// The rows go or come back, and the page is laid out for its new view.
+static void fs_rows(void)
+{
     layout();
     g.relayout_due = true;
     mark_whole(WHOLE_WINDOW, true);
+}
+
+static void fs_relayout(void)
+{
+    fs_name(s_fs.active ? yonder_scripts_fullscreen_element(g.page.scripts) : NULL);
+    fs_rows();
 }
 
 static void fs_leave(bool notify)
@@ -25524,10 +25569,21 @@ static void fs_leave(bool notify)
         yonder_scripts_fullscreen_exit(g.page.scripts);
 }
 
+// The page on screen is going (a navigation, or yonder quitting): the
+// element is let go while its document is still here, and the window
+// comes back. Its scripts may be gone already, so nobody is told, and the
+// rows come back at the next turn, over whatever page is on screen then.
 static void fs_page_going(Page *p)
 {
-    if (p->scripts != NULL && p->scripts == g.page.scripts)
-        fs_leave(false);
+    if (p != &g.page)
+        return;
+    fs_name(NULL);
+    if (s_fs.active) {
+        if (s_fs.ours)
+            (void)os64_gui_window_set_full_screen(g.win, false);
+        s_fs.relayout_owed = true;
+    }
+    s_fs.active = s_fs.ours = false;
 }
 
 // The answers owed: an enter asked of the page on screen goes over the
@@ -25535,12 +25591,24 @@ static void fs_page_going(Page *p)
 // on screen is refused or dropped.
 static void fs_turn(void)
 {
+    if (s_fs.relayout_owed) {
+        s_fs.relayout_owed = false;
+        fs_rows();
+    }
+    // The page's scripts were retired under it (a runaway, its memory, the
+    // settings): their drain ended the element's full screen in libdom, so
+    // the window comes back and nobody is told.
+    if (s_fs.active && yonder_scripts_fullscreen_element(g.page.scripts) == NULL)
+        fs_leave(false);
     yonder_scripts_t *host = s_fs.enter_owed || s_fs.leave_owed ? scripts_for(s_fs.serial) : NULL;
     bool here = host != NULL && host == g.page.scripts;
     if (s_fs.enter_owed) {
         s_fs.enter_owed = false;
         bool ok = false;
-        if (here && window_full_screen()) {
+        // A question in the bar is answered first: full screen would hide it.
+        if (g.bar.up) {
+            ok = false;
+        } else if (here && window_full_screen()) {
             ok = true;              // the person's chord already put it there
         } else if (here && os64_gui_window_set_full_screen(g.win, true) == 0) {
             ok = true;
@@ -25576,10 +25644,24 @@ static const flow_box_t *page_hit(int32_t x, int32_t y, flow_point_t scroll)
 {
     if (g.page.tree == NULL)
         return NULL;
-    if (!s_fs.active)
+    if (!fs_layer())
         return flow_hit(g.page.tree, x, y, scroll);
-    const flow_box_t *top = s_fs.element != NULL ? flow_box_for(g.page.tree, s_fs.element) : NULL;
+    const flow_box_t *top = flow_box_for(g.page.tree, s_fs.top);
     return top != NULL ? flow_hit_within(g.page.tree, x, y, scroll, top) : NULL;
+}
+
+static bool page_covered_at(const flow_box_t *b, int32_t x, int32_t y, flow_point_t scroll)
+{
+    if (!fs_layer())
+        return flow_box_covered_at(g.page.tree, b, x, y, scroll);
+    const flow_box_t *top = flow_box_for(g.page.tree, s_fs.top);
+    return top == NULL || flow_box_covered_within(g.page.tree, b, x, y, scroll, top);
+}
+
+static bool page_covered(const flow_box_t *b, flow_point_t scroll)
+{
+    os64_gui_rect_t r = flow_box_doc_rect(b, scroll);
+    return page_covered_at(b, (int32_t)((int64_t)r.x + r.w / 2), (int32_t)((int64_t)r.y + r.h / 2), scroll);
 }
 
 // The full-screen layout: the view is the window, and every row is hidden.

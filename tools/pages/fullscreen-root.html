@@ -1,0 +1,31 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Full screen: the whole page</title>
+<!--
+  VIDEO.md § 9, the Fullscreen API (slice 2). The call a game or a "full
+  screen this page" button makes: document.documentElement.requestFullscreen().
+  The root element gets none of the standard's user-agent rules and no top
+  layer, so the whole page fills the screen as it is: the browser's rows
+  are gone, the page's dark canvas reaches every edge, and the wheel and
+  the arrow keys still scroll it down to the last line. Escape comes back.
+-->
+<style>
+  html { background: #223; color: #ddd; }
+  body { font: 16px sans-serif; margin: 32px; }
+  p { margin: 0 0 12px; }
+</style>
+<h1>Full screen: the whole page</h1>
+<p><button id="go">Full screen</button> <span id="state">windowed</span></p>
+<div id="lines"></div>
+<script>
+  const lines = document.getElementById('lines');
+  for (let i = 1; i <= 60; i++) {
+    const p = document.createElement('p');
+    p.textContent = 'Line ' + i + (i === 60 ? ': the last line' : '');
+    lines.appendChild(p);
+  }
+  document.getElementById('go').onclick = () => document.documentElement.requestFullscreen();
+  document.addEventListener('fullscreenchange', () => {
+    document.getElementById('state').textContent = document.fullscreenElement ? 'full screen' : 'windowed';
+  });
+</script>

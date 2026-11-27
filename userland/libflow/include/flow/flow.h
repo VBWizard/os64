@@ -2210,6 +2210,11 @@ bool flow_box_covered(const flow_tree_t *tree, const flow_box_t *box, flow_point
 // the box's centre, for a widget that covers only part of its box (a
 // video's player, the strip along its bottom).
 bool flow_box_covered_at(const flow_tree_t *tree, const flow_box_t *box, int32_t x, int32_t y, flow_point_t scroll);
+// The same question while only `top` and what is inside it are there (the
+// Fullscreen API's top layer, flow_hit_within): a box outside `top` is
+// covered, and one inside it is covered only by what is inside it too.
+bool flow_box_covered_within(const flow_tree_t *tree, const flow_box_t *box, int32_t x, int32_t y,
+                             flow_point_t scroll, const flow_box_t *top);
 
 // Every box that meets `viewport` but the LINE boxes, which paint nothing of
 // their own (flow_hit can still answer one) — except a line of a box with

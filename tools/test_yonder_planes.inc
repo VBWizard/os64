@@ -995,9 +995,10 @@ static void plane_cases(void)
  * box of the page outside it stacked over everything. The top layer's
  * paint is the same paint the planes ride on (paint.h's top layer): the
  * video placed with its hole, the bar an overlay in the edit, --plane-check
- * finding nothing wrong, the box outside not painted, and what the
- * container leaves see-through the black backdrop, not the page. The state
- * bit is set as libdom sets it, and the page laid out again for it. */
+ * finding nothing wrong, the box outside not painted, hit or uncovered for
+ * a widget, and what the container leaves see-through the black backdrop,
+ * not the page. The state bit is set as libdom sets it, and the page laid
+ * out again for it. */
 static void plane_fullscreen_container(void)
 {
     Video *v = &s_videos[0];
@@ -1013,8 +1014,7 @@ static void plane_fullscreen_container(void)
     check(relayout(true), "planes, full screen: laid out again");
     s_videos[0].node = probe_id("v");
     s_fs.active = true;
-    s_fs.element = c;
-    yonder_paint_set_top(c);
+    fs_name(c);
     const flow_box_t *cb = flow_box_for(g.page.tree, c);
     check(cb != NULL && cb->rect.x == 0 && cb->rect.y == 0 && cb->rect.w == 800 && cb->rect.h == 600,
           "planes, full screen: the container fills the view (the UA rules)");
@@ -1034,10 +1034,14 @@ static void plane_fullscreen_container(void)
     check(plane_screen.surf.pixels[(size_t)10 * 800 + 10] == 0xff000000u,
           "planes, full screen: what the container leaves see-through is the black backdrop");
     check(page_hit(650, 520, scroll_now()) == cb, "planes, full screen: the box outside takes no pointer");
+    const flow_box_t *ob = flow_box_for(g.page.tree, probe_id("out"));
+    const flow_box_t *bb = flow_box_for(g.page.tree, probe_id("bar"));
+    check(ob != NULL && bb != NULL && page_covered(ob, scroll_now()) && !page_covered(bb, scroll_now()),
+          "planes, full screen: a widget over the box outside is covered, over the bar it is not");
     planes_release();
+    fs_name(NULL);
     s_fs.active = false;
-    s_fs.element = NULL;
-    yonder_paint_set_top(NULL);
+    check(!page_covered(ob, scroll_now()), "planes, full screen: back, the box outside is uncovered");
     plane_drop();
 }
 

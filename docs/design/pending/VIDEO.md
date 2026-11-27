@@ -918,13 +918,22 @@ what it decided, in the code's own words:
   - It hides its rows.
   - It paints the black backdrop and then the element alone, in every paint
     of the page, plane paints included (`paint.h`'s top layer).
-  - The pointer reaches only the element (`flow_hit_within`).
+  - The pointer reaches only the element (`flow_hit_within`), and a form
+    control or player widget outside it is hidden
+    (`flow_box_covered_within`).
+  - The root element full screen has no top layer: the page is shown, hit
+    and scrolled whole, as in other browsers.
+  - It holds the element while it names it, and lets go when the page goes
+    (the window coming back) or when the page's scripts are retired under
+    it, whose drain clears the element's state.
+  - A request while yonder's question bar is up is refused.
 - **Leaving.** Escape leaves full screen, and so does everything that needs
   a hidden row or asks the person something. The window manager's chord
   ends the element's full screen. `/tests/pages/fullscreen*.html` are the
   pages to try.
 
-Slice 3 is the player widget's button.
+Slice 3 is the player widget's button, and waits on #692 (V.6.3, the
+strip over the picture that hides when idle).
 
 ## 10. Slices (a first cut, to be argued)
 
