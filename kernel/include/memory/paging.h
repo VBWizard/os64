@@ -154,6 +154,16 @@ uintptr_t paging_walk_paging_table(pt_entry_t* pml4, uint64_t virtual_address);
 // walk. Assumes 4KB user pages (the keep-flags PTE carries the real bits).
 uintptr_t paging_resolve_user_writable(pt_entry_t *pml4v, uint64_t va);
 
+// Could RING 3 reach `va` right now, as the CPU would judge it: below
+// USER_CANONICAL_MAX, and every entry of the walk, the leaf and the three
+// tables above it, present and USER, and WRITE too when `for_write`. A 2 MiB
+// or 1 GiB entry answers false (ring 3 is given none). A supervisor page in
+// the lower half, a thread's kernel stack, never passes: its leaf has no
+// USER bit. The walk takes no lock: it reads entries a page table holds,
+// and a task's table pages live until its burial, which cannot come while
+// one of its threads is in a syscall.
+bool paging_user_page_reachable(pt_entry_t *pml4v, uint64_t va, bool for_write);
+
 void validatePagingHierarchy(uintptr_t address);
 void init_os64_paging_tables();
 void paging_map_kernel_into_pml4(uintptr_t* pml4v);

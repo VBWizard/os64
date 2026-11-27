@@ -12,6 +12,7 @@ void maplist_link(maplist_t *l, maplist_node_t *n, uintptr_t start, uintptr_t en
 {
     n->start = start;
     n->end = end;
+    n->linked = ++l->links;
     n->holds = 0;
     n->listed = true;
     n->prev = NULL;
@@ -22,8 +23,34 @@ void maplist_link(maplist_t *l, maplist_node_t *n, uintptr_t start, uintptr_t en
     l->count++;
 }
 
+// Off the list where it is, onto its head. `n` is listed and not the head.
+static void move_to_head(maplist_t *l, maplist_node_t *n)
+{
+    n->prev->next = n->next;
+    if (n->next != NULL)
+        n->next->prev = n->prev;
+    n->prev = NULL;
+    n->next = l->head;
+    l->head->prev = n;
+    l->head = n;
+}
+
+// May `n` move to the head? Not past a node that overlaps it and was linked
+// after it: that node governs their shared addresses (maplist.h). The nodes
+// ahead of `n` are the ones the walk just stepped over, so this is a second
+// look at them, counted in `*steps`.
+static bool may_lead(maplist_t *l, maplist_node_t *n, uint64_t *steps)
+{
+    for (maplist_node_t *m = l->head; m != n; m = m->next) {
+        (*steps)++;
+        if (m->linked > n->linked && m->start < n->end && n->start < m->end)
+            return false;
+    }
+    return true;
+}
+
 // The walk, counted: `start_only` matches an exact start, otherwise a
-// range holding `addr`.
+// range holding `addr`, which moves what it finds to the head (may_lead).
 static maplist_node_t *walk(maplist_t *l, uintptr_t addr, bool start_only)
 {
     uint64_t steps = 0;
@@ -36,6 +63,10 @@ static maplist_node_t *walk(maplist_t *l, uintptr_t addr, bool start_only)
         }
     }
     l->lookups++;
+    if (found == NULL)
+        l->misses++;
+    else if (!start_only && found != l->head && may_lead(l, found, &steps))
+        move_to_head(l, found);
     l->steps += steps;
     if (steps > l->steps_most)
         l->steps_most = steps;
@@ -46,9 +77,11 @@ static maplist_node_t *walk(maplist_t *l, uintptr_t addr, bool start_only)
 
 void maplist_read_walks(maplist_t *l, maplist_walks_t *all, maplist_walks_t *since)
 {
-    *all = (maplist_walks_t){ l->lookups, l->steps, l->steps_most };
-    *since = (maplist_walks_t){ l->lookups - l->read_lookups, l->steps - l->read_steps, l->window_steps_most };
+    *all = (maplist_walks_t){ l->lookups, l->misses, l->steps, l->steps_most };
+    *since = (maplist_walks_t){ l->lookups - l->read_lookups, l->misses - l->read_misses, l->steps - l->read_steps,
+                                l->window_steps_most };
     l->read_lookups = l->lookups;
+    l->read_misses = l->misses;
     l->read_steps = l->steps;
     l->window_steps_most = 0;
 }

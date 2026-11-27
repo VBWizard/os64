@@ -334,6 +334,10 @@
         // once delisted; burial takes them all at once.
         maplist_t mmaps;
         counted_lock_t mapLock;
+        // Pages of syscall ranges the page table vouched for without a walk
+        // of the list (user_range_accessible), counted atomically; where the
+        // last /proc read left the count, written under mapLock.
+        uint64_t tableAnswers, tableAnswersRead;
         // THE TASK'S PAGE LOCK: what serializes writes to this task's leaf
         // page-table entries inside its mappings. A fault installs a page
         // under it, after rechecking that its mapping is still listed;
