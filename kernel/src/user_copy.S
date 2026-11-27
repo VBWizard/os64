@@ -1,9 +1,11 @@
 .intel_syntax noprefix
 
 # The copies that touch user memory by its user address (USER_COPY.md;
-# user_copy.h). A long copy moves its bytes the way the kernel's own memcpy
-# moves one (shared/copy_fill.c, copy_rep: QEMU without KVM emulates a
-# string instruction one step at a time, so eight bytes a step, not one):
+# user_copy.h). A copy over COPY_SHORT_MOST bytes moves the way the kernel's
+# own memcpy moves one of 512 bytes or more (shared/copy_fill.c, copy_rep:
+# QEMU without KVM emulates a string instruction one step at a time, so
+# eight bytes a step, not one; memcpy's 16-byte passes below 512 would be
+# more instructions to put in the table, for no use here):
 # single bytes up to the destination's first 8-byte boundary, then eight
 # bytes a step, then single bytes for the tail. A copy of COPY_SHORT_MOST
 # bytes or fewer is one `rep movsb` of its own: three string instructions'
