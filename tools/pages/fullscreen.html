@@ -23,11 +23,16 @@
     the window comes back and the page hears fullscreenchange.
   The log keeps every event and every promise's answer.
 
+  The container sits in a wrapper that is transformed and clips, as many
+  players' do: full screen leaves it behind, so the container still fills
+  the screen.
+
   Under `--plane-check=1` the video stays on its plane full screen, the bar
   an overlay; the record's plane-check counts must say wrong 0.
 -->
 <style>
   body { font: 16px sans-serif; margin: 16px; background: #223; color: #ddd; }
+  #wrap { transform: translateX(0); overflow: hidden; width: 488px; height: 308px; }
   #c { position: relative; width: 480px; height: 300px; border: 4px solid #888; background: #000; }
   #c:fullscreen { border-color: #3c3; }
   video { position: absolute; left: 0; top: 0; width: 100%; height: calc(100% - 44px); background: #000; }
@@ -40,11 +45,11 @@
 </style>
 <h1>Full screen: a player's container</h1>
 <p><button id="go">Full screen</button> <button id="remove">Full screen, then remove</button></p>
-<div id="c">
+<div id="wrap"><div id="c">
   <video id="v" src="bbb-480p-3s-av.mp4" autoplay muted loop></video>
   <div id="bar"><button id="exit">Exit</button><button id="say">Alert</button><a href="audio.html">Next page</a>
     <span id="state">windowed</span></div>
-</div>
+</div></div>
 <div id="out">on the page, over everything</div>
 <div id="log"></div>
 <script>
