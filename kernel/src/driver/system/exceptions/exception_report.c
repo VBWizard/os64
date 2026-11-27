@@ -648,7 +648,7 @@ void exception_dispatch(exception_context_t *ctx)
 		// common case and the reason this whole path is allowed to return;
 		// for a fatal one it reports (through us, via the registered context)
 		// and never comes back.
-		handle_page_fault(cr2, ctx->error_code, ctx->rip);
+		handle_page_fault(cr2, ctx->error_code, ctx->rip, ctx);
 
 		// The page-fault self-test steers the resume. This used to be done by
 		// writing through a global pointer into the interrupt frame; now it is

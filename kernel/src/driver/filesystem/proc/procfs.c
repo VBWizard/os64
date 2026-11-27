@@ -625,6 +625,9 @@ static void proc_gen_task_status(synth_text_t *t, task_t *task)
 	}
 	synth_text_addf(t, "threads\t%u made, %u live\n", threads_made, threads_live);
 	synth_text_addf(t, "reaps_pending\t%u\n", __atomic_load_n(&task->reaps.pending, __ATOMIC_RELAXED));
+	// User copies whose page a sibling took away after the check, answered
+	// not copied instead of a panic (USER_COPY.md).
+	synth_text_addf(t, "copy_recoveries\t%lu\n", __atomic_load_n(&task->copyRecoveries, __ATOMIC_RELAXED));
 	// The heap range holds the task's mappings and its threads' stacks; the
 	// next line says how much of it the stacks took, guards included.
 	synth_text_addf(t, "heap\t%p-%p\n", (void *)task->heapStart, (void *)task->heapEnd);

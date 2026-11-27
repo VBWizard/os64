@@ -417,6 +417,11 @@
 		// console, VT1 (task_tty() resolves; kernel threads created before
 		// tty_init simply stay NULL forever and that is correct).
 		struct tty *tty;
+		// User copies of this task's that faulted on a page a sibling had
+		// taken away and resumed at their failure exit (USER_COPY.md); its
+		// /proc status's copy_recoveries. Added to by the page-fault
+		// handler, atomically.
+		uint64_t copyRecoveries;
 		void *prev, *next;
     } task_t;
 

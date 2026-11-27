@@ -59,6 +59,7 @@
 #include "micros.h"                  // micros_now — the clock micros() hands out
 #include "audio/audio.h"             // audio_write and the reads — the object behind HANDLE_AUDIO
 #include "audio/media_session.h"     // a media-key session — the object behind HANDLE_MEDIA_KEYS
+#include "user_copy.h"            // user_copy_in/out — the only instructions that touch user memory
 #include "os64/audio.h"              // OS64_AUDIO_* — the answers ring 3 is given
 
 // The monotonic tick counter (kernel.h) — read by sleep()'s deadline math
@@ -789,9 +790,11 @@ void restore_user_cr3(void)
 // after: the page table's entries, read with no lock, and the mapping's
 // facts, copied under the task's mapLock. A sibling's unmap between the
 // check and the copy, or a sibling's exit whose stack held the buffer, is
-// the program's own race, but its cost is the kernel's: the copy faults in
-// ring 0 on a page no longer there, and that panics (DEBTS, "A copy can
-// outlive the check that allowed it").
+// the program's own race, and its cost is the program's: the copy faults in
+// ring 0 on a page no longer there, and the fault resumes at the copy's
+// failure exit (user_copy.S; USER_COPY.md), so the call answers not copied.
+// This check stays the gate all the same: a copy given an address it would
+// refuse (the kernel's half, a supervisor page, page zero) still panics.
 static bool user_range_accessible(const void *user_ptr, size_t length, bool for_write)
 {
 	uintptr_t addr = (uintptr_t)user_ptr;
@@ -850,8 +853,10 @@ bool validate_and_copy_user_data(const void* user_ptr, size_t length, void* kern
 		return false;
 	}
 
-	memcpy(kernel_buffer, user_ptr, length);
-	return true;
+	// A page a sibling takes away between the check and the copy fails the
+	// copy, not the machine (USER_COPY.md); the buffer is then partly
+	// written, and the caller acts on none of it.
+	return user_copy_in(kernel_buffer, user_ptr, length) == 0;
 }
 
 void log_syscall_invocation(const syscall_entry_t* entry, const uint64_t args[6])
@@ -1001,12 +1006,17 @@ out:
 
 // How long a user string is, reading no further than `cap` bytes: 1 with
 // *len set when its terminator lies within them, 0 when it does not, -1 when
-// a byte before the terminator cannot be read. A page is vetted once and then
-// scanned where it lies, because a spawn measures up to a mebibyte of
-// arguments with interrupts masked, and vetting that a byte at a time is a
-// million VMA lookups. Nothing is copied, so the answer is only as current as
-// the scan: user memory can change after it, and a caller that copies must
-// check what arrived.
+// a byte before the terminator cannot be read (a page the check refused, or
+// one a sibling took away during the scan). A page is vetted once, because a
+// spawn measures up to a mebibyte of arguments with interrupts masked, and
+// vetting that a byte at a time is a million VMA lookups; it is then read in
+// pieces of at most 256 bytes through user_copy_in (USER_COPY.md: the copy
+// routines are the only instructions that touch user memory), and a piece
+// never crosses the end of the page the check just passed, so a string
+// ending near the end of the last mapped page still measures. The answer is
+// only as current as the scan: user memory can change after it, so a caller
+// that copies bounds its copy by the length measured and forces the
+// terminator itself.
 static int user_string_length(const char *user_str, size_t cap, size_t *len)
 {
         if (user_str == NULL)
@@ -1033,14 +1043,32 @@ static int user_string_length(const char *user_str, size_t cap, size_t *len)
                         break;
                 }
 
-                const char *bytes = (const char *)at;
                 size_t k = 0;
-                while (k < chunk && bytes[k] != '\0')
+                bool ended = false, unread = false;
+                while (k < chunk && !ended)
                 {
-                        k++;
+                        char piece[256];
+                        size_t take = chunk - k < sizeof(piece) ? chunk - k : sizeof(piece);
+                        if (user_copy_in(piece, (const char *)at + k, take) != 0)
+                        {
+                                unread = true;
+                                break;
+                        }
+                        size_t i = 0;
+                        while (i < take && piece[i] != '\0')
+                        {
+                                i++;
+                        }
+                        k += i;
+                        ended = i < take;
+                }
+                if (unread)
+                {
+                        verdict = -1;
+                        break;
                 }
                 n += k;
-                if (k < chunk)
+                if (ended)
                 {
                         *len = n;
                         verdict = 1;
@@ -1089,10 +1117,13 @@ static bool copy_to_user_buffer(void *user_dst, const void *kernel_src, size_t l
         bool switched = false;
         uint64_t original_cr3 = user_cr3_window_open(&switched);
 
-        memcpy(user_dst, kernel_src, length);
+        // A page a sibling takes away between the check and the copy fails
+        // the copy, not the machine (USER_COPY.md): what had been copied
+        // stays where it landed, and the call answers not copied.
+        bool copied = user_copy_out(user_dst, kernel_src, length) == 0;
 
         user_cr3_window_close(original_cr3, switched);
-        return true;
+        return copied;
 }
 
 static uint64_t syscall_yield(uint64_t arg0, uint64_t arg1, uint64_t arg2,
