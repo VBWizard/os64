@@ -19,8 +19,9 @@
 #include "signals.h"            // signal_deliver_segv — a caught SIGSEGV resumes into its handler
 #include "exception_report.h"   // the unified path's context + reporter — the
                                 // demand pager below serves BOTH paths, and
-                                // asks exception_current_context() which one
-                                // owns a fatal fault (see page_fault_panic)
+                                // the frame it is handed (NULL from EXCOLD)
+                                // says which one owns a fatal fault
+                                // (see page_fault_panic)
 #include "memory/vma.h"
 #include "memory/mmap.h"   // MAP_ANONYMOUS — the twin-resolve loser frees by its VMA's allocator
 #include "kmalloc.h"
@@ -698,15 +699,16 @@ static void page_fault_decode(char *out, size_t len, uint64_t error_code)
 /// `why` qualifies it, and exception_panic prints exactly what #GP, #UD, #DE
 /// and #MC print.
 static void __attribute__((noreturn)) page_fault_panic(const char *why, uint64_t cr2,
-                                                       uint64_t error_code, uint64_t rip)
+                                                       uint64_t error_code, uint64_t rip,
+                                                       exception_context_t *ctx)
 {
 	// THE SEAM BETWEEN THE TWO REPORTING PATHS (2026-08-11). The demand pager
 	// is shared — duplicating ~250 lines of paging policy so each path could
 	// own a copy would be a bug factory — so this door asks which path the
-	// fault ARRIVED through. The unified prologue (exception_entry.S)
-	// registered a per-core context on entry; the old EXCOLD stubs never do.
-	// A registered context means the full capture exists: report from it.
-	exception_context_t *ctx = exception_current_context();
+	// fault ARRIVED through. The unified prologue (exception_entry.S) hands
+	// the fault's own frame down; the old EXCOLD stubs hand NULL. A frame
+	// means the full capture exists: report from it. It is this fault's even
+	// after a resolve that parked and resumed on another CPU.
 	if (ctx != NULL) {
 		// exception_report prints the faulting address and the decoded error
 		// bits itself for vector 14 — `why` carries only the pager's verdict.
@@ -792,7 +794,7 @@ static const char *stack_guard_side(const thread_t *thread, uint64_t cr2)
 }
 
 static void __attribute__((noreturn)) user_fault_kill(task_t *task, const char *why,
-    uint64_t cr2, uint64_t error_code, uint64_t rip)
+    uint64_t cr2, uint64_t error_code, uint64_t rip, exception_context_t *ctx)
 {
 	// A fault in the thread's own stack guard is named for what it is. The
 	// exit code stays 139 — it is still a segmentation fault; the headline
@@ -842,11 +844,10 @@ static void __attribute__((noreturn)) user_fault_kill(task_t *task, const char *
 
 	// The registers the program died holding — same argument as the kernel
 	// panic path: CR2 names the address, the registers name the pointer.
-	// Same seam as page_fault_panic: a registered context means the unified
-	// prologue captured this exception's own registers — use them, and hand
-	// the walker the frame pointer from the same instant. Otherwise fall back
-	// to the globals the old #PF stub maintains.
-	exception_context_t *ctx = exception_current_context();
+	// Same seam as page_fault_panic: a frame means the unified prologue
+	// captured this exception's own registers — use them, and hand the walker
+	// the frame pointer from the same instant. Otherwise fall back to the
+	// globals the old #PF stub maintains.
 	if (ctx != NULL) {
 		exception_report_registers(ctx, false);  // the OS survives this — ordinary log, in order
 
@@ -931,7 +932,8 @@ static void __attribute__((noreturn)) user_fault_kill(task_t *task, const char *
 // shared-object mapping that covers an address outside its image is a
 // broken invariant of the loader's, not a fault, and panics here.
 static const char *page_fault_in_mapping(task_t *task, vma_t *vma, thread_t *fault_thread,
-                                         uint64_t cr2, uint64_t error_code, uint64_t rip)
+                                         uint64_t cr2, uint64_t error_code, uint64_t rip,
+                                         exception_context_t *ctx)
 {
     // Per-fault detail: rides DETAILED so the base demand-paging channel
     // stays a readable two-lines-per-fault (announce + resolution).
@@ -1061,7 +1063,7 @@ static const char *page_fault_in_mapping(task_t *task, vma_t *vma, thread_t *fau
         size_t page_idx = 0;
         if (!shared_object_page_index(so, aligned, &page_idx))
             page_fault_panic("shared-object VMA covers an address outside its image",
-                             cr2, error_code, rip);
+                             cr2, error_code, rip, ctx);
 
         bool did_read = false;
         uintptr_t phys = shared_object_resolve_page(so, page_idx, &did_read);
@@ -1185,7 +1187,7 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip, exceptio
                    ? (task_t *)fault_thread->ownerTask : (cls ? cls->task : NULL);
     if (!task)
     {
-        page_fault_panic("no task context (early boot?)", cr2, error_code, rip);
+        page_fault_panic("no task context (early boot?)", cr2, error_code, rip, ctx);
     }
 
     // A VMA cannot override the first-page guard. Refuse before resolving
@@ -1197,9 +1199,9 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip, exceptio
         {
             if (try_catch_segv(task, ctx))
                 return;
-            user_fault_kill(task, "access to guarded page zero", cr2, error_code, rip);
+            user_fault_kill(task, "access to guarded page zero", cr2, error_code, rip, ctx);
         }
-        page_fault_panic("access to guarded page zero", cr2, error_code, rip);
+        page_fault_panic("access to guarded page zero", cr2, error_code, rip, ctx);
     }
 
     // The mapping, held: a sibling's unmap may delist it while this fault
@@ -1238,12 +1240,13 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip, exceptio
                     : ((error_code & 0x10)
                         ? "no-execute violation (instruction fetch from data memory)"
                         : "protection violation on eagerly-mapped memory"),
-                cr2, error_code, rip);
+                cr2, error_code, rip, ctx);
         }
         // A user copy whose page a sibling took away (an unmap, a reaped
         // thread's stack) resumes at its failure exit (USER_COPY.md). The
-        // test refuses any address the check would have refused, so the
-        // tripwire and the panics below still fire for the kernel's own.
+        // rule takes only a fault on the copy's user operand at a user
+        // address, so the tripwire and the panics below still fire for the
+        // kernel's own, a copy that ran off its kernel buffer included.
         if (user_copy_recover(ctx, task, cr2, error_code, rip))
             return;
         // A fault in the HHDM range is the lazy-HHDM tripwire firing (see
@@ -1257,12 +1260,12 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip, exceptio
             snprintf(hhdm, sizeof(hhdm),
                      "HHDM access to unallocated physical 0x%016lx — use-after-free or wild pointer?",
                      cr2 - kHHDMOffset);
-            page_fault_panic(hhdm, cr2, error_code, rip);
+            page_fault_panic(hhdm, cr2, error_code, rip, ctx);
         }
-        page_fault_panic("no VMA covers this address", cr2, error_code, rip);
+        page_fault_panic("no VMA covers this address", cr2, error_code, rip, ctx);
     }
 
-    const char *kill = page_fault_in_mapping(task, vma, fault_thread, cr2, error_code, rip);
+    const char *kill = page_fault_in_mapping(task, vma, fault_thread, cr2, error_code, rip, ctx);
     vma_release(task, vma);
     if (kill != NULL)
     {
@@ -1273,11 +1276,11 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip, exceptio
             // anything else is the kernel's own fault.
             if (user_copy_recover(ctx, task, cr2, error_code, rip))
                 return;
-            page_fault_panic(kill, cr2, error_code, rip);
+            page_fault_panic(kill, cr2, error_code, rip, ctx);
         }
         if (try_catch_segv(task, ctx))
             return;   // handler armed; the exception iretq resumes into it
-        user_fault_kill(task, kill, cr2, error_code, rip);
+        user_fault_kill(task, kill, cr2, error_code, rip, ctx);
     }
 }
 
