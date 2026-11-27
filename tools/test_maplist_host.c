@@ -4,8 +4,9 @@
  * so under ASan a free with a hold outstanding, or a node still reachable
  * from the list after its free, is a use-after-free report, and a node the
  * core never says to free is a leak. The model keeps each node's range,
- * holds and listed flag, and the list's order (newest first); after every
- * step the list is walked and compared with it.
+ * holds and listed flag, and the list's order: most recently linked or found
+ * by address first (a hit moves to the head); after every step the list is
+ * walked and compared with it.
  *
  *   test_maplist <random rounds> */
 
@@ -33,7 +34,7 @@ typedef struct {
     uintptr_t start, end;
     uint32_t holds;
     int listed;
-    uint64_t born;          /* link order: larger is newer */
+    uint64_t born;          /* linked or last found by address: larger is newer */
 } model_t;
 
 static model_t s_model[MAX_NODES];
@@ -96,6 +97,22 @@ static model_t *model_find(uintptr_t addr, int start_only)
             best = m;
     }
     return best;
+}
+
+/* A lookup by address found `m`: it is now the head. */
+static model_t *found(model_t *m)
+{
+    if (m != NULL)
+        m->born = ++s_clock;
+    return m;
+}
+
+static model_t *model_of(maplist_node_t *n)
+{
+    for (int i = 0; i < s_nmodel; i++)
+        if (s_model[i].n == n && n != NULL)
+            return &s_model[i];
+    return NULL;
 }
 
 static void free_node(model_t *m)
@@ -191,47 +208,72 @@ static void cases(void)
     check(l.head == NULL && l.count == 0 && l.lookups == 0, "init: an empty list");
     check(maplist_find(&l, 0x1000) == NULL, "find: nothing in an empty list");
 
-    /* Link at the head; find newest first. */
+    /* Link at the head; a lookup by address moves what it finds there. */
     model_t *a = add(&l, 0x1000, 0x3000);
     model_t *b = add(&l, 0x5000, 0x6000);
     compare(&l, "two linked");
     check(l.head == b->n, "link: a fresh node is the head");
-    check(maplist_find(&l, 0x2fff) == a->n && maplist_find(&l, 0x3000) == NULL &&
-          maplist_find(&l, 0x1000) == a->n && maplist_find(&l, 0xfff) == NULL,
-          "find: a range is [start, end)");
-    check(maplist_find_start(&l, 0x5000) == b->n && maplist_find_start(&l, 0x5001) == NULL,
+    check(maplist_find_start(&l, 0x1000) == a->n && maplist_find_start(&l, 0x1001) == NULL,
           "find start: an exact start only");
+    check(l.head == b->n, "find start: what it finds stays where it is");
+    compare(&l, "found by start");
 
-    /* The walk is counted: a lookup of the older node steps over both. */
+    /* The walk is counted: a lookup of the older node steps over both, and
+     * moves it to the head, so the next lookup of it steps over one. */
     uint64_t before = l.lookups, steps = l.steps;
-    maplist_find(&l, 0x1000);
+    check(found(model_of(maplist_find(&l, 0x2fff))) == a, "find: the node whose range holds it");
     check(l.lookups == before + 1 && l.steps == steps + 2 && l.steps_most >= 2,
           "the walk: a lookup counted with the nodes it stepped over");
+    check(l.head == a->n && a->n->prev == NULL && b->n->prev == a->n && b->n->next == NULL,
+          "move to front: a hit at the tail is the head, its links whole");
+    compare(&l, "moved to the head");
     steps = l.steps;
-    maplist_find(&l, 0x9000);
-    check(l.steps == steps + 2, "the walk: a lookup that finds nothing steps over every node");
+    check(maplist_find(&l, 0x1000) == found(a)->n && l.steps == steps + 1, "move to front: found at once after");
+    uint64_t misses = l.misses;
+    steps = l.steps;
+    check(maplist_find(&l, 0x3000) == NULL && maplist_find(&l, 0xfff) == NULL, "find: a range is [start, end)");
+    check(l.steps == steps + 4 && l.misses == misses + 2, "a miss steps over every node, and is counted");
+    check(l.head == a->n, "a miss moves nothing");
+    compare(&l, "after misses");
     steps = l.steps;
     uint64_t most = l.steps_most;
-    maplist_find(&l, 0x5000);
+    found(a);   /* the model's clock: a is head, finding it again keeps it there */
+    maplist_find(&l, 0x1800);
     check(l.steps == steps + 1 && l.steps_most == most, "the walk: the longest walk is kept, not the last");
+    check(maplist_find(&l, 0x5000) == found(b)->n && l.head == b->n, "move to front: the other node back to the head");
+    compare(&l, "back again");
 
     /* A read: the walks since the list began, and since the last read,
      * whose window starts again. */
     {
         maplist_walks_t all, since;
-        uint64_t lk = l.lookups, st = l.steps, mo = l.steps_most;
+        uint64_t lk = l.lookups, ms = l.misses, st = l.steps, mo = l.steps_most;
         maplist_read_walks(&l, &all, &since);
-        check(all.lookups == lk && all.steps == st && all.steps_most == mo,
+        check(all.lookups == lk && all.misses == ms && all.steps == st && all.steps_most == mo,
               "read: the walks since the list began");
-        check(since.lookups == lk && since.steps == st && since.steps_most == 2,
+        check(since.lookups == lk && since.misses == ms && since.steps == st && since.steps_most == 2,
               "read: the first read's window is the whole life");
         maplist_find(&l, 0x5000);
+        maplist_find(&l, 0x9000);
         maplist_read_walks(&l, &all, &since);
-        check(since.lookups == 1 && since.steps == 1 && since.steps_most == 1 && all.steps_most == 2,
+        check(since.lookups == 2 && since.misses == 1 && since.steps == 3 && since.steps_most == 2 &&
+              all.misses == ms + 1,
               "read: the next read counts only what came after the last, its longest walk its own");
         maplist_read_walks(&l, &all, &since);
-        check(since.lookups == 0 && since.steps == 0 && since.steps_most == 0 && all.lookups == lk + 1,
+        check(since.lookups == 0 && since.misses == 0 && since.steps == 0 && since.steps_most == 0 &&
+              all.lookups == lk + 2,
               "read: nothing since the last read reads as nothing");
+    }
+
+    /* Three nodes: a hit in the middle keeps both neighbours linked. */
+    {
+        model_t *m3 = add(&l, 0x60000, 0x61000);    /* m3, b, a */
+        check(maplist_find(&l, 0x5000) == found(b)->n, "find: the middle node");
+        check(l.head == b->n && b->n->next == m3->n && m3->n->prev == b->n && m3->n->next == a->n &&
+              a->n->prev == m3->n, "move to front: a hit in the middle leaves its neighbours joined");
+        compare(&l, "middle moved");
+        unlink_one(&l, m3);
+        compare(&l, "third unlinked");
     }
 
     /* A hold keeps a delisted node alive until it is given back. */
@@ -300,10 +342,15 @@ static void random_rounds(uint32_t rounds)
         } else if (op < 45) {
             uintptr_t addr = (uintptr_t)rnd(70 * 0x1000);
             model_t *want = model_find(addr, 0);
+            uint64_t misses = l.misses;
             maplist_node_t *got = maplist_find_hold(&l, addr);
             check(got == (want ? want->n : NULL), "random: a lookup finds the newest listed node holding it");
-            if (want != NULL)
+            check(l.misses == misses + (want == NULL), "random: a lookup that finds nothing is a miss");
+            if (want != NULL) {
                 want->holds++;
+                found(want);
+                check(l.head == want->n, "random: what a lookup finds is the head");
+            }
         } else if (op < 52) {
             uintptr_t start = (uintptr_t)(rnd(64) + 1) * 0x1000;
             model_t *want = model_find(start, 1);

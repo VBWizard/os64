@@ -91,8 +91,8 @@ DEBTS row). Planes. Any change to what a mapping is.
 ## As built (2026-11-26, one slice: the list's half and the page lock)
 
 - **The list** is `kernel/src/memory/maplist.c`, pure: an intrusive list
-  linked at the head (a fresh region is found first; burial and `/proc`
-  read it newest first), each node's holds and `listed` flag, the walk's
+  linked at the head (a fresh region is found first; a lookup's hit moves
+  to the head too, § The walk), each node's holds and `listed` flag, the walk's
   counts and a window since the last read. `tools/test_maplist_host.sh`
   runs it beside a model under ASan with real frees where it says to free;
   `tools/test_maplist_mutants.py` breaks each rule (31, through
@@ -126,7 +126,8 @@ DEBTS row). Planes. Any change to what a mapping is.
   and the shared object's page is the cache's, so it is only not installed. Order: `signalLock`, `pageLock`,
   `mapLock`; the allocator's locks under `pageLock` through table pages.
 - **The counts** are in `/proc/<id>/status`: `mappings`, `mapping_walks`
-  (lookups, steps, the longest walk), `mapping_lock` and `page_lock`
+  (lookups, misses, steps, the longest walk), `pages_by_table` (§ The
+  walk), `mapping_lock` and `page_lock`
   (taken, waited, the worst wait and hold), each since the task began and
   since the last read.
 - **The proof.** The kernel test `vma_list_doors` walks the doors' rules
@@ -149,3 +150,46 @@ DEBTS row). Planes. Any change to what a mapping is.
   ring-0 fault with no mapping), and thread stacks have no ceiling (the
   per-task stack counter runs into the fixed windows after about 1,400
   threads, since ended threads keep their stacks).
+
+## The walk (2026-11-26, after the P5 run)
+
+Chris's P5 run of the slice above: yonder after a video held 1,304
+mappings and walked 233 of them a lookup on average since boot, **1,112 a
+lookup since the last read**: nearly the whole list, every time. That is
+the cost of a MISS, and the misses came from `user_range_accessible`, which
+asked the list about every page of every syscall buffer: a buffer on a
+thread's stack, argv or the environment has no mapping, so each page
+walked everything, found nothing, and fell back to the page table.
+
+- **The page table first** (`paging_user_page_reachable`): a page ring 3
+  could reach right now (present and USER at every level of the walk,
+  WRITE too for a copy into it) is vouched for without the list. Only a
+  page not yet reachable, a demand page not faulted or a CoW page asked
+  for writing, asks the mapping, and a mapping that answers holds for the
+  rest of itself, so a `read()` into a fresh megabyte is one lookup, not
+  256 (the list asked once; each page still gets the supervisor check
+  below). The check it replaced as the fallback looked at the leaf's
+  present and write bits only, so a supervisor page in the task's lower
+  half, a thread's kernel stack, passed it. Now a page present without
+  USER is refused whatever covers it, which matters on this base: a kernel
+  stack can lie inside a program image's mapping once its thread counter
+  climbs that far (THREAD_STACKS.md). The walk takes no lock: table pages live until the task's
+  burial (DEBTS, "A task's page-table pages are never freed before its
+  burial", which records that a cure freeing tables must give this walk a
+  lifetime rule).
+- **Move to front.** A lookup by address that finds its node moves it to
+  the head (`maplist.c`, O(1), under `mapLock` like every walk). The hot
+  mappings are the old ones (the image, the libraries, the first heap
+  arena) and linking new regions at the head had put them behind a
+  thousand others. Burial takes all and unmap finds by start; `/proc`
+  maps sorts its rows, and past its walk guard (512 rows) shows the
+  mappings most recently found or made, where it showed the newest. No pointer is stored, so there is no lifetime question; a
+  per-thread hint was weighed and set aside, because the misses were the
+  cost and a hint does nothing for a miss.
+- **Counts:** `mapping_walks` gains `misses`; `pages_by_table` counts the
+  pages the page table answered, each since boot and since the last read,
+  so the next P5 run shows steps a lookup before and after.
+- **Worst hold.** A hit costs a few steps. A real miss still walks the
+  whole list, and is now a wild pointer's lookup (a fault that ends in
+  SIGSEGV, or a range a syscall refuses), so the worst hold is unchanged
+  in kind and rare in practice: 115 us at 1,542 mappings on the P5.
