@@ -171,9 +171,11 @@ walked everything, found nothing, and fell back to the page table.
   below). The check it replaced as the fallback looked at the leaf's
   present and write bits only, so a supervisor page in the task's lower
   half, a thread's kernel stack, passed it. Now a page present without
-  USER is refused whatever covers it, which matters on this base: a kernel
-  stack can lie inside a program image's mapping once its thread counter
-  climbs that far (THREAD_STACKS.md). The walk takes no lock: table pages live until the task's
+  USER is refused whatever covers it. (Before THREAD_STACKS.md a kernel
+  stack could lie inside a program image's mapping once its thread counter
+  climbed that far; stacks now come from the same door as mappings, so
+  none is ever inside one, and the check is the guard that does not
+  depend on that.) The walk takes no lock: table pages live until the task's
   burial (DEBTS, "A task's page-table pages are never freed before its
   burial", which records that a cure freeing tables must give this walk a
   lifetime rule).
