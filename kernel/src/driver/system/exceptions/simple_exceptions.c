@@ -879,13 +879,23 @@ static void __attribute__((noreturn)) user_fault_kill(task_t *task, const char *
 			// that function's prologue, the text frame was overwritten at
 			// runtime (freed-and-reallocated, or a stray write) — the fault
 			// frame was honest and the on-disk disassembly was the lie.
+			// Read by allocator_copy_from_task_va, a page's piece at a time:
+			// a sibling still running can unmap the page between a plain walk
+			// and a read, which would trip the HHDM's tripwire here.
 			if (ripPhys != 0 && ripPhys != 0xbadbadba)
 			{
-				uint8_t *code = (uint8_t *)(((ripPhys & ~(uintptr_t)0xFFF) | kHHDMOffset)
-				                            + (ctx->rip & 0xFFF));
-				FAULT_PRINT(false, "  forensics: bytes at RIP: %02x %02x %02x %02x %02x %02x %02x %02x  %02x %02x %02x %02x %02x %02x %02x %02x\n",
-				            code[0], code[1], code[2], code[3], code[4], code[5], code[6], code[7],
-				            code[8], code[9], code[10], code[11], code[12], code[13], code[14], code[15]);
+				uint8_t code[16] = { 0 };
+				size_t first = PAGE_SIZE - (ctx->rip & 0xFFF);
+				if (first > sizeof(code))
+					first = sizeof(code);
+				bool got = allocator_copy_from_task_va((void *)task->pml4v, ctx->rip, code, first) &&
+				           (first == sizeof(code) ||
+				            allocator_copy_from_task_va((void *)task->pml4v, ctx->rip + first, code + first,
+				                                        sizeof(code) - first));
+				if (got)
+					FAULT_PRINT(false, "  forensics: bytes at RIP: %02x %02x %02x %02x %02x %02x %02x %02x  %02x %02x %02x %02x %02x %02x %02x %02x\n",
+					            code[0], code[1], code[2], code[3], code[4], code[5], code[6], code[7],
+					            code[8], code[9], code[10], code[11], code[12], code[13], code[14], code[15]);
 			}
 		}
 
