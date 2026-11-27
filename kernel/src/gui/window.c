@@ -32,6 +32,7 @@ _Static_assert(GUI_WINDOW_TITLE_MAX == OS64_GUI_TITLE_MAX,
 #include <limits.h>
 #include "os64/text_profile.h"
 #include "video.h"       // kFrameBuffer — the screen IS the canvas capacity
+#include "micros.h"      // micros_now — what the black edge's fill holds the lock for
 
 extern struct Framebuffer kFrameBuffer;
 
@@ -441,6 +442,7 @@ static void front_set(window_t *next, window_t *anchor)
 
 // /sys/gui's counts (wm_full_screen_status), under kGuiLock.
 static uint64_t s_fs_entered, s_fs_entered_by_chord, s_fs_left, s_fs_left_by_chord, s_fs_gone;
+static uint64_t s_fs_blank_ends, s_fs_blank_fills, s_fs_blank_fill_worst_us;
 
 void wm_full_screen_status(wm_full_screen_status_t *out)
 {
@@ -455,6 +457,8 @@ void wm_full_screen_status(wm_full_screen_status_t *out)
 		.full_screen_now = now,
 		.entered = s_fs_entered, .entered_by_chord = s_fs_entered_by_chord,
 		.left = s_fs_left, .left_by_chord = s_fs_left_by_chord, .gone = s_fs_gone,
+		.blank_ends = s_fs_blank_ends, .blank_fills = s_fs_blank_fills,
+		.blank_fill_worst_us = s_fs_blank_fill_worst_us,
 	};
 }
 
@@ -867,6 +871,25 @@ wm_full_screen_result_t wm_set_full_screen(window_t *w, bool on, bool by_chord)
 	wm_deliver_event(w, &ev);
 	printd(DEBUG_GUI, "wm: window %u %s full screen\n", w->id, on ? "entered" : "left");
 	return WM_FULL_SCREEN_DONE;
+}
+
+bool wm_full_screen_blank_end(window_t *w, rect_t local)
+{
+	if (!w->blank_until_publish)
+		return false;
+	w->blank_until_publish = false;
+	s_fs_blank_ends++;
+	if (local.x != 0 || local.y != 0 || (uint32_t)local.w != w->content.width ||
+	    (uint32_t)local.h != w->content.height) {
+		uint64_t t0 = micros_now();
+		surface_fill_rect(&w->content, (rect_t){0, 0, (int32_t)w->content.width, (int32_t)w->content.height},
+		                  GUI_COLOR_BLACK);
+		uint64_t took = micros_now() - t0;
+		s_fs_blank_fills++;
+		if (took > s_fs_blank_fill_worst_us)
+			s_fs_blank_fill_worst_us = took;
+	}
+	return true;
 }
 
 void wm_move(window_t *w, int32_t x, int32_t y)

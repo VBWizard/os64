@@ -717,22 +717,9 @@ void gui_window_snapshot_locked(window_t *win, rect_t local)
 	// one damage-bounded row-wise copy, the same order as the composite blit
 	// that follows it.
 	//
-	// The first publish after a full-screen edge ends the black
-	// (window_t.blank_until_publish), whatever its damage, so a program that
-	// publishes in pieces is never left black. One that covers less than
-	// the whole content would otherwise uncover the rest of `content`, the
-	// old picture at the old layout, so that rest is made black first: one
-	// fill of the content under the lock, at an edge and never again until
-	// the next one.
-	bool ends_blank = win->blank_until_publish;
-	if (ends_blank) {
-		win->blank_until_publish = false;
-		if (local.x != 0 || local.y != 0 || (uint32_t)local.w != win->content.width ||
-		    (uint32_t)local.h != win->content.height)
-			surface_fill_rect(&win->content,
-			                  (rect_t){0, 0, (int32_t)win->content.width, (int32_t)win->content.height},
-			                  GUI_COLOR_BLACK);
-	}
+	// The first publish after a full-screen edge ends the black, whatever
+	// its damage (wm_full_screen_blank_end).
+	bool ends_blank = wm_full_screen_blank_end(win, local);
 	for (int32_t y = 0; y < local.h; y++)
 		memcpy(win->content.pixels + (size_t)(local.y + y) * win->content.pitch_px + local.x,
 		       win->canvas.pixels  + (size_t)(local.y + y) * win->canvas.pitch_px  + local.x,

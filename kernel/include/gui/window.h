@@ -213,7 +213,7 @@ typedef struct window
 
     // Set at each full-screen edge, cleared by the owner's next publish of
     // pixels, which blacks out whatever of the content it does not cover
-    // (gui_window_snapshot_locked): until then composite_one paints the
+    // (wm_full_screen_blank_end): until then composite_one paints the
     // content black and composes no plane, because what the window holds is
     // a picture of its old size and its planes' places were agreed for its
     // old box.
@@ -586,10 +586,22 @@ typedef struct {
 	uint32_t full_screen_now;    // windows full screen now, front or not
 	uint64_t entered, entered_by_chord;
 	uint64_t left, left_by_chord, gone;   // gone: destroyed while full screen
+	uint64_t blank_ends;                  // black edges ended by a publish
+	uint64_t blank_fills;                 // of them, by a partial publish: the content filled black first
+	uint64_t blank_fill_worst_us;         // that fill's longest, under kGuiLock
 } wm_full_screen_status_t;
 void wm_full_screen_status(wm_full_screen_status_t *out);
 // The same, taking kGuiLock itself (gui_client.c), for /sys/gui.
 void gui_full_screen_status(wm_full_screen_status_t *out);
+
+// A publish of `local` (content coordinates) is about to copy its pixels:
+// end the window's black edge if it has one (window_t.blank_until_publish)
+// and say so. Any publish of pixels ends it, so a program that publishes in
+// pieces is never left black; one that covers less than the whole content
+// would uncover the rest of it, the old picture at the old layout, so that
+// rest is filled black first, timed for /sys/gui (one fill under the lock,
+// at an edge and not again until the next). Under kGuiLock.
+bool wm_full_screen_blank_end(window_t *w, rect_t local);
 
 // Hidden from the glass? The one test composite, hit-testing and occlusion
 // all ask, so they cannot disagree about what "hidden" means.

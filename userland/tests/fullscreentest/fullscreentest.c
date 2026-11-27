@@ -255,6 +255,10 @@ int main(int argc, char **argv)
     CHECK(state_of(c, &st) && (st.flags & OS64_GUI_WINDOW_FULL_SCREEN) &&
           (st.flags & OS64_GUI_WINDOW_MAXIMIZED));
     CHECK(os64_gui_window_get_surface(c, &s1) == 0 && s1.width == s_sw && s1.height == s_sh);
+    // A first publish that covers only a corner still ends the black edge;
+    // the kernel blacks out the rest (/sys/gui counts it as a partial one).
+    os64_gui_rect_t corner = {0, 0, 16, 16};
+    CHECK(os64_gui_window_publish(c, &corner) == 0);
     CHECK(os64_gui_window_set_full_screen(c, false) == 0);
     CHECK(state_of(c, &st) && !(st.flags & OS64_GUI_WINDOW_FULL_SCREEN) &&
           (st.flags & OS64_GUI_WINDOW_MAXIMIZED));

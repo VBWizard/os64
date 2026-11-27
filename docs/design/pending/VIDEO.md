@@ -890,7 +890,7 @@ what it decided, in the code's own words:
   it quits, `--full-screen` starts there. Its readout and exit lines say
   what converting costs (sizes, the scaler's way, average and worst) and
   how much the converted frames hold, which libmedia gives back when a
-  picture is made less than half as large (`frame_fit`).
+  picture is made less than two thirds as large (`frame_fit`).
 - `/tests/fullscreentest` is the contract (`--chord` and `--vt` take a
   person's keys); `/sys/gui`'s `full screen:` line counts the edges.
 

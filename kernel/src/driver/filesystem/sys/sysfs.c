@@ -1777,9 +1777,11 @@ static void sys_gen_gui_frame_clock(synth_text_t *t, const gui_composite_count_t
 // asked for and answered, and waits ended by a poke, the patience or a
 // caught signal.
 // Full screen (GUI_WINDOW_FULL_SCREEN): the window over every band now and
-// for how long, how many windows are full screen, and the edges since boot,
-// by whom: its program, the person's Ctrl+Alt+F, or the window destroyed
-// while full screen.
+// for how long, how many windows are full screen, the edges since boot by
+// whom (its program, the person's Ctrl+Alt+F, or the window destroyed while
+// full screen), and the black edges' ends: how many, how many by a partial
+// publish that filled the content black first, and that fill's longest hold
+// of kGuiLock, which is what an edge costs the lock.
 static void sys_gen_gui_full_screen(synth_text_t *t)
 {
 	wm_full_screen_status_t s;
@@ -1791,8 +1793,10 @@ static void sys_gen_gui_full_screen(synth_text_t *t)
 	else
 		synth_text_addf(t, "full screen: none in front");
 	synth_text_addf(t, "; %u full screen now; entered %lu (%lu by chord), left %lu (%lu by chord), "
-	                "destroyed while full screen %lu\n",
-	                s.full_screen_now, s.entered, s.entered_by_chord, s.left, s.left_by_chord, s.gone);
+	                "destroyed while full screen %lu; black edges ended %lu, %lu by a partial publish "
+	                "(fill longest %lu us)\n",
+	                s.full_screen_now, s.entered, s.entered_by_chord, s.left, s.left_by_chord, s.gone,
+	                s.blank_ends, s.blank_fills, s.blank_fill_worst_us);
 }
 
 static void sys_gen_gui_planes(synth_text_t *t)

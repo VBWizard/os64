@@ -239,7 +239,7 @@ typedef struct {
     uint32_t decoded_depth, ready_depth;
     // The converted pictures' storage: how many hold pixels and how many
     // bytes, which grows with the size asked and comes back within a few
-    // pictures of one under half as large (frame_fit's rule).
+    // pictures of one under two thirds as large (frame_fit's rule).
     uint32_t frames_held;
     uint64_t frames_bytes;
     os64_media_player_conversion_t convert;

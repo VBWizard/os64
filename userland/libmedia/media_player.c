@@ -603,19 +603,21 @@ static void retire_unasked(os64_media_player_t *p, int64_t now, collect_t *c)
 // ---------------------------------------------------------------- the picture thread
 
 // A frame's pixels for w x h: kept when they hold it, regrown when they do
-// not, and given back and made again when they hold more than twice what it
-// needs. That last is the way back from full screen: a 2560x1440 picture
-// is 14.7 MB a frame, FRAMES of them, and a picture made less than half as
-// large returns that within FRAMES pictures, as each frame comes round (one
-// a little smaller keeps it: leaving full screen for a window over half the
-// screen frees nothing). The factor of two keeps a size that moves a little
-// from freeing and regrowing; at a steady size nothing here allocates. The picture thread's alone, so the
+// not, and given back and made again when they hold more than one and a
+// half times what it needs. That last is the way back from full screen: a
+// 2560x1440 picture is 14.7 MB a frame, FRAMES of them, and returns within
+// FRAMES pictures, as each frame comes round. Why 1.5: a 1080p clip
+// leaving a 2560x1440 full screen for its own window holds 1.78 times its
+// need and must give it back, while a 1440p clip in its near-screen window
+// (1.03) must not churn; and a drag that shrinks a window frees only each
+// time it crosses two thirds of the last size, so it cannot thrash. At a
+// steady size nothing here allocates. The picture thread's alone, so the
 // counts are written atomically for facts, which reads them under no lock
 // of this thread's.
 static bool frame_fit(os64_media_player_t *p, frame_t *f, uint32_t w, uint32_t h)
 {
     size_t need = (size_t)w * h;
-    if (need <= f->capacity && f->capacity / 2 <= need)
+    if (need <= f->capacity && f->capacity * 2 <= need * 3)
         return true;
     if (f->pixels != NULL) {
         __atomic_sub_fetch(&p->frames_bytes, (uint64_t)f->capacity * sizeof(uint32_t), __ATOMIC_RELAXED);
