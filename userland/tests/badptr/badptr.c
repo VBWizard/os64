@@ -27,7 +27,7 @@
 // What it does not reach: a pointer passed as a syscall argument is refused
 // by the dispatcher's own bound before any copy helper sees it, so the
 // helpers' bound is exercised only through EMBEDDED pointers (spawn's argv
-// elements) and the arguments the mask leaves out because NULL is meaningful
+// elements) and the arguments the mask leaves to the handler's guarded copy
 // (a thread's name); and no case loads a program whose segment, rather than its
 // entry, lies past the ceiling, so elf_map_segment's bound is untested here.
 //

@@ -302,7 +302,7 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_MEMORY,    "memory",    syscall_memory,    false, 0x01),  // arg0 = os64_memory_t out ptr
 	SYSCALL_DEFINE(SYSCALL_PRINTAT,   "printat",   syscall_printat,   false, 0x04),  // arg0 = x cell, arg1 = y cell, arg2 = string
 	SYSCALL_DEFINE(SYSCALL_TIME,      "time",      syscall_time,      false, 0x01),  // arg0 = os64_time_t out ptr
-	SYSCALL_DEFINE(SYSCALL_SETENV,    "setenv",    syscall_setenv,    false, 0x01),  // arg0 = key; arg1 = value OR NULL (mask excludes it: NULL means unset)
+	SYSCALL_DEFINE(SYSCALL_SETENV,    "setenv",    syscall_setenv,    false, 0x01),  // arg0 = key; arg1 = value OR NULL, which means unset (the handler's guarded copy vets it, so the mask leaves it out)
 	SYSCALL_DEFINE(SYSCALL_KLOG_READ, "klog_read", syscall_klog_read, false, 0x01),  // arg0 = os64_logent_t[] out, arg1 = max entries
 	SYSCALL_DEFINE(SYSCALL_SYNC,      "sync",      syscall_sync,      false, 0x00),  // arg0 = handle (an int, not a pointer)
 	// arg0/arg2 are CODE addresses in the caller's own text, not buffers —
@@ -310,8 +310,9 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	// data reachability, and the only thing written for them is the exit
 	// stub, through the new stack's own frames (thread_join_create). The
 	// handler bounds both by USER_CANONICAL_MAX. arg3, the name, is a
-	// buffer but NULL means unnamed, so the mask leaves it out too and the
-	// handler copies it through the guarded string reads.
+	// buffer the mask leaves out: the handler copies it through the guarded
+	// string reads, which vet every page it touches, ceiling included, so
+	// the mask's check would only repeat the first part of theirs.
 	SYSCALL_DEFINE(SYSCALL_THREAD,      "thread",      syscall_thread,      false, 0x00),
 	SYSCALL_DEFINE(SYSCALL_THREAD_EXIT, "thread_exit", syscall_thread_exit, false, 0x00),
 	SYSCALL_DEFINE(SYSCALL_MKDIR,       "mkdir",       syscall_mkdir,       false, 0x01),  // arg0 = path
