@@ -2399,6 +2399,13 @@ bool flow_paint_asks(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_poi
 // flow_hit_counted answers the same and says, in `*cuts`, how many cuts
 // it worked.
 const flow_box_t *flow_hit(const flow_tree_t *tree, int32_t x, int32_t y, flow_point_t scroll);
+// The same, with only `top` and the boxes inside it there: a top layer's
+// hit (the Fullscreen API's, VIDEO.md § 9), where nothing of the page
+// outside the element takes the pointer, whatever it is stacked over.
+// `top` is a stacked box (a fixed one is), so the walk keeps the stacked
+// boxes inside it and leaves the rest out.
+const flow_box_t *flow_hit_within(const flow_tree_t *tree, int32_t x, int32_t y, flow_point_t scroll,
+                                  const flow_box_t *top);
 // The processed offset (`begin`'s units) of source byte `source` of a TEXT
 // box's node's data, as white-space processing made it (RANGE.md § 7): the
 // box's item's collapse replayed from where it began, under the box's own

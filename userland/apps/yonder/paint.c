@@ -3108,6 +3108,73 @@ const flow_box_t *yonder_canvas_owner(const flow_tree_t *tree, const yonder_verb
 }
 
 
+// The top layer (paint.h): the element yonder named, and the visitor that
+// hands over only the boxes inside the element's. A tree is its document's
+// (its root box's node's), so a relayout's new tree is still the element's
+// and a frame's or an SVG document's is not. A group's open and close come
+// for the same box, so skipping both for one outside keeps them paired;
+// `inside` is asked only after an open that was made.
+static const os64_html_node_t *s_top_element;
+
+void yonder_paint_set_top(const os64_html_node_t *element)
+{
+    s_top_element = element;
+}
+
+static bool top_applies(const flow_tree_t *tree)
+{
+    const flow_box_t *root = s_top_element != NULL ? flow_root(tree) : NULL;
+    return root != NULL && root->node != NULL &&
+           os64_html_node_document(root->node) == os64_html_node_document(s_top_element);
+}
+
+typedef struct {
+    Painter *p;
+    const flow_box_t *top;
+} TopWalk;
+
+static bool in_top(const TopWalk *t, const flow_box_t *b)
+{
+    for (; b != NULL; b = b->parent)
+        if (b == t->top)
+            return true;
+    return false;
+}
+
+static void top_visit(void *ctx, const flow_box_t *b)
+{
+    TopWalk *t = ctx;
+    if (in_top(t, b))
+        paint_box(t->p, b);
+}
+
+static void top_open(void *ctx, const flow_box_t *b, os64_gui_rect_t bounds)
+{
+    TopWalk *t = ctx;
+    if (in_top(t, b))
+        group_open(t->p, b, bounds);
+}
+
+static void top_close(void *ctx, const flow_box_t *b)
+{
+    TopWalk *t = ctx;
+    if (in_top(t, b))
+        group_close(t->p, b);
+}
+
+static void top_outline(void *ctx, const flow_box_t *b)
+{
+    TopWalk *t = ctx;
+    if (in_top(t, b))
+        paint_outline(t->p, b);
+}
+
+static flow_inside_t top_inside(void *ctx, const flow_box_t *b)
+{
+    TopWalk *t = ctx;
+    return in_top(t, b) ? group_inside(t->p, b) : FLOW_INSIDE_VIEW;
+}
+
 void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, os64_gui_rect_t whole,
                   flow_point_t scroll, uint32_t paper, const yonder_dark_t *dark,
                   yonder_paint_cache_t *cache, yonder_scratch_t *scratch, const yonder_verbs_t *verbs)
@@ -3133,6 +3200,22 @@ bool yonder_paint_from(const flow_tree_t *tree, os64_gui_rect_t viewport, os64_g
         paint_cache_begin(cache);
     if (dark != NULL)
         paper = dark->paper;
+    if (top_applies(tree)) {
+        // The top layer: the backdrop, then the element's boxes alone.
+        TopWalk t = {&p, flow_box_for(tree, s_top_element)};
+        bool cover_inside = cover != NULL && t.top != NULL && in_top(&t, cover);
+        if (!cover_inside)
+            fill(&p, viewport.x, viewport.y, viewport.w, viewport.h, 0xFF000000u);
+        bool found = cover == NULL;
+        if (t.top != NULL && (cover == NULL || cover_inside)) {
+            flow_visitor_t v = {top_visit, top_open, top_close, &t, top_outline, top_inside};
+            flow_visit_groups_from(tree, viewport, scroll, &v, cover_inside ? cover : t.top, &found);
+            found = cover == NULL || found;
+        }
+        yonder_paint_cuts += cuts.worked;
+        flow_cut_memo_close(&cuts);
+        return found;
+    }
     const flow_box_t *root = flow_root(tree);
     if (root != NULL)
         p.canvas_owner = canvas_owner(&p, root);

@@ -2,6 +2,7 @@
 #define YONDER_SCRIPTS_H
 #include <dom/canvas.h>
 #include <dom/media.h>
+#include <dom/fullscreen.h>
 #include <dom/pointer.h>
 
 // A page's SCRIPT HOST (DOM_D7.md § The script host of a page): its runtime
@@ -62,6 +63,16 @@ bool yonder_scripts_activated(const yonder_scripts_t *scripts);
 // The page counts as interacted with from now on: a sound's own page,
 // which the person navigated to (AUDIO_YONDER.md § The media document).
 void yonder_scripts_activate(yonder_scripts_t *scripts);
+// HTML's transient activation, which the Fullscreen API needs: true once
+// when the person's last activating input reached the page within
+// YONDER_ACTIVATION_US of `now_us`, which it then uses up (the next ask
+// needs another input). The sticky activation above is untouched.
+#define YONDER_ACTIVATION_US 5000000
+bool yonder_scripts_activation_consume(yonder_scripts_t *scripts, int64_t now_us);
+// The Fullscreen API's host answers (dom/fullscreen.h), and its element.
+void yonder_scripts_fullscreen_settled(yonder_scripts_t *scripts, bool entered);
+void yonder_scripts_fullscreen_exit(yonder_scripts_t *scripts);
+const os64_html_node_t *yonder_scripts_fullscreen_element(const yonder_scripts_t *scripts);
 // A `link` or `style` element's sheet, judged by the window: `load` (or
 // `error` when `failed`) owed to the element, fired as a task of its own
 // and never inside the call that owed it; the node is held until then, and
@@ -146,6 +157,9 @@ typedef struct {
     // The media elements' host (dom/media.h), with its own opaque; zeroed,
     // a media element plays nothing.
     os64_dom_media_provider_t media;
+    // The Fullscreen API's host (dom/fullscreen.h), with its own opaque;
+    // zeroed, the page is not allowed full screen (a frame's document).
+    os64_dom_fullscreen_provider_t fullscreen;
     os64_dom_text_provider_t canvas_text;
     os64_dom_history_t history;
     // The page's CSS animations as its scripts see them (CSSAnimation and
