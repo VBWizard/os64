@@ -336,12 +336,13 @@ static void scroll_cases(void)
     sheeted_close(&q);
 
     // The top layer (f_top_layer): an element libhtml marks full screen
-    // inside a transformed, filtered, clipping wrapper is the view's, not
-    // the wrapper's: the whole view, fixed, in no frame, clipped by
-    // nothing, its clip parent the viewport, and a fixed box inside it the
-    // viewport's too. Before the mark it is the wrapper's.
+    // inside a transformed, filtered, clipping, see-through wrapper is the
+    // view's, not the wrapper's: the whole view, fixed, in no frame,
+    // clipped by nothing, its clip parent the viewport, painted, and a
+    // fixed box inside it the viewport's too. Before the mark it is the
+    // wrapper's, and unpainted with it.
     sheeted_open(&q, "<!doctype html><style>body{margin:0}"
-                     "#w{transform:translateX(30px);filter:blur(0px);overflow:hidden;width:200px;height:100px}"
+                     "#w{transform:translateX(30px);filter:blur(0px);overflow:hidden;opacity:0;width:200px;height:100px}"
                      "#f{width:50px;height:20px}#in{position:fixed;left:0;top:0;width:10px;height:10px}</style>"
                      "<div id=w><div id=f><div id=in></div></div></div>",
                  800, 600);
@@ -352,7 +353,7 @@ static void scroll_cases(void)
     os64_html_node_t *fnode = fs != NULL ? (os64_html_node_t *)fs->node : NULL;
     expect("top layer: before the mark, the element is the wrapper's",
            fs != NULL && wr != NULL && fs->rect.w == 50 && !fs->fixed && fs->frame != NULL &&
-               flow_clip_parent(t, fs->node) == wr->node, NULL);
+               flow_clip_parent(t, fs->node) == wr->node && fs->unpainted, NULL);
     flow_free(t);
     t = NULL;
     if (fnode != NULL && os64_html_set_state(q.doc, fnode, OS64_HTML_STATE_FULLSCREEN) == OS64_HTML_OK)
@@ -364,6 +365,8 @@ static void scroll_cases(void)
     expect("top layer: fixed to the view, in no frame, clipped by nothing, its clip parent the viewport",
            fs != NULL && fs->fixed && fs->frame == NULL && !fs->clipped && flow_clip_parent(t, fs->node) == NULL,
            NULL);
+    expect("top layer: painted, and what is inside it, under a wrapper with opacity: 0",
+           fs != NULL && !fs->unpainted && inner != NULL && !inner->unpainted, NULL);
     expect("top layer: a fixed box inside it is the viewport's",
            inner != NULL && inner->fixed && inner->frame == NULL && flow_clip_parent(t, inner->node) == NULL, NULL);
     flow_free(t);

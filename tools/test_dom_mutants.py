@@ -308,7 +308,9 @@ mutants = [
     ('fs-disconnected-allowed', 'fullscreen', 'fullscreen', '    if (node->kind != OS64_HTML_ELEMENT || !d_in_window_tree(dom, node))\n        return false;', '    (void)dom;\n    if (node->kind != OS64_HTML_ELEMENT)\n        return false;'),
     ('fs-another-document-allowed', 'fullscreen', 'fullscreen', '    if (node->kind != OS64_HTML_ELEMENT || !d_in_window_tree(dom, node))\n        return false;', '    (void)dom;\n    if (node->kind != OS64_HTML_ELEMENT || !d_connected(node))\n        return false;'),
     ('fs-moved-counts-as-in', 'fullscreen', 'fullscreen', '!f->leaving && !d_in_window_tree(dom, f->element) &&', '!f->leaving && !d_connected(f->element) &&'),
-    ('fs-state-bit-never-set', 'fullscreen', 'fullscreen', '    set_bit(dom, node, true);', '    (void)0;'),
+    ('fs-state-bit-never-set', 'fullscreen', 'fullscreen', '    set_bit(node, true);', '    (void)0;'),
+    ('fs-cleared-where-it-was-set', 'fullscreen', 'fullscreen', '    (void)os64_html_set_state(os64_html_node_owner(node), (os64_html_node_t *)node, state);',
+     '    static os64_html_document_t *first;\n    if (on)\n        first = os64_html_node_owner(node);\n    (void)os64_html_set_state(first, (os64_html_node_t *)node, state);'),
     ('fs-replaced-keeps-old', 'fullscreen', 'fullscreen', '        unfullscreen(dom);      /* replaced', '        (void)0;      /* replaced'),
     ('fs-removal-unseen', 'fullscreen', 'fullscreen', '        f->check = true;', '        (void)0;'),
     ('fs-host-exit-keeps-element', 'fullscreen', 'fullscreen', '    if (f->element != NULL) {\n        unfullscreen(dom);\n    } else', '    if (false) {\n        unfullscreen(dom);\n    } else'),
@@ -320,7 +322,7 @@ mutants = [
     ('fs-no-webkit-twin', 'fullscreen', 'fullscreen', 'if (d_delivery_active(dom) && os64_dom_listens(dom, prefixed))', 'if (false && os64_dom_listens(dom, prefixed))'),
     ('fs-error-named-change', 'fullscreen', 'fullscreen', 'const char *type = t->error ? "fullscreenerror" : "fullscreenchange";', 'const char *type = "fullscreenchange";'),
     ('fs-no-provider-allowed', 'fullscreen', 'fullscreen', '    if (f == NULL || !f->has_provider)\n        refusal', '    if (f == NULL)\n        refusal'),
-    ('fs-drain-keeps-the-bit', 'fullscreen', 'fullscreen', '    if (f->element != NULL)\n        set_bit(dom, f->element, false);', '    (void)0;'),
+    ('fs-drain-keeps-the-bit', 'fullscreen', 'fullscreen', '    if (f->element != NULL)\n        set_bit(f->element, false);', '    (void)0;'),
     ('fs-record-never-freed', 'fullscreen', 'fullscreen', '    d_free(dom, dom->fullscreen);\n    dom->fullscreen = NULL;', '    dom->fullscreen = NULL;'),
 ]
 

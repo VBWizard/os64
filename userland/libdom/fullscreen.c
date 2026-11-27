@@ -101,11 +101,14 @@ static JSValue dup_rt(os64_dom_t *dom, JSValue v)
     return JS_DupValueRT(dom->engine, v);
 }
 
-static void set_bit(os64_dom_t *dom, const os64_html_node_t *node, bool on)
+/* The bit is set and cleared through the element's own document, which is
+ * no longer the binding's once script has moved it into a frame's: libhtml
+ * takes a state change only from the document that owns the node. */
+static void set_bit(const os64_html_node_t *node, bool on)
 {
     uint8_t state = on ? (uint8_t)(node->state | OS64_HTML_STATE_FULLSCREEN)
                        : (uint8_t)(node->state & ~OS64_HTML_STATE_FULLSCREEN);
-    (void)os64_html_set_state(dom->document, (os64_html_node_t *)node, state);
+    (void)os64_html_set_state(os64_html_node_owner(node), (os64_html_node_t *)node, state);
 }
 
 /* An element the standard lets be full screen: in this binding's own
@@ -148,7 +151,7 @@ static void unfullscreen(os64_dom_t *dom)
     JSValue wrapper = f->element_wrapper;
     f->element = NULL;
     f->element_wrapper = JS_UNDEFINED;
-    set_bit(dom, gone, false);
+    set_bit(gone, false);
     queue(dom, gone, wrapper, true, false, f->leave, NULL);
     f->leave = kNoPromise;
 }
@@ -180,7 +183,7 @@ void os64_dom_fullscreen_settled(os64_dom_t *dom, bool entered)
         JS_FreeValueRT(dom->engine, f->element_wrapper);
     f->element = node;
     f->element_wrapper = dup_rt(dom, wrapper);
-    set_bit(dom, node, true);
+    set_bit(node, true);
     queue(dom, node, wrapper, true, false, f->enter, NULL);
     f->enter = kNoPromise;
 }
@@ -323,7 +326,7 @@ void d_fullscreen_drain(os64_dom_t *dom)
      * is full screen in this document from now on. The listener is already
      * stopped, so the change reaches no consumer. */
     if (f->element != NULL)
-        set_bit(dom, f->element, false);
+        set_bit(f->element, false);
     f->element = f->pending = NULL;
     JS_FreeValueRT(dom->engine, f->element_wrapper);
     JS_FreeValueRT(dom->engine, f->pending_wrapper);

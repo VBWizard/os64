@@ -318,6 +318,7 @@ static char *native_serialized(const os64_html_node_t *node)
 #include "test_dom_departure.inc"
 #include "test_dom_stream_realms.inc"
 #include "test_dom_child_install.inc"
+#include "test_dom_fullscreen_frame.inc"
 #include "test_dom_recovery.inc"
 #include "test_dom_recovery_host.inc"
 #include "test_dom_retention.inc"
@@ -710,7 +711,7 @@ int main(int argc, char **argv)
     if(argc==2&&!strcmp(argv[1],"--inner-text")){dom_inner_text_cases();printf("DOM inner text probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--blob")){dom_blob_cases();printf("DOM blob probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--file-reader")){dom_file_reader_cases();printf("DOM file reader probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
-    if(argc==2&&!strcmp(argv[1],"--media")){dom_media_cases();printf("DOM media probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}    if(argc==2&&!strcmp(argv[1],"--fullscreen")){dom_fullscreen_cases();printf("DOM fullscreen probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}    if(argc==2&&!strcmp(argv[1],"--walker")){dom_walker_cases();printf("DOM walker probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--media")){dom_media_cases();printf("DOM media probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}    if(argc==2&&!strcmp(argv[1],"--fullscreen")){dom_fullscreen_cases();dom_fullscreen_frame_cases();printf("DOM fullscreen probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}    if(argc==2&&!strcmp(argv[1],"--walker")){dom_walker_cases();printf("DOM walker probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--performance")){dom_performance_cases();dom_performance_observer_cases();printf("DOM performance probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--p2b")){dom_p2b_cases();dom_p2b_sweep_cases();printf("DOM P2b probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--observer")){dom_observer_cases();printf("DOM observer probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
@@ -823,6 +824,7 @@ int main(int argc, char **argv)
     dom_resize_cases();
     dom_media_cases();
     dom_fullscreen_cases();
+    dom_fullscreen_frame_cases();
     dom_blob_cases();
     dom_file_reader_cases();
     dom_walker_cases();

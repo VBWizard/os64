@@ -1308,7 +1308,9 @@ struct flow_box {
     uint64_t drawn;
     // `opacity: 0` on it or on an element it is inside, unless that
     // element's opacity is animated (a group then, laid over at its
-    // opacity, which may be none): flow_visit does not hand it over.
+    // opacity, which may be none), or that element is round the full-screen
+    // element it is in (the top layer is painted whatever is round it):
+    // flow_visit does not hand it over.
     // flow_hit still finds it, as a browser's pointer does,
     // unless it is `pointer-events: none`. A face drawing live widgets
     // draws a control's whatever its opacity — a control made invisible is

@@ -4996,9 +4996,10 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
     out->fixed_anchor = f_anchors(&sp.s, root, true) ? n
                       : up != NULL && !f_top_layer(n) ? up->fixed_anchor : NULL;
     // An opacity an animation moves is the painter's to judge as it paints
-    // (PILE3.md § Animations): none of it is gone for the layout.
+    // (PILE3.md § Animations): none of it is gone for the layout. The top
+    // layer is painted whatever its ancestors' opacity (f_top_layer).
     out->transparent = (sp.s.opacity == 0 && !(sp.s.animating & FLOW_WILL_OPACITY)) ||
-                       (up != NULL && up->transparent);
+                       (up != NULL && up->transparent && !f_top_layer(n));
     out->taken = sp.taken;
     taken_from(up, &sp.taken);
     FStyled *holder = f_map_get(&c->out->map, f_flat_parent(c->doc, n));

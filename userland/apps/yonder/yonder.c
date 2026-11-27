@@ -1269,6 +1269,7 @@ static void preloads_free(Page *p);
 // something (the design state's C.7), with `notify` false when the page's
 // scripts are gone and hear nothing; a page that goes; and the provider a
 // page's scripts are given.
+#define FS_ROWS 14                  // the widgets the full-screen layout hides (kFsRows)
 static struct {
     uint64_t serial;                // the page that asked
     bool enter_owed, leave_owed;
@@ -1278,6 +1279,10 @@ static struct {
     const os64_html_node_t *element;    // libdom's while `active`, held (fs_name)
     const os64_html_document_t *held;   // the document `element` is held on
     const os64_html_node_t *top;        // the top layer: `element`, or NULL for the root element
+    // The rows out of keyboard traversal (fs_rows_keys), and each row's own
+    // `focusable` to give back.
+    bool rows_out;
+    bool row_focusable[FS_ROWS];
 } s_fs;
 static void fs_leave(bool notify);
 static void fs_page_going(Page *p);
@@ -25483,8 +25488,9 @@ static void layout_place(os64_ui_widget_t *w, os64_gui_rect_t r, bool staged)
 // element, unless the person already put it there with the window manager's
 // Ctrl+Alt+F: `ours` says which, so leaving the element's full screen
 // leaves the window manager's only when the element put it there. While an
-// element is full screen (`active`) the rows are hidden (layout_window) and,
-// unless it is the root, the page paints the element alone
+// element is full screen (`active`) the rows are hidden, from the keyboard
+// too (layout_window, fs_rows_keys) and, unless it is the root, the page
+// paints the element alone
 // (yonder_paint_set_top).
 static const os64_gui_rect_t kNoRect = {0, 0, 0, 0};
 
@@ -25664,21 +25670,51 @@ static bool page_covered(const flow_box_t *b, flow_point_t scroll)
     return page_covered_at(b, (int32_t)((int64_t)r.x + r.w / 2), (int32_t)((int64_t)r.y + r.h / 2), scroll);
 }
 
+// The rows the full-screen layout hides.
+static os64_ui_widget_t *const kFsRows[] = {&g.back, &g.forward, &g.reload, &g.stop, &g.downloads, &g.field.w,
+                                            &g.vbar.w, &g.hbar.w, &g.qpanel, &g.qno, &g.qyes, &g.qlabel, &g.badge,
+                                            &g.status};
+_Static_assert(sizeof(kFsRows) / sizeof(kFsRows[0]) == FS_ROWS, "FS_ROWS counts kFsRows");
+
 // The full-screen layout: the view is the window, and every row is hidden.
 static void layout_full_screen(os64_gui_rect_t area)
 {
-    os64_ui_widget_t *rows[] = {&g.back, &g.forward, &g.reload, &g.stop, &g.downloads, &g.field.w,
-                                &g.vbar.w, &g.hbar.w, &g.qpanel, &g.qno, &g.qyes, &g.qlabel, &g.badge,
-                                &g.status};
-    for (size_t i = 0; i < sizeof(rows) / sizeof(rows[0]); i++)
-        rows[i]->bounds = kNoRect;
+    for (size_t i = 0; i < FS_ROWS; i++)
+        kFsRows[i]->bounds = kNoRect;
     g.view.bounds = (os64_gui_rect_t){0, 0, area.w, area.h};
+}
+
+// The hidden rows leave keyboard traversal too, or Tab would reach a row
+// nobody sees and the keys after it would act there: an empty rectangle
+// takes a widget from the pointer and the paint, not from Tab
+// (os64_ui_focus_next reads `focusable`). A row holding the focus gives it
+// to the view. Each row's own `focusable` is kept and given back when the
+// rows return; `hidden` is not used, since the scroll bars and the
+// question bar keep their own.
+static void fs_rows_keys(bool out)
+{
+    if (out == s_fs.rows_out)
+        return;
+    s_fs.rows_out = out;
+    for (size_t i = 0; i < FS_ROWS; i++) {
+        os64_ui_widget_t *w = kFsRows[i];
+        if (out) {
+            s_fs.row_focusable[i] = w->focusable;
+            if (g.ui.focus == w)
+                os64_ui_set_focus(&g.ui, &g.view);
+            w->focusable = false;
+        } else {
+            w->focusable = s_fs.row_focusable[i];
+        }
+    }
 }
 
 static os64_font_status_t layout_window(bool staged)
 {
     const os64_ui_theme_t *t = &g.ui.theme;
     os64_gui_rect_t area = os64_ui_widget_planned_bounds(&g.root);
+    if (!staged)
+        fs_rows_keys(s_fs.active);
     if (s_fs.active && !staged) {
         layout_full_screen(area);
         return OS64_FONT_OK;

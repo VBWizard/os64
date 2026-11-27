@@ -4,8 +4,9 @@ yonder (VIDEO.md § 9, V8 slice 2): paint.c's top layer (the backdrop, then
 the element's boxes alone), libflow's hit walk kept inside one box
 (flow_hit_within), the user-agent rules that make the element cover the
 view (style.c), its containing block (boxes.c, style.c's anchors and
-flow_clip_parent), and yonder's pointer and widgets through them
-(page_hit, page_covered_at), against the scripts host's planes case for a
+flow_clip_parent) and its ancestors' opacity (style.c), yonder's pointer
+and widgets through them (page_hit, page_covered_at), and its hidden rows
+out of keyboard traversal (fs_rows_keys), against the scripts host's planes case for a
 full-screen container inside a transformed, clipping wrapper
 (tools/test_yonder_scripts_host.sh with YONDER_COVER_ONLY,
 test_yonder_planes.inc, plane_fullscreen_container) and, where a mutant
@@ -62,12 +63,17 @@ mutants = [
      '    if (1)\n        return flow_box_covered_at(g.page.tree, b, x, y, scroll);'),
     ('yonder-hits-the-whole-page', YONDER, '    return top != NULL ? flow_hit_within(g.page.tree, x, y, scroll, top) : NULL;',
      '    return top != NULL ? flow_hit(g.page.tree, x, y, scroll) : NULL;'),
-    # The user-agent rules.
     # The top layer's containing block: the initial one, whatever is round it.
     ('anchored-by-its-ancestors', BOXES, 'up == NULL || f_top_layer(el) ? NULL', 'up == NULL ? NULL'),
     ('a-fixed-box-inside-anchored-outside', STYLE, 'up != NULL && !f_top_layer(n) ? up->fixed_anchor',
      'up != NULL ? up->fixed_anchor', FLOW_CASES),
     ('the-clip-parent-an-ancestor', FLOW, '    if (f_top_layer(node))\n        return NULL;\n', '', FLOW_CASES),
+    # Painted whatever its ancestors' opacity.
+    ('hidden-by-an-ancestors-opacity', STYLE, '(up != NULL && up->transparent && !f_top_layer(n))',
+     '(up != NULL && up->transparent)', FLOW_CASES),
+    # The hidden rows out of keyboard traversal.
+    ('the-rows-stay-in-tab', YONDER, '    if (!staged)\n        fs_rows_keys(s_fs.active);', '    if (!staged)\n        (void)0;'),
+    # The user-agent rules.
     ('no-user-agent-rules', STYLE, '        if (f_top_layer(n))\n            fullscreen_rules(c, n, &sp);',
      '        if (0)\n            fullscreen_rules(c, n, &sp);'),
 ]

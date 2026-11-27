@@ -1047,6 +1047,24 @@ static void plane_fullscreen_container(void)
     fs_name(NULL);
     s_fs.active = false;
     check(!page_covered(ob, scroll_now()), "planes, full screen: back, the box outside is uncovered");
+    // The hidden rows are out of keyboard traversal while full screen, and
+    // back in it after (fs_rows_keys). This host builds no widget tree, so
+    // the rows' own `focusable` is set here as yonder's start sets it;
+    // that Tab passes over a widget that is not focusable is libui's
+    // (os64_ui_focus_next).
+    g.back.focusable = true;
+    g.field.w.focusable = true;
+    g.qno.focusable = false;
+    s_fs.active = true;
+    layout();
+    bool keyed = false;
+    for (size_t k = 0; k < FS_ROWS; k++)
+        keyed = keyed || kFsRows[k]->focusable;
+    check(!keyed, "planes, full screen: no hidden row is focusable");
+    s_fs.active = false;
+    layout();
+    check(g.back.focusable && g.field.w.focusable && !g.qno.focusable,
+          "planes, full screen: back, each row is as focusable as it was");
     plane_drop();
 }
 
