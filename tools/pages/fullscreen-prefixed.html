@@ -21,7 +21,7 @@
 <div id="log"></div>
 <script>
   const box = document.getElementById('box'), log = document.getElementById('log');
-  const note = s => { log.textContent += s + '\n'; };
+  const note = s => { log.textContent += s + '\n'; console.log(s); };   // on the page, and on yonder's output for a redirect
   document.addEventListener('webkitfullscreenchange', () =>
     note('webkitfullscreenchange: webkitIsFullScreen ' + document.webkitIsFullScreen + ', element ' +
          (document.webkitFullscreenElement ? '#' + document.webkitFullscreenElement.id : 'null')));

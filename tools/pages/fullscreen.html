@@ -21,7 +21,8 @@
     screen hides; a navigation leaves).
   - Ctrl+Alt+F (the window manager's) while the container is full screen:
     the window comes back and the page hears fullscreenchange.
-  The log keeps every event and every promise's answer.
+  The log keeps every event and every promise's answer, on the page and on
+  yonder's output (console.log), where a redirect catches it.
 
   The container sits in a wrapper that is transformed and clips, as many
   players' do: full screen leaves it behind, so the container still fills
@@ -54,7 +55,7 @@
 <div id="log"></div>
 <script>
   const c = document.getElementById('c'), log = document.getElementById('log');
-  const note = s => { log.textContent += s + '\n'; };
+  const note = s => { log.textContent += s + '\n'; console.log(s); };   // on the page, and on yonder's output for a redirect
   const where = e => e.target === document ? 'document' : '#' + e.target.id;
   document.addEventListener('fullscreenchange', e => {
     note('fullscreenchange at ' + where(e) + '; fullscreenElement ' +

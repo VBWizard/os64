@@ -21,7 +21,7 @@
 <div id="log"></div>
 <script>
   const box = document.getElementById('box'), log = document.getElementById('log');
-  const note = s => { log.textContent += s + '\n'; };
+  const note = s => { log.textContent += s + '\n'; console.log(s); };   // on the page, and on yonder's output for a redirect
   const ask = why => box.requestFullscreen().then(() => note(why + ': resolved'),
                                                   e => note(why + ': rejected ' + e.name));
   document.addEventListener('fullscreenerror', () => note('fullscreenerror'));

@@ -28,6 +28,8 @@
   }
   document.getElementById('go').onclick = () => document.documentElement.requestFullscreen();
   document.addEventListener('fullscreenchange', () => {
-    document.getElementById('state').textContent = document.fullscreenElement ? 'full screen' : 'windowed';
+    const state = document.fullscreenElement ? 'full screen' : 'windowed';
+    document.getElementById('state').textContent = state;
+    console.log('fullscreenchange: ' + state);   // on yonder's output, for a redirect
   });
 </script>
