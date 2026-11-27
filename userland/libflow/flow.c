@@ -4550,7 +4550,7 @@ static const flow_box_t *hit(HitWalk *t, const flow_box_t *b, int32_t x, int32_t
 // is asked once, of the layer; the scroll containers inside it, as the
 // walk enters each (hit_kids). `painted` is HitWalk's.
 static const flow_box_t *hit_at(const flow_tree_t *tree, int32_t x, int32_t y, flow_point_t scroll,
-                                uint64_t *cuts, const flow_box_t *painted)
+                                uint64_t *cuts, const flow_box_t *painted, const flow_box_t *top)
 {
     if (cuts != NULL)
         *cuts = 0;
@@ -4562,6 +4562,9 @@ static const flow_box_t *hit_at(const flow_tree_t *tree, int32_t x, int32_t y, f
     const flow_box_t *found = NULL;
     for (int32_t i = tree->nlayers; i > 0 && found == NULL; i--) {
         const flow_box_t *b = tree->layers[i - 1].box;
+        // A top layer (flow_hit_within): only its own layers are there.
+        if (top != NULL && !within(b, top))
+            continue;
         if (!outside_clips_hold(b, x, y, scroll))
             continue;
         flow_point_t at;
@@ -4591,12 +4594,18 @@ static const flow_box_t *hit_at(const flow_tree_t *tree, int32_t x, int32_t y, f
 const flow_box_t *flow_hit_counted(const flow_tree_t *tree, int32_t x, int32_t y, flow_point_t scroll,
                                    uint64_t *cuts)
 {
-    return hit_at(tree, x, y, scroll, cuts, NULL);
+    return hit_at(tree, x, y, scroll, cuts, NULL, NULL);
 }
 
 const flow_box_t *flow_hit(const flow_tree_t *tree, int32_t x, int32_t y, flow_point_t scroll)
 {
     return flow_hit_counted(tree, x, y, scroll, NULL);
+}
+
+const flow_box_t *flow_hit_within(const flow_tree_t *tree, int32_t x, int32_t y, flow_point_t scroll,
+                                  const flow_box_t *top)
+{
+    return hit_at(tree, x, y, scroll, NULL, NULL, top);
 }
 
 bool flow_text_processed(const flow_box_t *b, size_t source, uint32_t *processed)
@@ -4632,14 +4641,22 @@ bool flow_text_processed(const flow_box_t *b, size_t source, uint32_t *processed
     return true;
 }
 
-bool flow_box_covered_at(const flow_tree_t *tree, const flow_box_t *box, int32_t x, int32_t y, flow_point_t scroll)
+bool flow_box_covered_within(const flow_tree_t *tree, const flow_box_t *box, int32_t x, int32_t y,
+                             flow_point_t scroll, const flow_box_t *top)
 {
     if (tree == NULL || box == NULL)
         return false;
-    const flow_box_t *h = hit_at(tree, x, y, scroll, NULL, box);
+    if (top != NULL && !within(box, top))
+        return true;
+    const flow_box_t *h = hit_at(tree, x, y, scroll, NULL, box, top);
     while (h != NULL && h != box)
         h = h->parent;
     return h == NULL;
+}
+
+bool flow_box_covered_at(const flow_tree_t *tree, const flow_box_t *box, int32_t x, int32_t y, flow_point_t scroll)
+{
+    return flow_box_covered_within(tree, box, x, y, scroll, NULL);
 }
 
 bool flow_box_covered(const flow_tree_t *tree, const flow_box_t *box, flow_point_t scroll)
@@ -4715,7 +4732,10 @@ const os64_html_node_t *flow_clip_parent(const flow_tree_t *tree, const os64_htm
     if (position != FLOW_POSITION_ABSOLUTE && position != FLOW_POSITION_FIXED)
         return parent;
     // An absolute or fixed box's containing block is its parent's anchor
-    // (FStyled.anchor, fixed_anchor): the nearest element that can be one.
+    // (FStyled.anchor, fixed_anchor): the nearest element that can be one;
+    // the top layer's is the viewport (f_top_layer).
+    if (f_top_layer(node))
+        return NULL;
     const FStyled *of = f_style_of(tree->styles, parent);
     if (of == NULL)
         return NULL;

@@ -297,8 +297,24 @@ bool yonder_paint_from(const flow_tree_t *tree, os64_gui_rect_t viewport, os64_g
                        yonder_paint_cache_t *cache, yonder_scratch_t *scratch, const yonder_verbs_t *verbs,
                        const flow_box_t *cover);
 
+// THE TOP LAYER (the Fullscreen API's, VIDEO.md § 9): while `element` is
+// the fullscreen element, every paint of a tree of its document — a view,
+// a part, a tile, a plane's paints over black and over white — paints the
+// black backdrop and then that element's boxes alone, in their own order,
+// with nothing before or after them in the page's: over everything, and
+// neither dimmed nor culled by any of its ancestors' groups (a matrix that
+// moves an ancestor off the view moves none of the element's boxes). A
+// paint from a cover inside the element starts at the cover; one whose
+// cover is outside it is the backdrop alone, and answers false. An element with no box (display none)
+// leaves the backdrop. NULL clears it; another document's tree is painted
+// as ever. The element is read at every paint, so the caller keeps it
+// alive while it is named (yonder holds it: fs_name).
+void yonder_paint_set_top(const os64_html_node_t *element);
+
 // How many groups the painter has open now: read by a verb as it draws, so
-// a check can hold it to flow_paint_path's groups for the box it is drawing.
+// a check can hold it to the groups the walk opens round the box it is
+// drawing (flow_paint_path's, less those round the top layer's element,
+// whose walk does not lay them).
 extern int32_t yonder_paint_groups_open;
 
 // One of `box`'s boxes — its border box `rect` (in any coordinates), or

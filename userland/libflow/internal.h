@@ -268,6 +268,19 @@ static inline bool f_anchors(const flow_style_t *s, bool root, bool fixed)
     return fixed ? f_contains_fixed(s) : f_contains_absolute(s);
 }
 
+// THE TOP LAYER (Fullscreen § 4, CSS Position 4 § 2): an element other
+// than the root that libhtml marks full screen. Its containing block is
+// the initial one whatever its ancestors are, so no transform, filter,
+// position or overflow of theirs anchors it, moves it or clips it: its box
+// is filed with the initial containing block's (boxes.c), and style.c's
+// user-agent rules make it fill the view. Nor does an ancestor's
+// `opacity: 0` leave it unpainted (FStyled.transparent).
+static inline bool f_top_layer(const os64_html_node_t *n)
+{
+    return n != NULL && n->kind == OS64_HTML_ELEMENT && (n->state & OS64_HTML_STATE_FULLSCREEN) != 0 &&
+           !(n->parent != NULL && n->parent->kind == OS64_HTML_DOCUMENT);
+}
+
 // ── Storage ─────────────────────────────────────────────────────────────
 //
 // Everything a layout builds lives until the layout is freed and is never
@@ -676,10 +689,13 @@ typedef struct {
     // containing block. An absolute element's own containing block is its
     // PARENT's anchor. `fixed_anchor` is the same for a FIXED box: the
     // nearest transformed or filtered one (f_contains_fixed), whose box is
-    // its containing block in place of the viewport.
+    // its containing block in place of the viewport, never one outside the
+    // top layer. The top layer's own containing block is the initial one,
+    // whatever its parent's anchors (f_top_layer).
     const os64_html_node_t *anchor, *fixed_anchor;
     // `opacity: 0` on this element or an ancestor whose opacity is not
-    // animated: nothing of it is painted (flow_box_t.unpainted).
+    // animated, none past the top layer's element (f_top_layer): nothing of
+    // it is painted (flow_box_t.unpainted).
     bool transparent;
     // Its in-flow children are flex or grid items: it is a flex or grid
     // container, or it makes no box (`display: contents`) inside one. Pass

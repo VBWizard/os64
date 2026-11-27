@@ -525,9 +525,10 @@ static void position_box(B *b, FBox *box, const os64_html_node_t *el, bool block
     // A fixed box's containing block is the viewport unless a transformed
     // or filtered element is round it (FStyled.fixed_anchor): it is filed
     // with the initial containing block's, whose rect is the viewport's too.
+    // The top layer's is the initial one whatever is round it (f_top_layer).
     const FStyled *up = styled(b, up_of(b, el));
     bool fixed = box->style->position == FLOW_POSITION_FIXED;
-    const os64_html_node_t *anchor = up == NULL ? NULL : fixed ? up->fixed_anchor : up->anchor;
+    const os64_html_node_t *anchor = up == NULL || f_top_layer(el) ? NULL : fixed ? up->fixed_anchor : up->anchor;
     p->cb = anchor != NULL ? f_map_get(&b->pos_of, anchor) : NULL;
     FPos **first = p->cb != NULL ? &p->cb->abs_first : &b->out->icb_first;
     FPos **last = p->cb != NULL ? &p->cb->abs_last : &b->out->icb_last;
