@@ -203,7 +203,10 @@ x86-64.
 - **The scaler's fast bilinear enlarges with code it writes itself.**
   libswscale generates an x86 horizontal filter at run time
   (`ff_init_hscaler_mmxext`) when asked for `SWS_FAST_BILINEAR` on an
-  enlargement. Where it has `mmap` and `mprotect` it makes that memory
+  enlargement to a width that is a multiple of 32, from one that is a
+  multiple of 16 (`utils.c`, `canMMXEXTBeUsed`; shrinking, fast bilinear
+  is the ordinary filtered scaler with a two-tap filter and writes no
+  code). Where it has `mmap` and `mprotect` it makes that memory
   executable. Here it has neither (`HAVE_MMAP 0`), so it writes the code
   into `av_malloc`'s memory, which os64 does not let execute: running it
   ends the program with a no-execute fault. So os64's callers (libmedia's

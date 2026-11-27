@@ -64,7 +64,9 @@
 //  23  a FAST scaler enlarging /tests/pages/video-tiny.mp4's 16-wide
 //      pictures to 64x64 and 128x96: the case where FFmpeg's fast bilinear
 //      would run code it writes into the heap, which os64 ends with a
-//      no-execute fault (media_scale.c, FAST IS FAST ONLY WHEN SHRINKING).
+//      no-execute fault (media_scale.c, FAST WHEN SHRINKING, NEVER WHEN
+//      ENLARGING: both are multiples of 32 from a width that is a multiple
+//      of 16, the enlargements where it writes code).
 //      Passing is surviving, with every conversion answered 0
 //
 // Exit codes: 0x3ED10000 success, 0x3ED100NN the step that failed.

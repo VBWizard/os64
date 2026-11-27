@@ -31,16 +31,23 @@
 //  7  INTERLACED pictures (H.264 marks each frame) convert, field by field:
 //     the scaler refuses a source and destination whose interlacing
 //     differs, so the scaler's destination takes each picture's.
-//  8  THE UNSCALED EDGE (media_scale.c): bbb's 854-wide pictures at their
-//     own size and scaled to widths that are and are not multiples of
-//     eight, with each scaler kind, into a buffer of exactly as many rows
-//     of a pitch of the width, the width + 2 and the width + 10 pixels,
-//     followed by a guard: every pixel of every row is written, and nothing
-//     past the width or the buffer is. And an interlaced 854-wide clip with
-//     the width kept and the height changed by a row, where a field is
-//     unscaled though the frame is not. (ASan cannot see these writes,
-//     which FFmpeg's assembly makes; the guard and the row tails are
-//     checked by hand.)
+//  8  THE UNSCALED EDGE, THE GROUPS OF EIGHT and THE ODD WIDTH
+//     (media_scale.c): bbb's 854-wide
+//     pictures at their own size and scaled to widths that are and are not
+//     multiples of eight, odd ones beside the even one each is converted
+//     at, an enlargement by one, and 3, 2 and 1 wide, with each scaler
+//     kind, into a buffer of exactly as many rows of a pitch of the width,
+//     the width + 2 and the width + 10 pixels, followed by a guard: every
+//     pixel of every row is written, nothing past the width or the buffer
+//     is, an odd width converted one narrower (not EXACT) has its last
+//     column equal to its neighbour on every row, and at the wider pitches
+//     every pixel inside the width is the one the pitch of exactly the
+//     width gave (THE GROUPS OF EIGHT: a group carried onto a row already
+//     written, as field by field, would differ). And an interlaced
+//     854-wide clip with the width kept and the height changed by a row,
+//     where a field is unscaled though the frame is not, and at 853 and
+//     852 wide. (ASan cannot see these writes, which FFmpeg's assembly
+//     makes; the guard and the row tails are checked by hand.)
 // 10  A RESYNC IN THE LAST GROUP of pictures, with H.264's delayed pictures
 //     still in the decoder: no picture comes after it, since the stream
 //     ends before another keyframe (os64_media_picture_resync flushes the
@@ -61,6 +68,13 @@
 //     open for both does (FFmpeg's probe would otherwise read the sound for
 //     five seconds waiting on the discarded picture; media.c holds its
 //     analysis to a tenth of a second when a picture is discarded).
+// 13  A GRAPH A SIZE (media_scale.c, THE ODD WIDTH): FFmpeg's allocations,
+//     counted through the allocators wrapped at link time, are many at a
+//     scaler's first picture (libswscale builds its graph) and none at the
+//     five after, at an odd width, its even neighbour, an odd width with
+//     the height changed too, and an enlargement by one (through the
+//     bounce): the conversion's width, set at every call, never rebuilds
+//     the graph.
 //  9  COVER ART is no picture: a sound with an attached picture opens for
 //     both with the picture ABSENT, is refused NO_PICTURE for the picture
 //     alone, and decodes the same sound, from the same zero, as the file
@@ -464,13 +478,17 @@ static void test_interlaced(const char *dir)
     printf("  7 interlaced: %ld pictures converted, %ld refused\n", converted, refused);
 }
 
-static void test_edge(const char *clip, const char *what, const uint32_t (*sizes)[2], int count)
+static void test_edge(const char *clip, const char *what, uint32_t src_w, const uint32_t (*sizes)[2], int count)
 {
     static const uint32_t kSlack[3] = { 0, 2, 10 };
     static const uint32_t kKinds[3] = { 0, OS64_MEDIA_SCALE_FAST, OS64_MEDIA_SCALE_EXACT };
     enum { GUARD = 64, BLANK = 0x11111111u };
     static uint32_t buffer[1289 * 719 + GUARD];
-    long checked = 0;
+    // Each picture as the pitch of exactly the width gave it, for the wider
+    // pitches (which take the bounce, THE GROUPS OF EIGHT) to match: a
+    // group of eight carried onto a row already written would differ.
+    static uint32_t first[3][1289 * 719];
+    long checked = 0, dups = 0, compared = 0;
     for (int z = 0; z < count; z++)
     for (int k = 0; k < 3; k++)
         for (int pi = 0; pi < 3; pi++) {
@@ -490,23 +508,102 @@ static void test_edge(const char *clip, const char *what, const uint32_t (*sizes
                 for (size_t i = 0; i < (size_t)pitch * H + GUARD; i++) buffer[i] = BLANK;
                 CHECK(os64_media_scaler_convert(s, got.picture, buffer, pitch * 4) == 0, "edge: convert");
                 os64_media_picture_release(c.m, got.picture);
-                long unwritten = 0, past_width = 0, past_end = 0;
+                long unwritten = 0, past_width = 0, past_end = 0, not_dup = 0;
                 for (uint32_t y = 0; y < H; y++)
                     for (uint32_t x = 0; x < pitch; x++) {
                         bool blank = buffer[(size_t)y * pitch + x] == BLANK;
                         if (x < W && blank) unwritten++;
                         if (x >= W && !blank) past_width++;
                     }
+                // THE ODD WIDTH: converted one narrower, its last column
+                // its neighbour's (the conversion at W - 1 writing exactly
+                // its width is held by the even sizes beside each odd one).
+                bool dup = kKinds[k] != OS64_MEDIA_SCALE_EXACT && (W & 1) && W >= 3 && src_w != W;
+                if (dup)
+                    for (uint32_t y = 0; y < H; y++)
+                        not_dup += buffer[(size_t)y * pitch + W - 1] != buffer[(size_t)y * pitch + W - 2];
                 for (size_t i = (size_t)pitch * H; i < (size_t)pitch * H + GUARD; i++) past_end += buffer[i] != BLANK;
-                CHECK(unwritten == 0 && past_width == 0 && past_end == 0,
-                      "edge: %ux%u kind %u pitch %u: %ld unwritten, %ld past the width, %ld past the buffer", W, H,
-                      kKinds[k], pitch, unwritten, past_width, past_end);
+                long differ = 0;
+                for (uint32_t y = 0; y < H; y++)
+                    for (uint32_t x = 0; x < W; x++) {
+                        uint32_t v = buffer[(size_t)y * pitch + x];
+                        if (pi == 0) first[n][(size_t)y * W + x] = v;
+                        else differ += first[n][(size_t)y * W + x] != v;
+                    }
+                compared += pi != 0;
+                CHECK(unwritten == 0 && past_width == 0 && past_end == 0 && not_dup == 0 && differ == 0,
+                      "edge: %ux%u kind %u pitch %u: %ld unwritten, %ld past the width, %ld past the buffer, "
+                      "%ld rows whose last column is not its neighbour, %ld pixels unlike the exact pitch's",
+                      W, H, kKinds[k], pitch, unwritten, past_width, past_end, not_dup, differ);
                 checked++;
+                dups += dup;
             }
             os64_media_scaler_destroy(s);
             clip_close(&c);
         }
-    printf("  8 the unscaled edge, %s: %ld conversions, every pixel written and none past\n", what, checked);
+    printf("  8 the unscaled edge, the groups of eight and the odd width, %s: %ld conversions (%ld even-dup, "
+           "%ld matched at a wider pitch), every pixel written and none past\n", what, checked, dups, compared);
+}
+
+// FFmpeg's allocations, counted: the allocators are wrapped at link time
+// (tools/test_media_picture_host.sh, --wrap), which the static libraries
+// it builds allow.
+static int s_av_allocs;
+void *__real_av_malloc(size_t n);
+void *__real_av_mallocz(size_t n);
+void *__real_av_calloc(size_t a, size_t b);
+void *__real_av_realloc(void *p, size_t n);
+void *__real_av_malloc_array(size_t a, size_t b);
+void *__wrap_av_malloc(size_t n);
+void *__wrap_av_mallocz(size_t n);
+void *__wrap_av_calloc(size_t a, size_t b);
+void *__wrap_av_realloc(void *p, size_t n);
+void *__wrap_av_malloc_array(size_t a, size_t b);
+void *__wrap_av_malloc(size_t n) { __atomic_add_fetch(&s_av_allocs, 1, __ATOMIC_RELAXED); return __real_av_malloc(n); }
+void *__wrap_av_mallocz(size_t n) { __atomic_add_fetch(&s_av_allocs, 1, __ATOMIC_RELAXED); return __real_av_mallocz(n); }
+void *__wrap_av_calloc(size_t a, size_t b) { __atomic_add_fetch(&s_av_allocs, 1, __ATOMIC_RELAXED); return __real_av_calloc(a, b); }
+void *__wrap_av_realloc(void *p, size_t n) { __atomic_add_fetch(&s_av_allocs, 1, __ATOMIC_RELAXED); return __real_av_realloc(p, n); }
+void *__wrap_av_malloc_array(size_t a, size_t b) { __atomic_add_fetch(&s_av_allocs, 1, __ATOMIC_RELAXED); return __real_av_malloc_array(a, b); }
+
+// A graph a size (media_scale.c, THE ODD WIDTH): libswscale builds its
+// graph at a scaler's first picture and allocates nothing for the ones
+// after: at an odd width (converted one narrower), its even neighbour, an
+// odd width with the height changed too, and an enlargement by one (the
+// odd width through the bounce). The conversion's width, set at every
+// call, never rebuilds it.
+static void test_graph_a_size(const char *clip)
+{
+    static const uint32_t kSizes[][2] = { { 853, 480 }, { 852, 480 }, { 641, 361 }, { 855, 480 } };
+    static uint32_t pixels[855 * 480];
+    for (int z = 0; z < 4; z++) {
+        Clip c;
+        clip_open(&c, clip, OS64_MEDIA_WANT_PICTURE);
+        os64_media_scaler_t *s;
+        if (c.result != 0 || os64_media_scaler_create(kSizes[z][0], kSizes[z][1], OS64_MEDIA_SCALE_FAST, &s) != 0) {
+            CHECK(0, "graph: open %d", c.result);
+            clip_close(&c);
+            return;
+        }
+        int first = -1, after = 0, pictures = 0;
+        for (int n = 0; n < 6; n++) {
+            os64_media_got_t got;
+            if (os64_media_next(c.m, OS64_MEDIA_WANT_PICTURE, NULL, 0, &got) != 0 || got.kind != OS64_MEDIA_GOT_PICTURE)
+                break;
+            __atomic_store_n(&s_av_allocs, 0, __ATOMIC_RELAXED);
+            CHECK(os64_media_scaler_convert(s, got.picture, pixels, kSizes[z][0] * 4) == 0, "graph: convert");
+            int counted = __atomic_load_n(&s_av_allocs, __ATOMIC_RELAXED);
+            os64_media_picture_release(c.m, got.picture);
+            if (n == 0) first = counted;
+            else after += counted;
+            pictures++;
+        }
+        CHECK(pictures == 6 && first > 0 && after == 0, "graph: %ux%u: %d pictures, %d allocations at the first, %d after",
+              kSizes[z][0], kSizes[z][1], pictures, first, after);
+        printf(" 13 a graph a size, %ux%u: %d allocations at the first picture, %d at the five after\n", kSizes[z][0],
+               kSizes[z][1], first, after);
+        os64_media_scaler_destroy(s);
+        clip_close(&c);
+    }
 }
 
 static void test_cover(const char *dir)
@@ -740,14 +837,24 @@ int main(int argc, char **argv)
     test_info(argv[2]);
     test_skip_and_seek(argv[2]);
     test_interlaced(argv[2]);
-    static const uint32_t kProgressive[][2] = { { 854, 480 }, { 853, 480 }, { 641, 361 }, { 1279, 719 }, { 640, 360 } };
+    // Each odd width beside the even one it is converted at (THE ODD
+    // WIDTH), so a write past W - 1 is a guard word hit there; 855 is an
+    // enlargement by one, the even-dup through the bounce; 3 and 1 wide
+    // are the smallest with a neighbour and the one without.
+    static const uint32_t kProgressive[][2] = {
+        { 854, 480 }, { 853, 480 }, { 852, 480 }, { 641, 361 }, { 640, 361 }, { 1279, 719 }, { 1278, 719 },
+        { 640, 360 }, { 855, 480 }, { 3, 2 }, { 2, 2 }, { 1, 2 },
+    };
     // Interlaced, the width kept and the height changed by a row: a field
     // is then unscaled although the frame is not.
-    static const uint32_t kInterlaced[][2] = { { 854, 479 }, { 854, 481 }, { 854, 480 }, { 853, 479 } };
-    test_edge(argv[1], "progressive at its own size and scaled", kProgressive, 5);
+    static const uint32_t kInterlaced[][2] = { { 854, 479 }, { 854, 481 }, { 854, 480 }, { 853, 479 }, { 852, 479 } };
+    test_edge(argv[1], "progressive at its own size and scaled", 854, kProgressive,
+              (int)(sizeof(kProgressive) / sizeof(kProgressive[0])));
     char interlaced[512];
     snprintf(interlaced, sizeof(interlaced), "%s/interlaced_854.mp4", argv[2]);
-    test_edge(interlaced, "interlaced, the height changed by a row", kInterlaced, 4);
+    test_edge(interlaced, "interlaced, the height changed by a row", 854, kInterlaced,
+              (int)(sizeof(kInterlaced) / sizeof(kInterlaced[0])));
+    test_graph_a_size(argv[1]);
     test_cover(argv[2]);
     test_resync_at_end(argv[2]);
     test_open_reads(argv[2]);
