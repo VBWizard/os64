@@ -74,7 +74,7 @@
 #define MARGIN 48                         // the first window leaves this much of the screen
 #define ACTIONS 16
 #define DOUBLE_CLICK_US 400000            // two left presses this close are a double-click
-#define READOUT_LINES 8                   // what readout_lines writes at most
+#define READOUT_LINES 9                   // what readout_lines writes at most
 #define READOUT_CHARS 96                  // a line's buffer, its NUL included
 // Over a placed plane the readout is an overlay rectangle, and the kernel
 // refuses a publish whose overlays blend more than GUI_PLANE_OVERLAY_PIXELS
@@ -82,7 +82,7 @@
 // readout can make must stay inside it, or every refresh would be refused.
 // This is the readout's own bound, well under the kernel's, which it does
 // not need to follow up.
-#define READOUT_OVERLAY_BUDGET 98304u
+#define READOUT_OVERLAY_BUDGET 131072u
 _Static_assert((READOUT_CHARS - 1) * 8 * READOUT_LINES * 16 <= READOUT_OVERLAY_BUDGET,
                "the readout's widest box outgrows a plane's overlay budget");
 #define OPEN_WAIT_MS 30000                // a probe that says nothing for this long fails the open
@@ -267,6 +267,25 @@ typedef struct {
     uint32_t refresh;                     // frames since the readout was last painted over a plane
 } view_t;
 
+// The scaler's way for a readout (os64/media.h's OS64_MEDIA_SCALED_*).
+static const char *scaled_name(int way)
+{
+    switch (way) {
+    case OS64_MEDIA_SCALED_UNSCALED:      return "unscaled";
+    case OS64_MEDIA_SCALED_BILINEAR:      return "bilinear";
+    case OS64_MEDIA_SCALED_FAST_BILINEAR: return "fast bilinear";
+    default:                              return "none yet";
+    }
+}
+
+// A conversion's cost as "average/worst ms a picture", hundredths shown.
+static void conversion_text(const os64_media_player_conversion_t *c, char *out, size_t cap)
+{
+    uint64_t avg = c->count ? c->total_us / c->count : 0;
+    os64_snprintf(out, cap, "%lu.%02lu/%lu.%02lu ms", (unsigned long)(avg / 1000), (unsigned long)(avg % 1000 / 10),
+                  (unsigned long)(c->worst_us / 1000), (unsigned long)(c->worst_us % 1000 / 10));
+}
+
 // `placed`: whether gplay's last publish placed the plane.
 static void readout_lines(app_t *a, const os64_media_player_facts_t *f, bool placed, char lines[][READOUT_CHARS],
                           uint32_t *count)
@@ -294,6 +313,10 @@ static void readout_lines(app_t *a, const os64_media_player_facts_t *f, bool pla
     os64_snprintf(lines[n++], READOUT_CHARS, "ear: stills %lu, held ahead %lu, stepped behind %lu",
                   (unsigned long)f->clock.stills, (unsigned long)f->clock.held_ahead,
                   (unsigned long)f->clock.jumped_behind);
+    char cost[48];
+    conversion_text(&f->convert, cost, sizeof(cost));
+    os64_snprintf(lines[n++], READOUT_CHARS, "convert %ux%u from %ux%u, %s, %s", f->convert.w, f->convert.h,
+                  f->convert.src_w, f->convert.src_h, scaled_name(f->convert.way), cost);
     os64_snprintf(lines[n++], READOUT_CHARS, "sync %ld ms  sink delay %u ms%s%s%s", (long)(f->sync * 1000 / RATE),
                   f->delay_us / 1000, f->muted ? "  muted" : "", f->refused ? "  sound: " : "",
                   f->refused && f->refused_why ? f->refused_why : "");
@@ -738,6 +761,11 @@ static void say_counts(app_t *a, const os64_media_player_facts_t *f, bool placed
     os64_printf("  report ages: to 20 ms %lu, 40 %lu, 60 %lu, 80 %lu, 120 %lu, over %lu\n", (unsigned long)age[0],
                 (unsigned long)age[1], (unsigned long)age[2], (unsigned long)age[3], (unsigned long)age[4],
                 (unsigned long)age[5]);
+    char cost[48];
+    conversion_text(&f->convert, cost, sizeof(cost));
+    os64_printf("  conversion: %lu pictures, the last %ux%u from %ux%u, %s; average/worst %s\n",
+                (unsigned long)f->convert.count, f->convert.w, f->convert.h, f->convert.src_w, f->convert.src_h,
+                scaled_name(f->convert.way), cost);
     os64_printf("  converted frames: %u held, %lu bytes\n", f->frames_held, (unsigned long)f->frames_bytes);
     os64_printf("  media: picture packets %lu, run-in %lu, resync-dropped %lu\n",
                 (unsigned long)f->media.picture_packets, (unsigned long)f->media.pictures_run_in,

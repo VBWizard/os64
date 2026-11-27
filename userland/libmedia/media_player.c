@@ -99,6 +99,7 @@ struct os64_media_player {
     frame_t frame[FRAMES];
     uint64_t frames_bytes;                // the converted frames' pixels held (frame_fit), read atomically by facts
     uint32_t frames_held;                 // frames holding pixels
+    os64_media_player_conversion_t convert; // under the lock: what converting has cost (facts)
     frame_t *free_frames;
     frame_t *shown;                       // the caller's: the picture on the screen
     frame_t *reconverted;                 // the shown one converted again at a new size
@@ -705,13 +706,30 @@ static int64_t picture_thread(void *arg)
                 scaler_h = h;
             }
         }
-        if (scaler != NULL && frame_fit(p, f, w, h))
+        int64_t convert_us = 0;
+        if (scaler != NULL && frame_fit(p, f, w, h)) {
+            int64_t t1 = now_us();
             made = os64_media_scaler_convert(scaler, source, f->pixels, w * 4) == 0;
+            convert_us = now_us() - t1;
+        }
         int64_t cost = now_us() - t0;
 
         os64_lock_acquire(&p->lock);
         p->converting = false;
         p->conversion_us = cost;
+        if (made) {
+            // The readout's account of the conversion alone (a scaler built
+            // or a frame regrown at a size change is in `cost`, not here).
+            p->convert.count++;
+            p->convert.total_us += (uint64_t)convert_us;
+            if ((uint64_t)convert_us > p->convert.worst_us)
+                p->convert.worst_us = (uint64_t)convert_us;
+            p->convert.w = w;
+            p->convert.h = h;
+            p->convert.src_w = source->width;
+            p->convert.src_h = source->height;
+            p->convert.way = os64_media_scaler_last(scaler);
+        }
         f->w = w;
         f->h = h;
         f->at = at;
@@ -1753,6 +1771,7 @@ void os64_media_player_facts(os64_media_player_t *p, os64_media_player_facts_t *
     f.ready = os64_media_pictures_count(&p->ready);
     f.decoded_depth = DECODED_DEPTH;
     f.ready_depth = READY_DEPTH;
+    f.convert = p->convert;
     f.frames_held = __atomic_load_n(&p->frames_held, __ATOMIC_RELAXED);
     f.frames_bytes = __atomic_load_n(&p->frames_bytes, __ATOMIC_RELAXED);
     f.sound_queued = os64_media_queue_count(&p->pcm);

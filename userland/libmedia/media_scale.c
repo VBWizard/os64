@@ -60,6 +60,7 @@ struct os64_media_scaler {
     bool fast;                       // OS64_MEDIA_SCALE_FAST: SWS_FAST_BILINEAR when shrinking
     uint32_t *bounce;                // NULL until a conversion keeps a width not a multiple of 8
     size_t bounce_pixels;
+    int last;                        // OS64_MEDIA_SCALED_*: the last conversion's way
 };
 
 // Pixels between the bounce buffer's rows for `width`: room for the last
@@ -140,12 +141,20 @@ int os64_media_scaler_convert(os64_media_scaler_t *s, const os64_media_picture_t
     }
     int r = sws_scale_frame(s->sws, s->canvas, source);
     s->canvas->data[0] = NULL;
+    s->last = source->width == (int)width && source->height == (int)height ? OS64_MEDIA_SCALED_UNSCALED
+            : (s->sws->flags & SWS_FAST_BILINEAR) ? OS64_MEDIA_SCALED_FAST_BILINEAR
+                                                   : OS64_MEDIA_SCALED_BILINEAR;
     if (r < 0) return r == AVERROR(ENOMEM) ? OS64_MEDIA_NO_MEMORY : OS64_MEDIA_UNSUPPORTED;
     if (edge)
         for (uint32_t y = 0; y < height; y++)
             os64_memcpy((uint8_t *)pixels + (size_t)y * pitch, s->bounce + (size_t)y * bounce_pitch(width),
                         (size_t)width * 4);
     return 0;
+}
+
+int os64_media_scaler_last(const os64_media_scaler_t *s)
+{
+    return s != NULL ? s->last : OS64_MEDIA_SCALED_NONE;
 }
 
 void os64_media_scaler_destroy(os64_media_scaler_t *s)

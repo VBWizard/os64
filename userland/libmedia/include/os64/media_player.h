@@ -202,6 +202,17 @@ typedef struct {
 // (its show thread owns the pace; counted in facts.frame_refused).
 bool os64_media_player_frame(os64_media_player_t *p, int64_t blank, int64_t period, os64_media_player_frame_t *out);
 
+// What converting pictures has cost (the scaler's call alone): how many,
+// their microseconds in total and the worst, and the last one's sizes and
+// way (os64/media.h's OS64_MEDIA_SCALED_*), so a reader can tell a shrink
+// from an enlargement and from a picture at its own size.
+typedef struct {
+    uint64_t count, total_us, worst_us;
+    uint32_t w, h;                  // converted to
+    uint32_t src_w, src_h;          // converted from
+    int way;                        // OS64_MEDIA_SCALED_*
+} os64_media_player_conversion_t;
+
 typedef struct {
     int state;                      // OS64_MEDIA_PLAYER_*
     bool probed;                    // `info` holds (metadata)
@@ -231,6 +242,7 @@ typedef struct {
     // pictures of a smaller one (leaving full screen).
     uint32_t frames_held;
     uint64_t frames_bytes;
+    os64_media_player_conversion_t convert;
     uint32_t sound_queued;          // frames
     uint32_t delay_us;              // the sink's
     int64_t sync;
