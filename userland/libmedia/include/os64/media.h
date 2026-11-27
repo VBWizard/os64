@@ -322,9 +322,11 @@ void os64_media_counts(const os64_media_t *m, os64_media_counts_t *out);
 // be the decoding thread, and to no media.
 //   EXACT: the same pixels on every CPU, whichever routines FFmpeg chose
 //          (its bit-exact mode; slower): for proofs, never for playing
-//   FAST:  FFmpeg's fast bilinear when shrinking (cheaper, coarser);
-//          bilinear when enlarging, where FFmpeg's fast path would run
-//          code it writes into memory os64 does not let execute
+//   FAST:  FFmpeg's fast bilinear when shrinking (a two-tap filter:
+//          cheaper, coarser, and below half the width it skips source
+//          pixels); bilinear when enlarging, where at some widths
+//          FFmpeg's fast path would run code it writes into memory os64
+//          does not let execute
 // Neither flag: bilinear.
 typedef struct os64_media_scaler os64_media_scaler_t;
 #define OS64_MEDIA_SCALE_EXACT  (1u << 0)
@@ -336,6 +338,12 @@ int os64_media_scaler_create(uint32_t dst_width, uint32_t dst_height, uint32_t f
 // byte is written 0xFF, so it reads as opaque if it ever becomes alpha. 0;
 // UNSUPPORTED for a picture whose kind changed to one the scaler cannot
 // read; NO_MEMORY.
+//
+// AN ODD WIDTH costs FFmpeg four to five times an even one, so a picture
+// converted to an odd width other than its own is converted one pixel
+// narrower and its last column repeated (1/dst_width narrower, which no
+// one can see); not with EXACT, which is always FFmpeg's own answer
+// (media_scale.c, THE ODD WIDTH).
 //
 // THE COLOURS: the matrix and range the stream states; with no matrix,
 // BT.709 for a picture 1280 or more wide or taller than 576, else BT.601
@@ -350,7 +358,11 @@ int os64_media_scaler_convert(os64_media_scaler_t *s, const os64_media_picture_t
 
 // Which way the last conversion that succeeded went, for a readout: the picture at its own
 // size (FFmpeg's unscaled converters), bilinear, or fast bilinear (FAST,
-// shrinking); NONE before the first, and for a NULL scaler.
+// shrinking); NONE before the first, and for a NULL scaler. It is the way
+// asked of FFmpeg at the conversion's own size, so a picture one pixel
+// narrower than an odd width (AN ODD WIDTH, above) reads as UNSCALED; and
+// fast bilinear at a width of eight or less, which libswscale itself
+// makes plain bilinear, still reads as fast.
 #define OS64_MEDIA_SCALED_NONE          0
 #define OS64_MEDIA_SCALED_UNSCALED      1
 #define OS64_MEDIA_SCALED_BILINEAR      2
