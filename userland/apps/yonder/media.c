@@ -31,9 +31,9 @@
 // A session's `lock` guards what more than one thread touches: the asks
 // (play, seek, settings, stop), the facts, the loader's product.
 // `s_audio.lock` guards the session list and the loader slots taken. No
-// thread is joined (thread_start): a loader says it is done as its last
-// touch of its session, and a player says `finished`; only then
-// is the session freed. LOCK ORDER: s_audio.lock, then the output's, then
+// thread is joined (thread_start): a loader and a plane helper each say
+// they are done as their last touch of the session, and a player says
+// `finished`; only then is the session freed. LOCK ORDER: s_audio.lock, then the output's, then
 // a player's, then a session's; never the other way, so no call into the
 // output or a player is made with a session's lock held. A bell is rung
 // only with the lock that guards its owner's right to close it held
@@ -867,9 +867,9 @@ static void bytes_arrival(yonder_media_t *m)
     product_trim(m);
 }
 
-// The session failed before it had a player, on the bytes' reader's
-// thread: `why` is the page's MediaError.message, and a failure with none
-// says so rather than nothing.
+// The session failed, on the bytes' reader's thread (its player's
+// `prepare`, or the reader later): `why` is the page's MediaError.message,
+// and a failure with none says so rather than nothing.
 static void fail(yonder_media_t *m, int code, const char *why)
 {
     os64_lock_acquire(&m->lock);
@@ -1024,7 +1024,7 @@ static void session_facts(yonder_media_t *m, os64_dom_media_facts_t *out)
     *out = m->facts;
     os64_lock_release(&m->lock);
     if (p == NULL)
-        return;                     // opening, or failed before it had a player (`fail` told)
+        return;                     // closed, or its asks not yet told: the session's own facts (`fail` told)
     os64_media_player_facts_t f;
     os64_media_player_facts(p, &f);
     bool probed = f.probed && f.failure == 0;
