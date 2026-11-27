@@ -38,7 +38,7 @@ static bool raise_to(uint64_t *at, uint64_t value)
 	return false;
 }
 
-bool shootdown_settled(shootdown_t *s, uint64_t waited_us, uint32_t last_cpu, uint64_t late_us)
+bool shootdown_settled(shootdown_t *s, uint64_t waited_us, shootdown_last_t last, uint64_t late_us)
 {
 	bool late = waited_us > late_us;
 	__atomic_add_fetch(&s->rounds, 1, __ATOMIC_RELAXED);
@@ -49,9 +49,17 @@ bool shootdown_settled(shootdown_t *s, uint64_t waited_us, uint32_t last_cpu, ui
 		__atomic_add_fetch(&s->window_late, 1, __ATOMIC_RELAXED);
 	}
 	if (raise_to(&s->wait_most_us, waited_us))
-		__atomic_store_n(&s->wait_most_cpu, last_cpu, __ATOMIC_RELAXED);
+	{
+		__atomic_store_n(&s->wait_most_cpu, last.cpu, __ATOMIC_RELAXED);
+		__atomic_store_n(&s->wait_most_thread, last.thread, __ATOMIC_RELAXED);
+		__atomic_store_n(&s->wait_most_task, last.task, __ATOMIC_RELAXED);
+	}
 	if (raise_to(&s->window_wait_most_us, waited_us))
-		__atomic_store_n(&s->window_wait_most_cpu, last_cpu, __ATOMIC_RELAXED);
+	{
+		__atomic_store_n(&s->window_wait_most_cpu, last.cpu, __ATOMIC_RELAXED);
+		__atomic_store_n(&s->window_wait_most_thread, last.thread, __ATOMIC_RELAXED);
+		__atomic_store_n(&s->window_wait_most_task, last.task, __ATOMIC_RELAXED);
+	}
 	return late;
 }
 
@@ -64,6 +72,10 @@ void shootdown_read(shootdown_t *s, shootdown_counts_t *out)
 	out->wait_most_us = __atomic_load_n(&s->wait_most_us, __ATOMIC_RELAXED);
 	out->wait_most_cpu = __atomic_load_n(&s->wait_most_cpu, __ATOMIC_RELAXED);
 	out->window_wait_most_cpu = __atomic_load_n(&s->window_wait_most_cpu, __ATOMIC_RELAXED);
+	out->wait_most_thread = __atomic_load_n(&s->wait_most_thread, __ATOMIC_RELAXED);
+	out->wait_most_task = __atomic_load_n(&s->wait_most_task, __ATOMIC_RELAXED);
+	out->window_wait_most_thread = __atomic_load_n(&s->window_wait_most_thread, __ATOMIC_RELAXED);
+	out->window_wait_most_task = __atomic_load_n(&s->window_wait_most_task, __ATOMIC_RELAXED);
 	out->window_rounds = __atomic_exchange_n(&s->window_rounds, 0, __ATOMIC_RELAXED);
 	out->window_late = __atomic_exchange_n(&s->window_late, 0, __ATOMIC_RELAXED);
 	out->window_wait_most_us = __atomic_exchange_n(&s->window_wait_most_us, 0, __ATOMIC_RELAXED);

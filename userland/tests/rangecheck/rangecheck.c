@@ -144,5 +144,7 @@ int main(int argc, char **argv)
         os64_printf("rangecheck: read() into the exit window answered %ld\n", (long)got);
         FAIL(5);
     }
+    os64_printf("rangecheck: a stack buffer and a fresh mapping taken; a kernel stack (both ways), "
+                "text and the exit window refused\n");
     return (int)0x3C4E0000u;
 }

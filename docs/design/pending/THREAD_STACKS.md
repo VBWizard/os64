@@ -122,8 +122,10 @@ one too.
   (interrupts off for those few instructions only), so the CPU it skips is
   the one it flushed. Moved while it waits, it runs on a CPU that was sent
   the IPI and answers it at once.
-- **Counted** in `/sys/memory/shootdown`, with the longest wait and the CPU
-  that answered it last. A syscall runs with interrupts off, so a CPU long in
+- **Counted** in `/sys/memory/shootdown`, with the longest wait, the CPU
+  that answered it last, and the thread and task that CPU was running when
+  its flush got in (the handler notes them with two plain stores before it
+  answers). A round past 100 ms also logs, when it settles, the same three. A syscall runs with interrupts off, so a CPU long in
   one holds every round until it ends or parks; that line is what says
   whether one did.
 - **Taken by the reap alone.** `unmap` taking it is its own later slice
@@ -158,7 +160,8 @@ line is what would name one.
   times thread makers parked for the backlog, how many proceeded past the
   bound, and the longest park; nodes refused for a wrong state.
 - `/sys/memory/shootdown`: rounds, the late ones, the longest wait and the
-  CPU that answered it last, each since boot and since the last read.
+  CPU that answered it last with the thread and task it was running, each
+  since boot and since the last read.
 - `/proc/<id>/status`: `threads <made> made, <live> live` (the first number
   is what the line always said), `reaps_pending`, and `stacks <bytes> in <n>
   ranges` beside `heap`, whose range now holds the stacks too.
@@ -211,8 +214,15 @@ line is what would name one.
 - **Hand mutants against the fixture:**
   - no thread handed to the reap: caught (step 4: 4,005 live, 4.5 GB not
     back);
-  - the reap freeing without the waited invalidation: NOT caught; nothing
-    in QEMU reaches a stale translation;
+  - the reap freeing without the waited invalidation: NOT caught, by
+    steps 1 to 4 or by step 6 (below). Freeing a frame takes it out of the
+    kernel's own map, which sends every CPU a flush without waiting, so a
+    CPU still holding a stale translation drops it microseconds after the
+    free, waited or not; the wait closes that IPI's latency, which no
+    fixture timing reaches;
+  - the reap freeing frames without unmapping the stack: caught by step 6
+    (a thread writing into a dead thread's stack page kept writing after
+    the reap was seen done; added 2026-11-27);
   - the heap-range door's CAS made a plain store: NOT caught in two runs
     (two makers must claim within the same few instructions);
   - the thread chain's splice made a plain store: NOT caught in 20,000

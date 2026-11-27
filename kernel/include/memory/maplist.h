@@ -48,6 +48,7 @@ typedef struct {
     // (maplist_read_walks), with the longest walk since.
     uint64_t lookups, misses, steps, steps_most;
     uint64_t read_lookups, read_misses, read_steps, window_steps_most;
+    uint64_t last_steps;            // the latest walk's steps, for its caller's counts
 } maplist_t;
 
 typedef struct {
