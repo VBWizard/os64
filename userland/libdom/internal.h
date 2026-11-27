@@ -164,7 +164,9 @@ int d_proto_parent(int kind);
  * by shadow trees' install, with that switch (shadow.c, observer.c fires
  * it); the CSS animation events' by Web Animations' install, whose update
  * step fires them (webanimation.c); a media element's by the media row,
- * whose media turn fires them, with ERROR's (media.c).
+ * whose media turn fires them, with ERROR's (media.c); fullscreenchange's
+ * and fullscreenerror's by the Fullscreen API's row, whose view-step turn
+ * fires them (fullscreen.c).
  * READYSTATECHANGE, VISIBILITYCHANGE and PRERENDERINGCHANGE are the
  * document's alone: HTML gives them an IDL property on Document and no
  * content attribute, so no element's on<type> attribute is a handler for
@@ -186,7 +188,8 @@ enum {
     D_EVENT_LOADSTART, D_EVENT_PROGRESS, D_EVENT_SUSPEND, D_EVENT_ABORT, D_EVENT_EMPTIED, D_EVENT_STALLED,
     D_EVENT_LOADEDMETADATA, D_EVENT_LOADEDDATA, D_EVENT_CANPLAY, D_EVENT_CANPLAYTHROUGH, D_EVENT_PLAYING,
     D_EVENT_WAITING, D_EVENT_SEEKING, D_EVENT_SEEKED, D_EVENT_ENDED, D_EVENT_DURATIONCHANGE, D_EVENT_TIMEUPDATE,
-    D_EVENT_PLAY, D_EVENT_PAUSE, D_EVENT_RATECHANGE, D_EVENT_VOLUMECHANGE, D_EVENT_COUNT
+    D_EVENT_PLAY, D_EVENT_PAUSE, D_EVENT_RATECHANGE, D_EVENT_VOLUMECHANGE,
+    D_EVENT_FULLSCREENCHANGE, D_EVENT_FULLSCREENERROR, D_EVENT_COUNT
 };
 /* The UI event interfaces (event.c, 0f's P8): UI Events' UIEvent and the
  * interfaces that inherit it, HTML's SubmitEvent, which inherits Event,
@@ -934,6 +937,9 @@ struct os64_dom {
     /* The media elements' records, their queued tasks and the host
      * (media.c); NULL until the media row's install. */
     struct DMediaElements *media_elements;
+    /* The Fullscreen API's state (fullscreen.c), made by its row; NULL with
+     * the Modern Web off. */
+    struct DFullscreen *fullscreen;
     struct DMediaSession *media_session;   /* media_session.c */
     /* The traversal row's walkers and iterators (walker.c). */
     struct DWalks *walks;
@@ -1577,6 +1583,14 @@ int d_media_elements_install(os64_dom_t *dom, JSContext *ctx, JSValueConst globa
 int d_video_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 void d_media_elements_cancel(os64_dom_t *dom);
 void d_media_elements_drain(os64_dom_t *dom);
+/* The Fullscreen API (fullscreen.c; dom/fullscreen.h is the host's side):
+ * its row, its turn in the view step (one queued event or promise a call;
+ * true when it ran one), its share of the drain (the values, and the
+ * element's state bit), and the record's free with the binding's. */
+int d_fullscreen_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+bool d_fullscreen_step(os64_dom_t *dom, os64_js_outcome_t *outcome);
+void d_fullscreen_drain(os64_dom_t *dom);
+void d_fullscreen_free(os64_dom_t *dom);
 void d_media_elements_free(os64_dom_t *dom);
 /* For the media session (media_session.c): the page's AUDIBLE elements
  * (not muted, a volume, no error) as the window's state reads them (one not

@@ -1308,7 +1308,9 @@ struct flow_box {
     uint64_t drawn;
     // `opacity: 0` on it or on an element it is inside, unless that
     // element's opacity is animated (a group then, laid over at its
-    // opacity, which may be none): flow_visit does not hand it over.
+    // opacity, which may be none), or that element is round the full-screen
+    // element it is in (the top layer is painted whatever is round it):
+    // flow_visit does not hand it over.
     // flow_hit still finds it, as a browser's pointer does,
     // unless it is `pointer-events: none`. A face drawing live widgets
     // draws a control's whatever its opacity — a control made invisible is
@@ -2210,6 +2212,11 @@ bool flow_box_covered(const flow_tree_t *tree, const flow_box_t *box, flow_point
 // the box's centre, for a widget that covers only part of its box (a
 // video's player, the strip along its bottom).
 bool flow_box_covered_at(const flow_tree_t *tree, const flow_box_t *box, int32_t x, int32_t y, flow_point_t scroll);
+// The same question while only `top` and what is inside it are there (the
+// Fullscreen API's top layer, flow_hit_within): a box outside `top` is
+// covered, and one inside it is covered only by what is inside it too.
+bool flow_box_covered_within(const flow_tree_t *tree, const flow_box_t *box, int32_t x, int32_t y,
+                             flow_point_t scroll, const flow_box_t *top);
 
 // Every box that meets `viewport` but the LINE boxes, which paint nothing of
 // their own (flow_hit can still answer one) — except a line of a box with
@@ -2399,6 +2406,13 @@ bool flow_paint_asks(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_poi
 // flow_hit_counted answers the same and says, in `*cuts`, how many cuts
 // it worked.
 const flow_box_t *flow_hit(const flow_tree_t *tree, int32_t x, int32_t y, flow_point_t scroll);
+// The same, with only `top` and the boxes inside it there: a top layer's
+// hit (the Fullscreen API's, VIDEO.md § 9), where nothing of the page
+// outside the element takes the pointer, whatever it is stacked over.
+// `top` is a stacked box (a fixed one is), so the walk keeps the stacked
+// boxes inside it and leaves the rest out.
+const flow_box_t *flow_hit_within(const flow_tree_t *tree, int32_t x, int32_t y, flow_point_t scroll,
+                                  const flow_box_t *top);
 // The processed offset (`begin`'s units) of source byte `source` of a TEXT
 // box's node's data, as white-space processing made it (RANGE.md § 7): the
 // box's item's collapse replayed from where it began, under the box's own
@@ -2438,8 +2452,8 @@ const flow_style_t *flow_style_for(const flow_tree_t *tree, const os64_html_node
 // containing blocks): in the flow, its parent element; an absolute box's
 // containing block, the nearest element that can contain one (a position
 // other than static, a transform, a filter); a fixed box's, the nearest
-// transformed or filtered one. NULL for the viewport, and for an element
-// the layout styled nothing for. Walked to the top it is the chain
+// transformed or filtered one; the fullscreen element's, the viewport. NULL
+// for the viewport, and for an element the layout styled nothing for. Walked to the top it is the chain
 // Intersection Observer calls the containing block chain; a parent that
 // is inline, or makes no box, is on it and clips nothing.
 const os64_html_node_t *flow_clip_parent(const flow_tree_t *tree, const os64_html_node_t *node);

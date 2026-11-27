@@ -128,6 +128,7 @@ static const char *const kPlanePage =
     "<!doctype html><style>body{margin:0;background:#123}"
     "#v{position:absolute;left:40px;top:40px;width:320px;height:180px}</style><video id=v></video>";
 
+static void plane_fullscreen_container(void);
 static void plane_cases(void)
 {
     Video *v = &s_videos[0];
@@ -985,6 +986,87 @@ static void plane_cases(void)
     planes_prepare();
     s_planes = true;
     check(fake_plane.asks == 0, "planes: off, never asked");
+    plane_drop();
+    plane_fullscreen_container();
+}
+
+/* A CONTAINER full screen (the web's common shape: a player's div, not its
+ * video), holding the video and the page's own control bar over it, inside
+ * a wrapper that clips and is moved far off the view and turned (which the
+ * top layer leaves behind: its matrix neither culls the element's boxes
+ * nor keeps the video off its plane), with a box of the page outside it
+ * stacked over everything. The top layer's
+ * paint is the same paint the planes ride on (paint.h's top layer): the
+ * video placed with its hole, the bar an overlay in the edit, --plane-check
+ * finding nothing wrong, the box outside not painted, hit or uncovered for
+ * a widget, and what the container leaves see-through the black backdrop,
+ * not the page. The state bit is set as libdom sets it, and the page laid
+ * out again for it. */
+static void plane_fullscreen_container(void)
+{
+    Video *v = &s_videos[0];
+    plane_page("<!doctype html><style>body{margin:0;background:#123}"
+               "#wrap{transform:translateX(10000px) rotate(10deg);overflow:hidden;width:300px;height:200px}"
+               "#c{position:relative;width:400px;height:300px}"
+               "#v{position:absolute;left:40px;top:40px;width:320px;height:180px;background:#456}"
+               "#bar{position:absolute;left:40px;top:180px;width:320px;height:40px;background:#0a0}"
+               "#out{position:fixed;left:600px;top:500px;width:100px;height:50px;background:red;z-index:9999}"
+               "</style><div id=wrap><div id=c><video id=v></video><div id=bar></div></div></div>"
+               "<div id=out></div>");
+    os64_html_node_t *c = (os64_html_node_t *)probe_id("c");
+    check(c != NULL && os64_html_set_state(g.page.way.doc, c, OS64_HTML_STATE_FULLSCREEN) == OS64_HTML_OK,
+          "planes, full screen: the container's state set");
+    check(relayout(true), "planes, full screen: laid out again");
+    s_videos[0].node = probe_id("v");
+    s_fs.active = true;
+    fs_name(c);
+    const flow_box_t *cb = flow_box_for(g.page.tree, c);
+    check(cb != NULL && cb->rect.x == 0 && cb->rect.y == 0 && cb->rect.w == 800 && cb->rect.h == 600,
+          "planes, full screen: the container fills the view (the UA rules)");
+    s_plane_check = 1;
+    planes_prepare();
+    os64_gui_rect_t d = plane_render();
+    planes_judge(&d, 0, 1);
+    planes_hole(&d, 1);
+    os64_gui_plane_edit_t edits[OS64_GUI_PLANE_EDITS_MAX];
+    os64_gui_rect_t all = d;
+    uint32_t n = planes_edits(edits, &all, true, edit_clips, &nedit_clips);
+    check(v->place && n == 1 && !edits[0].hide && edits[0].noverlays >= 1,
+          "planes, full screen: the video placed, the bar an overlay in the edit");
+    check(v->checked > 0 && v->checked_wrong == 0, "planes, full screen: --plane-check, nothing wrong");
+    check(plane_screen.surf.pixels[(size_t)520 * 800 + 650] == 0xff000000u,
+          "planes, full screen: the box outside the container not painted, the backdrop there");
+    check(plane_screen.surf.pixels[(size_t)10 * 800 + 10] == 0xff000000u,
+          "planes, full screen: what the container leaves see-through is the black backdrop");
+    check(plane_screen.surf.pixels[(size_t)200 * 800 + 350] == 0xff00aa00u,
+          "planes, full screen: the bar is painted past the wrapper's clip, where the view puts it");
+    check(page_hit(650, 520, scroll_now()) == cb, "planes, full screen: the box outside takes no pointer");
+    const flow_box_t *ob = flow_box_for(g.page.tree, probe_id("out"));
+    const flow_box_t *bb = flow_box_for(g.page.tree, probe_id("bar"));
+    check(ob != NULL && bb != NULL && page_covered(ob, scroll_now()) && !page_covered(bb, scroll_now()),
+          "planes, full screen: a widget over the box outside is covered, over the bar it is not");
+    planes_release();
+    fs_name(NULL);
+    s_fs.active = false;
+    check(!page_covered(ob, scroll_now()), "planes, full screen: back, the box outside is uncovered");
+    // The hidden rows are out of keyboard traversal while full screen, and
+    // back in it after (fs_rows_keys). This host builds no widget tree, so
+    // the rows' own `focusable` is set here as yonder's start sets it;
+    // that Tab passes over a widget that is not focusable is libui's
+    // (os64_ui_focus_next).
+    g.back.focusable = true;
+    g.field.w.focusable = true;
+    g.qno.focusable = false;
+    s_fs.active = true;
+    layout();
+    bool keyed = false;
+    for (size_t k = 0; k < FS_ROWS; k++)
+        keyed = keyed || kFsRows[k]->focusable;
+    check(!keyed, "planes, full screen: no hidden row is focusable");
+    s_fs.active = false;
+    layout();
+    check(g.back.focusable && g.field.w.focusable && !g.qno.focusable,
+          "planes, full screen: back, each row is as focusable as it was");
     plane_drop();
 }
 

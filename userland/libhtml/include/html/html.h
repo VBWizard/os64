@@ -92,6 +92,10 @@ typedef struct os64_html_node {
      * kept across adoption, never read by libhtml. Only
      * os64_html_set_binding changes them. */
     uint8_t binding;
+    /* An element's OS64_HTML_STATE_* bits (ELEMENT STATE, below), which
+     * selectors read: zero at birth and on a clone. Only
+     * os64_html_set_state changes them. */
+    uint8_t state;
     const char *public_id, *system_id;
     const char *text;
     size_t text_len;
@@ -590,8 +594,9 @@ typedef enum {
     OS64_HTML_CHANGE_ATTR,         /* an attribute of target was set or removed */
     OS64_HTML_CHANGE_TEXT,         /* target's text was replaced or appended to */
     /* Something the cascade reads changed at target though no node did: an
-     * element's custom state (os64_html_set_ce, which `:defined` reads), or
-     * a tree's adopted style sheets (os64_html_touch, target the document
+     * element's custom state (os64_html_set_ce, which `:defined` reads), its
+     * state bits (os64_html_set_state, which `:fullscreen` reads), or a
+     * tree's adopted style sheets (os64_html_touch, target the document
      * node or a shadow root). The standard records no mutation for either,
      * so no listener is told. The kind is for a log of the document's
      * changes (RELAYOUT.md), whose every entry stands for a move of the
@@ -686,6 +691,18 @@ typedef enum {
     OS64_HTML_CE_FAILED     /* its constructor threw, or returned something else */
 } os64_html_ce_t;
 int64_t os64_html_set_ce(os64_html_document_t *doc, os64_html_node_t *element, os64_html_ce_t ce);
+
+/* ── ELEMENT STATE ──────────────────────────────────────────────────────
+ *
+ * Facts about an element that selectors match and no attribute carries,
+ * as bits: FULLSCREEN is the element the Fullscreen API put in the top
+ * layer (`:fullscreen`). `set_state` replaces the bits, moves the version
+ * when they change (the cascade restyles the element's subtree) and tells
+ * no listener. An element only, of `doc`, and only bits named here;
+ * anything else is OS64_HTML_BAD_ARGUMENT. */
+#define OS64_HTML_STATE_FULLSCREEN (1u << 0)
+#define OS64_HTML_STATE_ALL        OS64_HTML_STATE_FULLSCREEN
+int64_t os64_html_set_state(os64_html_document_t *doc, os64_html_node_t *element, uint8_t state);
 bool os64_html_custom_name(const char *name);
 
 /* `touch` says something a reader of the document's version depends on
