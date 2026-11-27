@@ -87,3 +87,65 @@ two locks.
 
 The invalidation the kernel waits for on other CPUs at `unmap` (its own
 DEBTS row). Planes. Any change to what a mapping is.
+
+## As built (2026-11-26, one slice: the list's half and the page lock)
+
+- **The list** is `kernel/src/memory/maplist.c`, pure: an intrusive list
+  linked at the head (a fresh region is found first; burial and `/proc`
+  read it newest first), each node's holds and `listed` flag, the walk's
+  counts and a window since the last read. `tools/test_maplist_host.sh`
+  runs it beside a model under ASan with real frees where it says to free;
+  `tools/test_maplist_mutants.py` breaks each rule (31, through
+  `mutants_parallel.py --with kernel`).
+- **`task->mapLock`**, a counted irqsave leaf (`counted_lock.h`), is taken
+  by every door in `memory/vma.h` and by nothing else once another thread
+  can reach the list. The links live in the mapping, so nothing is
+  allocated or freed under it.
+- **A mapping's states**, as the design state had them: made, listed,
+  delisted and held, freed by the unlink that finds no holder or the last
+  release of a delisted one. The fault holds the mapping it resolves in
+  (`vma_lookup_hold`); its tail is `page_fault_in_mapping`, which returns a
+  kill's reason, so the hold is given back before a kill takes
+  `signalLock`. Only a panic does not give it back: a thread is never torn
+  down inside the fault path or unmap (a signal redirects only a thread in
+  ring 3), so burial should find no hold outstanding; it frees every
+  mapping whatever its holds and counts any it finds (`DEBUG_TASK`). The
+  lookup is skipped above the user ceiling, where no mapping can be, so a
+  ring-0 fault taken under `mapLock` reaches its panic instead of waiting
+  on its own lock. `user_range_accessible` copies
+  facts (`vma_lookup_facts`); `/proc`'s maps copies under the lock and
+  formats after; burial takes the whole list (`vma_take_all`).
+- **`task->pageLock`**, counted and irqsave, replaces the global publish
+  lock for a task's pages and rests on one task, one address space
+  (task.h says so). unmap finds its region with a hold, delists it, then
+  walks and removes each page under `signalLock` and the page lock, frees
+  the frame after the page lock, and gives its hold back; a second unmap of
+  one base that loses the delist is refused. Every install (demand, CoW,
+  shared object) rechecks `vma_is_listed` under the page lock and installs
+  nothing when the mapping is gone; demand and CoW give their frame back,
+  and the shared object's page is the cache's, so it is only not installed. Order: `signalLock`, `pageLock`,
+  `mapLock`; the allocator's locks under `pageLock` through table pages.
+- **The counts** are in `/proc/<id>/status`: `mappings`, `mapping_walks`
+  (lookups, steps, the longest walk), `mapping_lock` and `page_lock`
+  (taken, waited, the worst wait and hold), each since the task began and
+  since the last read.
+- **The proof.** The kernel test `vma_list_doors` walks the doors' rules
+  on a task of its own (kernel tests here cannot start threads in one
+  task). `/tests/maprace` step 3 races the list (map, tag and unmap
+  against fresh faults and `/proc` reads); step 4 races unmap against a
+  fault in its own block and probes the pages where the fault stopped.
+  Step 4 fails on the kernel before the page lock on its first round (a
+  page of an unmapped block still reads) and passes after it, at 8 CPUs
+  and in the sparse layout; `maprace long` runs a minute.
+- **Hand mutants against the fixture**: the installs' recheck taken out is
+  caught (round 170 of 300). unmap's page loop outside the page lock is not
+  caught in 300 rounds: with the recheck in place it leaves only the few
+  instructions between a fault's check and its store. The list lock taken
+  out of the fault's lookup is caught by the kernel test only through the
+  lock's count, and not by the fixture: a torn walk or a lost hold needs
+  timing TCG does not give.
+- **Found on the way, booked in DEBTS**: a copy can outlive the check that
+  allowed it (an unmap between `user_range_accessible` and the copy is a
+  ring-0 fault with no mapping), and thread stacks have no ceiling (the
+  per-task stack counter runs into the fixed windows after about 1,400
+  threads, since ended threads keep their stacks).

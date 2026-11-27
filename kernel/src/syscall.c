@@ -768,6 +768,11 @@ void restore_user_cr3(void)
 //     eager mappings; the PTE's own W bit answers the writability question.
 //   - Neither → wild pointer; reject, so the syscall fails with
 //     SYSCALL_RESULT_BAD_USER_DATA instead of the kernel faulting.
+// WHAT IT DOES NOT PROMISE: the mapping's facts are copied under the task's
+// mapLock, so they are true AT THE CHECK and not after. A sibling's unmap
+// between the check and the copy is the program's own race, but its cost is
+// the kernel's: the copy faults in ring 0 on a region no mapping covers, and
+// that panics (DEBTS, "A copy can outlive the check that allowed it").
 static bool user_range_accessible(const void *user_ptr, size_t length, bool for_write)
 {
 	uintptr_t addr = (uintptr_t)user_ptr;
@@ -788,10 +793,10 @@ static bool user_range_accessible(const void *user_ptr, size_t length, bool for_
 
 	for (uintptr_t page = addr & ~(uintptr_t)(PAGE_SIZE - 1); page < end; page += PAGE_SIZE)
 	{
-		vma_t *vma = vma_lookup(task, page);
-		if (vma != NULL)
+		vma_facts_t facts;
+		if (vma_lookup_facts(task, page, &facts))
 		{
-			if (for_write && !(vma->prot & PROT_WRITE))
+			if (for_write && !(facts.prot & PROT_WRITE))
 				return false;
 			continue;
 		}
@@ -3566,27 +3571,28 @@ static uint64_t syscall_unmap(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 
 	core_local_storage_t *cls = get_core_local_storage();
 	task_t *task = cls ? cls->task : NULL;
-	if (task == NULL || task->mmaps == NULL)
+	if (task == NULL || base < TASK_HEAP_START)
 		return SYSCALL_RESULT_INVALID;
 
 	// Find the region by EXACT base — and only accept regions map() made
 	// (anonymous, heap-range). Without this gate, userland could unmap its
 	// own code segment and the next instruction fetch becomes a kernel
-	// panic; a bad handle should hurt the caller, not the kernel.
-	dlist_node_t *node = task->mmaps->head;
-	vma_t *vma = NULL;
-	while (node != NULL)
-	{
-		vma_t *v = (vma_t *)node->data;
-		if (v != NULL && v->start == base)
-		{
-			vma = v;
-			break;
-		}
-		node = node->next;
-	}
-	if (vma == NULL || !(vma->flags & MAP_ANONYMOUS) || base < TASK_HEAP_START)
+	// panic; a bad handle should hurt the caller, not the kernel. Held, so
+	// a sibling's unmap of the same base cannot free it under this one.
+	vma_t *vma = vma_lookup_anon_start_hold(task, base);
+	if (vma == NULL)
 		return SYSCALL_RESULT_INVALID;
+
+	// DELISTED FIRST (MAPPING_LIST.md): from here no fault can find it, and
+	// one already holding it rechecks `listed` under the page lock before it
+	// installs anything (page_publish_lock, simple_exceptions.c). Two unmaps
+	// of one base can both get this far; the one that did not delist it
+	// gives its hold back and is refused.
+	if (!vma_delist(task, vma))
+	{
+		vma_release(task, vma);
+		return SYSCALL_RESULT_INVALID;
+	}
 
 	// Give back every page that was actually faulted in. paging_unmap_page
 	// invlpg's locally; pages never touched have no PTE and nothing to free.
@@ -3614,25 +3620,34 @@ static uint64_t syscall_unmap(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	// signalled on resumes on a dead page and takes a clean ring-3
 	// segfault. That is this function's own stated doctrine — a bad handle
 	// should hurt the caller, not the kernel.
+	//
+	// AND EACH PAGE'S WALK AND REMOVAL UNDER THE TASK'S PAGE LOCK, inside
+	// signalLock (the order task.h gives), so a fault's publish lands wholly
+	// before the walk (and the page is freed here) or wholly after it (and
+	// finds the mapping delisted). The frame is freed after the page lock is
+	// released, still under signalLock.
 	for (uintptr_t va = vma->start; va < vma->end; va += PAGE_SIZE)
 	{
 		uint64_t uf = spinlock_acquire_irqsave(&task->signalLock);
+		uint64_t pf = counted_lock_acquire(&task->pageLock);
 		uintptr_t phys = paging_walk_paging_table((pt_entry_t *)task->pml4v, va);
-		if (phys != 0 && phys != 0xbadbadba)
-		{
+		bool present = phys != 0 && phys != 0xbadbadba;
+		if (present)
 			paging_unmap_page((pt_entry_t *)task->pml4v, va);
-			// The allocator choke point: also HHDM-unmaps + TLB-shoots the
-			// kernel alias, per the lazy-HHDM rules.
+		counted_lock_release(&task->pageLock, pf);
+		// The allocator choke point: also HHDM-unmaps + TLB-shoots the
+		// kernel alias, per the lazy-HHDM rules.
+		if (present)
 			free_memory(phys);
-		}
 		spinlock_release_irqrestore(&task->signalLock, uf);
 	}
 
 	printd(DEBUG_SYSCALL, "unmap: task %s: region 0x%016lx-0x%016lx released\n",
 	       task->exename, vma->start, vma->end);
 
-	dlist_remove(task->mmaps, node);
-	vma_destroy(vma);
+	// This call's hold given back: whichever of it and a fault's hold is
+	// the last frees the mapping.
+	vma_release(task, vma);
 	return 0;
 }
 

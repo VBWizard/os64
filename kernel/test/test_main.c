@@ -86,6 +86,7 @@ bool test_handle_table_grows(void);
 bool test_handle_table_ceiling(void);
 bool test_handle_table_no_grow_in_teardown(void);
 bool test_task_va_reserve(void);
+bool test_vma_list_doors(void);
 bool test_pty_publication_hold(void);
 bool test_pty_resize_modes(void);
 bool test_pty_history(void);
@@ -541,12 +542,7 @@ static bool test_vma_insert_and_lookup(void)
 	}
 
 	memset(task, 0, sizeof(task_t));
-
-	task->mmaps = kmalloc(sizeof(dlist_t));
-	if (!task->mmaps) {
-		TEST_FAIL("test_vma: failed to allocate mmaps list");
-	}
-	dlist_init(task->mmaps);
+	maplist_init(&task->mmaps);
 
 	uintptr_t start = 0x100000;
 	uintptr_t end = 0x102000;
@@ -557,18 +553,20 @@ static bool test_vma_insert_and_lookup(void)
 
 	vma_add(task, vma);
 
-	vma_t* found = vma_lookup(task, 0x101000);
+	vma_t* found = vma_lookup_hold(task, 0x101000);
 	if (!found || found != vma) {
-		TEST_FAIL("vma_lookup failed to find inserted VMA");
+		TEST_FAIL("vma_lookup_hold failed to find inserted VMA");
 	}
+	vma_release(task, found);
 
-    found = vma_lookup(task, 0x11101000);
+    found = vma_lookup_hold(task, 0x11101000);
     if (found)
-        TEST_FAIL("vma_lookup found inserted VMA when it should not have");
+        TEST_FAIL("vma_lookup_hold found inserted VMA when it should not have");
 
-    dlist_destroy(task->mmaps);
-	kfree(task->mmaps);
-	vma_destroy(vma);
+	if (!vma_delist(task, vma))   // unheld, so the delist frees it
+		TEST_FAIL("vma_delist did not delist a listed VMA");
+	if (task->mmaps.head != NULL || task->mmaps.count != 0)
+		TEST_FAIL("vma_delist left the list non-empty");
 	kfree(task);
 
 	return true;
@@ -595,10 +593,7 @@ bool test_vma_page_fault_resolved()
     bool ok = wasUnmapped && (after != 0 && after != 0xbadbadba) && (*ptr == 0xBEEFCAFE);
 
     paging_unmap_page((pt_entry_t *)task->pml4v, test_addr);
-    if (task->mmaps != NULL && vma->listItem != NULL) {
-        dlist_remove(task->mmaps, vma->listItem);
-    }
-    vma_destroy(vma);
+    vma_delist(task, vma);   // unheld, so the delist frees it
 
     return ok;
 }
@@ -1068,9 +1063,7 @@ static bool test_vma_cow_write(void)
 
     // Cleanup: unmap, remove VMA, free both physical pages.
     paging_unmap_page((pt_entry_t *)task->pml4v, test_addr);
-    if (task->mmaps != NULL && vma->listItem != NULL)
-        dlist_remove(task->mmaps, vma->listItem);
-    vma_destroy(vma);
+    vma_delist(task, vma);   // unheld, so the delist frees it
     free_memory(orig_phys);
     kfree((void *)(new_phys | kHHDMOffset)); // new_phys was kmalloc_aligned in the CoW handler
 
@@ -6404,6 +6397,7 @@ static void register_builtin_tests(void)
     test_register("arena_reset", test_arena_reset, TEST_PHASE_PREBOOT);
     test_register("arena_growth", test_arena_growth, TEST_PHASE_PREBOOT);
     test_register("vma_insert_and_lookup", test_vma_insert_and_lookup, TEST_PHASE_PREBOOT);
+    test_register("vma_list_doors", test_vma_list_doors, TEST_PHASE_PREBOOT);
     test_register("vma_page_fault_resolved", test_vma_page_fault_resolved, TEST_PHASE_PREBOOT);
     test_register("vma_cow_write", test_vma_cow_write, TEST_PHASE_PREBOOT);
     test_register("env_create_empty",        test_env_create_empty,          TEST_PHASE_PREBOOT);
