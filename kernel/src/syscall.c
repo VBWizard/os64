@@ -307,8 +307,9 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_SYNC,      "sync",      syscall_sync,      false, 0x00),  // arg0 = handle (an int, not a pointer)
 	// arg0/arg2 are CODE addresses in the caller's own text, not buffers —
 	// they are not in the pointer mask because user_range_accessible checks
-	// data reachability, and thread_join_create validates the stack mapping
-	// it actually writes to. The handler bounds both by USER_CANONICAL_MAX.
+	// data reachability, and the only thing written for them is the exit
+	// stub, through the new stack's own frames (thread_join_create). The
+	// handler bounds both by USER_CANONICAL_MAX.
 	SYSCALL_DEFINE(SYSCALL_THREAD,      "thread",      syscall_thread,      false, 0x00),
 	SYSCALL_DEFINE(SYSCALL_THREAD_EXIT, "thread_exit", syscall_thread_exit, false, 0x00),
 	SYSCALL_DEFINE(SYSCALL_MKDIR,       "mkdir",       syscall_mkdir,       false, 0x01),  // arg0 = path
