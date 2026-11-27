@@ -20,9 +20,10 @@ struct task;
 size_t user_copy_in(void *kernel_dst, const void *user_src, size_t n);
 size_t user_copy_out(void *user_dst, const void *kernel_src, size_t n);
 
-// user_copy.S's resume table, read by the page-fault handler.
+// user_copy.S's resume table, read by the page-fault handler; its entries
+// run from kCopyResumeTable up to kCopyResumeTableEnd.
 extern const copy_resume_t kCopyResumeTable[];
-extern const uint64_t kCopyResumeCount;
+extern const copy_resume_t kCopyResumeTableEnd[];
 
 // Recoveries taken since boot, machine-wide (/sys/memory/usercopy), with the
 // last one's task and faulting address; and since the file was last read

@@ -32,6 +32,8 @@
 # right whatever its caller left, for the cost of one instruction.
 
 .set COPY_SHORT_MOST, 64
+.set COPY_USER_IN_RSI, 0        # copy_fault.h
+.set COPY_USER_IN_RDI, 1
 
 .section .text
 
@@ -119,23 +121,33 @@ user_copy_out_short_fault:
     mov rax, rcx
     ret
 
-# The resume table: each instruction that touches user memory, and where a
-# fault there resumes (copy_fault.h's copy_resume_t). Read by the page-fault
-# handler, never written.
+# The resume table: each instruction that touches user memory, where a
+# fault there resumes, which register holds its user pointer and its step
+# (copy_fault.h's copy_resume_t, 24 bytes an entry). The rule recovers a
+# fault only within one step of the user pointer, so a fault on the kernel
+# operand stays a panic. Read by the page-fault handler, never written.
 .section .rodata
 .balign 8
 .global kCopyResumeTable
 kCopyResumeTable:
     .quad user_copy_in_head, user_copy_in_head_fault
+    .long COPY_USER_IN_RSI, 1
     .quad user_copy_in_quads, user_copy_in_quads_fault
+    .long COPY_USER_IN_RSI, 8
     .quad user_copy_in_tail, user_copy_in_tail_fault
+    .long COPY_USER_IN_RSI, 1
     .quad user_copy_in_short, user_copy_in_short_fault
+    .long COPY_USER_IN_RSI, 1
     .quad user_copy_out_head, user_copy_out_head_fault
+    .long COPY_USER_IN_RDI, 1
     .quad user_copy_out_quads, user_copy_out_quads_fault
+    .long COPY_USER_IN_RDI, 8
     .quad user_copy_out_tail, user_copy_out_tail_fault
+    .long COPY_USER_IN_RDI, 1
     .quad user_copy_out_short, user_copy_out_short_fault
-.global kCopyResumeCount
-kCopyResumeCount:
-    .quad (. - kCopyResumeTable) / 16
+    .long COPY_USER_IN_RDI, 1
+# The end, so C counts the entries (GAS on x86 reads `/` as a comment).
+.global kCopyResumeTableEnd
+kCopyResumeTableEnd:
 
 .section .note.GNU-stack,"",@progbits

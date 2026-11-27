@@ -3,10 +3,14 @@
 // user_copy.S; the rule for which faults recover is copy_fault.c.
 
 #include "user_copy.h"
+
 #include "task.h"
 #include "CONFIG.h"
 #include "memory/paging.h"   // USER_CANONICAL_MAX
 #include "serial_logging.h"
+
+// user_copy.S lays the table out by hand.
+_Static_assert(sizeof(copy_resume_t) == 24, "user_copy.S writes 24-byte resume entries");
 
 // Machine-wide, written only by the page-fault handler and read by
 // /sys/memory/usercopy, each with relaxed atomics: a count, not a lock.
@@ -17,8 +21,10 @@ bool user_copy_recover(exception_context_t *ctx, struct task *task, uint64_t cr2
 {
     if (ctx == NULL || task == NULL)
         return false;
-    uint64_t resume = copy_fault_resume(rip, cr2, error_code, PAGE_SIZE, USER_CANONICAL_MAX,
-                                        kCopyResumeTable, kCopyResumeCount);
+    uint64_t resume = copy_fault_resume(rip, cr2, error_code, ctx->rsi, ctx->rdi,
+                                        PAGE_SIZE, USER_CANONICAL_MAX,
+                                        kCopyResumeTable,
+                                        (uint64_t)(kCopyResumeTableEnd - kCopyResumeTable));
     if (resume == 0)
         return false;
     ctx->rip = resume;

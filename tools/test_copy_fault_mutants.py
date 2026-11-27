@@ -32,17 +32,24 @@ mutants = [
     # A reserved bit is a broken table, never a copy's race.
     ('reserved-recovers', 'error_code & (COPY_FAULT_USER | COPY_FAULT_RESERVED)', 'error_code & (COPY_FAULT_USER)'),
     ('any-error-refused', 'error_code & (COPY_FAULT_USER | COPY_FAULT_RESERVED)', 'error_code'),
-    # The address must be one the check could have passed.
+    # The address must be in the user range.
     ('page-zero-recovers', 'cr2 < page_size ||', 'cr2 < (page_size & 0) + 1 ||'),
     ('first-page-refused', 'cr2 < page_size ||', 'cr2 <= page_size ||'),
     ('ceiling-recovers', 'cr2 >= user_ceiling', 'cr2 > user_ceiling'),
     ('kernel-half-recovers', 'cr2 >= user_ceiling', '(cr2 >= user_ceiling && 0)'),
     # Only a table instruction, and its own exit.
-    ('any-rip-recovers', '        if (table[i].at == rip)', '        if (table[i].at == rip || 1)'),
+    ('any-rip-recovers', '        if (table[i].at != rip)', '        if (table[i].at != rip && 0)'),
     ('last-entry-skipped', 'for (uint64_t i = 0; i < count; i++)', 'for (uint64_t i = 0; i + 1 < count; i++)'),
     ('first-entry-skipped', 'for (uint64_t i = 0; i < count; i++)', 'for (uint64_t i = 1; i < count; i++)'),
-    ('wrong-exit', '            return table[i].resume;', '            return table[i].at;'),
-    ('next-entry-exit', '            return table[i].resume;', '            return table[i + 1 < count ? i + 1 : i].resume;'),
+    ('wrong-exit', '        return table[i].resume;', '        return table[i].at;'),
+    ('next-entry-exit', '        return table[i].resume;', '        return table[i + 1 < count ? i + 1 : i].resume;'),
+    # Only the user operand's fault: the kernel operand's is a kernel bug.
+    ('kernel-side-recovers', '        if (cr2 - user >= table[i].step)', '        if ((cr2 - user >= table[i].step) && 0)'),
+    ('operands-swapped', 'table[i].user_reg == COPY_USER_IN_RDI ? rdi : rsi', 'table[i].user_reg == COPY_USER_IN_RDI ? rsi : rdi'),
+    ('always-rsi', 'table[i].user_reg == COPY_USER_IN_RDI ? rdi : rsi', '(table[i].user_reg & 0) ? rdi : rsi'),
+    ('step-ignored', '        if (cr2 - user >= table[i].step)', '        if (cr2 - user >= 1 + (table[i].step & 0))'),
+    ('step-one-wide', '        if (cr2 - user >= table[i].step)', '        if (cr2 - user > table[i].step)'),
+    ('below-pointer-recovers', '        if (cr2 - user >= table[i].step)', '        if (cr2 + 1 - user > table[i].step)'),
 ]
 
 caught, missed, unbuilt = [], [], []
