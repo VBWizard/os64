@@ -344,8 +344,10 @@ keeps that alive:
 |---|---|---|---|---|
 | decoding | `os64_media_player_create`, the player built | its config; calls `prepare` (yonder's `session_prepare`) | the player by itself (`finish`); yonder's session only after `finished`, the thread's last act | a close only sets `quit` and rings |
 | picture | the decoding thread, once open | the player's lock and `quit` | `finish`, after joining it | the join |
+| show (the player's plane) | `os64_media_player_plane` | the player's lock and its plane | the decoding thread joins it before `finished` | the join |
 | audio (the output) | `os64_media_output_create`, the output built | the output's buffers, its lock, the voices | `destroy`, after joining it; a voice by its owner only once `gone` | the join; `gone` |
 | loader (yonder) | `loader_start`, the job and pipe set | the session's job | the job after `loader_done`; the pipe has two holders | `loader_done` |
+| plane helper (yonder) | `yonder_media_plane_ask`, the window and its ask set | the session's player, under its lock | the session after `plane_helper_done`; a close while it asks is the helper's to make as the ask returns (`plane_close_owed`) | `plane_helper_done`; the close owed |
 
 A start that fails made no thread: the kernel reserves a thread's handle
 before it makes the thread, so a refusal makes none (`/tests/handletest`).

@@ -122,7 +122,7 @@ size_t yonder_media_seconds(double s, char *out, size_t cap);
 // done (for a plane that ended; the player refuses any other). The verdict
 // is the player's facts' `plane_state`, read at the window's next turn.
 // False when not asked (an <audio>, no player yet, an ask still running,
-// closed) or when its thread may not have started.
+// closed) or when its thread could not be started.
 bool yonder_media_plane_ask(yonder_media_t *m, int64_t win);
 // os64_media_player_plane_want, for a <video> with a player.
 void yonder_media_plane_want(yonder_media_t *m, bool want);

@@ -357,7 +357,7 @@ of § 3.5's rules.
   bound. `os64_media_player_plane` waits for the create's verdict (a tripwire
   bound only); `shown` pins a frame (two at most); a refused recreate hands
   the pace back to `frame`; the decoding thread joins the show thread before
-  `finished`. Proof: `/tests/playertest` step 8 (the plane made and `frame`
+  `finished`. Proof: `/tests/playertest` step 10 (the plane made and `frame`
   refused, published hidden then placed, `shown` pinned while the pace moves,
   a new size stale then ready on a new plane, closed placed and finished
   after the bound with the plane taken out, refused with no slot).
