@@ -30,7 +30,7 @@ A copy over 64 bytes moves the way the kernel's own `memcpy` moves one of 512 by
 
 **The resume table** (user_copy.S) lists each of those moves beside its failure exit. `memcpy` is never in it: a kernel bug inside `memcpy` is never mistaken for a user copy.
 
-**The helpers' existing `false` is the failure answer**, the same one a refused check gives. Every caller therefore already had the error path. The 76 call sites were re-read against "acts on nothing after false"; the PR lists the two that needed looking at: sigreturn's two reads of its frame, and spawn's marshal and its frees.
+**The helpers' existing `false` is the failure answer**, the same one a refused check gives. Every caller therefore already had the error path. The call sites were re-read against "acts on nothing after false" (§ What the program sees has what that found).
 
 ## Which faults recover
 
@@ -56,7 +56,7 @@ A page fault resumes at a copy's failure exit when ALL of these hold (`copy_faul
 
 No ring-3 call can make a file-backed mapping (an ELF segment or a shared object) go away while a fault parks on it, because `unmap` takes only `map`'s anonymous regions. So no fixture can make a parked resolve fail under a copy, and passing the frame makes it right by construction.
 
-**Nothing new is locked.** The decision is made after the mapping's hold is released. It edits one field of the frame and adds two relaxed atomic counts.
+**Nothing new is locked.** The decision is made after the mapping's hold is released. It edits one field of the frame and updates the recovery counts with relaxed atomics.
 
 ## What the program sees
 
