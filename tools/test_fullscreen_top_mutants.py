@@ -79,9 +79,9 @@ mutants = [
 #   (fs_page_going, fs_turn's first check): no scripted fixture navigates or
 #   retires a host under a full-screen element; QEMU's pages prove them.
 # - libgarb's :fullscreen (select.c): held by the DOM host suite's
-#   --fullscreen probe (`:fullscreen matches v alone`), which links libgarb
-#   as an object the DOM harness does not mutate; it was broken by hand
-#   once and the probe failed.
+#   --fullscreen probe, which asserts `v.matches(':fullscreen')` and its
+#   prefixed twin while v is full screen and neither after; that probe links
+#   libgarb as an object the DOM harness does not mutate.
 
 env = dict(os.environ)
 caught, missed, unbuilt = [], [], []

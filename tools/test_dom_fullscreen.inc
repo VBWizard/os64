@@ -1,11 +1,12 @@
 /* THE FULLSCREEN API (libdom/fullscreen.c; VIDEO.md § 9, the design
  * state's Part B): the members and their prefixed names, a request with
  * and without the person's activation, the host's answers (in, refused,
- * out), exitFullscreen, the element removed while full screen, a request
- * for another element, the binding drained under a full-screen element,
- * and a document with no host. A fake host records
- * what it was asked; the view step fires the events, one a call. The page
- * records each event it hears in L as "type@where". */
+ * out), a request for an element in no document, exitFullscreen, the
+ * element removed while full screen, a request for another element, the
+ * binding drained under a full-screen element, and a document with no
+ * host. A fake host records what it was asked; the view step fires the
+ * events, one a call. The page records each event it hears in L as
+ * "type@where". */
 
 #define FS_ASSERT STORAGE_ASSERT \
     "globalThis.L=globalThis.L||[];" \
@@ -104,15 +105,32 @@ static void dom_fullscreen_cases(void)
                   "assert(R.join()==='TypeError','rejected TypeError: '+R.join());",
               "fullscreen: refused without activation");
 
+    /* An element in no document is refused before the activation is asked
+     * for, which is left for the next request. */
+    fs_host.activated = true;
+    fs_script(&f, "R.length=0;document.createElement('div').requestFullscreen().then(()=>R.push('ok'),"
+                  "e=>R.push(e.name));",
+              "fullscreen: a request for an element in no document");
+    check(fs_host.entered == 0 && fs_host.activated, "fullscreen: a detached element is refused, the host not asked");
+    fs_steps(&f, "fullscreen: the detached refusal's task");
+    fs_script(&f, "heard();assert(R.join()==='TypeError','detached: '+R.join());R.length=0;",
+              "fullscreen: refused for a detached element");
+    fs_host.activated = false;
+
     /* With activation: asked of the host; the change after its answer. */
     fs_host.activated = true;
     fs_script(&f, "R.length=0;v.requestFullscreen().then(()=>R.push('ok:'+L.join()),e=>R.push(e.name));",
               "fullscreen: a request with activation");
     check(fs_host.entered == 1 && !fs_host.activated, "fullscreen: the host is asked, the activation used up");
     fs_steps(&f, "fullscreen: nothing before the answer");
+    /* The second request carries an activation of its own, so only the
+     * change under way can refuse it, and the activation is left. */
+    fs_host.activated = true;
     fs_script(&f, "assert(R.length===0&&document.fullscreenElement===null,'nothing before the host answers');"
                   "v.requestFullscreen().then(()=>R.push('again'),e=>R.push('again:'+e.name));",
               "fullscreen: a second request while entering");
+    check(fs_host.entered == 1 && fs_host.activated, "fullscreen: the second request is refused, the host not asked");
+    fs_host.activated = false;
     fs_steps(&f, "fullscreen: the second request's refusal");
     fs_script(&f, "const h=heard();assert(R.join()==='again:TypeError'&&h==='fullscreenerror@v fullscreenerror@doc "
                   "webkitfullscreenerror@v webkitfullscreenerror@doc','refused while entering: '+R.join()+' '+h);"
@@ -226,9 +244,10 @@ static void dom_fullscreen_cases(void)
     DomFixture g = fs_fixture(false);
     if (!fixture_ready(&g)) return;
     fs_script(&g, "assert(document.fullscreenEnabled===false,'not enabled');globalThis.R=[];"
-                  "document.body.requestFullscreen().then(()=>R.push('ok'),e=>R.push(e.name));",
+                  "document.body.requestFullscreen().then(()=>R.push('ok'),e=>R.push(e.name+': '+e.message));",
               "fullscreen: no host");
     fs_steps(&g, "fullscreen: no host's refusal");
-    fs_script(&g, "assert(R.join()==='TypeError','refused: '+R.join());", "fullscreen: refused with no host");
+    fs_script(&g, "assert(R.join()==='TypeError: Fullscreen is not enabled in this document','refused: '+R.join());",
+              "fullscreen: refused with no host");
     fixture_free(&g);
 }

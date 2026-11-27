@@ -310,7 +310,8 @@ mutants = [
     ('fs-replaced-keeps-old', 'fullscreen', 'fullscreen', '        unfullscreen(dom);      /* replaced', '        (void)0;      /* replaced'),
     ('fs-removal-unseen', 'fullscreen', 'fullscreen', '        f->check = true;', '        (void)0;'),
     ('fs-host-exit-keeps-element', 'fullscreen', 'fullscreen', '    if (f->element != NULL) {\n        unfullscreen(dom);\n    } else', '    if (false) {\n        unfullscreen(dom);\n    } else'),
-    ('fs-exit-with-none-asks', 'fullscreen', 'fullscreen', '    if (f == NULL || f->element == NULL || f->leaving || f->pending != NULL ||', '    if (f == NULL || (f->element == NULL && false) || f->leaving || f->pending != NULL ||'),
+    # (Not run: exit_fullscreen's `f->element == NULL` alone, since the
+    # document test after it refuses a NULL element the same way.)
     ('fs-exit-never-asks-host', 'fullscreen', 'fullscreen', '    f->leave = held;\n    if (f->provider.leave != NULL)\n        f->provider.leave(f->provider.opaque);', '    f->leave = held;'),
     ('fs-refusal-resolves', 'fullscreen', 'fullscreen', 't->refusal != NULL ? t->promise.reject : t->promise.resolve', 't->promise.resolve'),
     ('fs-change-does-not-bubble', 'fullscreen', 'fullscreen', 'd_event_new(dom, ctx, type, true, false, true)', 'd_event_new(dom, ctx, type, false, false, true)'),
