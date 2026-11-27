@@ -18,7 +18,9 @@ THE SETS, each with the probe it runs in: the D5 contracts (`base`, the
 host's --mutants mode); D6 binding ownership (`reclaim`); D7a events, timers
 and asks (`events`); F2 cluster ownership (`realms`); and the loop's
 every-turn checks, their lists and the image check's quiet key (`turn`,
-against the --canvas probe, test_dom_turn_checks.inc).
+against the --canvas probe, test_dom_turn_checks.inc); and the Fullscreen
+API's rules (`fullscreen`, against the --fullscreen probe,
+test_dom_fullscreen.inc).
 """
 import argparse
 import os
@@ -35,6 +37,7 @@ parser.add_argument('--reclaim',action='store_true',help='run D6 binding ownersh
 parser.add_argument('--events',action='store_true',help='run D7a event, timer and ask mutants')
 parser.add_argument('--realms',action='store_true',help='run F2 cluster ownership mutants')
 parser.add_argument('--turn',action='store_true',help="run the every-turn checks' list and quiet-key mutants")
+parser.add_argument('--fullscreen',action='store_true',help="run the Fullscreen API's mutants")
 parser.add_argument('--only',default='',help='run only the mutants whose names hold this text, from every set')
 parser.add_argument('--probe',default='',help='select an existing host probe, e.g. --probe=--clone')
 args=parser.parse_args()
@@ -46,7 +49,7 @@ args.logs.mkdir(parents=True,exist_ok=True)
 SUITE='bash tools/test_dom_host.sh --core'
 SUITE_TIMEOUT=2400
 PROBE_SECONDS='45'
-PROBES={'base':'--mutants','reclaim':'--reclaim','events':'--events','realms':'--realms','turn':'--canvas'}
+PROBES={'base':'--mutants','reclaim':'--reclaim','events':'--events','realms':'--realms','turn':'--canvas','fullscreen':'--fullscreen'}
 
 # Each mutation breaks a separately specified visible rule; it does not supply
 # replacement expectations derived from the library's implementation.
@@ -298,6 +301,22 @@ mutants = [
     ('turn-canvas-visits-uncounted', 'turn', 'canvas', '    dom->checks_visited+=visited;\n    d_provider_leave(dom);', '    (void)visited;\n    d_provider_leave(dom);'),
     ('turn-sweep-unlisted', 'turn', 'event', '                storage->sweeps[storage->nsweeps++] = entry;', '                (void)0;'),
     ('turn-sweep-flag-kept', 'turn', 'event', '        member->sweeps[i]->sweep_owed = false;', '        (void)0;'),
+    ('fs-without-activation', 'fullscreen', 'fullscreen', '    } else if (f->provider.consume_activation == NULL || !f->provider.consume_activation(f->provider.opaque))', '    } else if (false)'),
+    ('fs-second-request-while-entering', 'fullscreen', 'fullscreen', '    else if (f->pending != NULL || f->leaving)', '    else if (f->leaving)'),
+    ('fs-same-element-asks-again', 'fullscreen', 'fullscreen', '    else if (f->element == node) {\n        queue(', '    else if (false) {\n        queue('),
+    ('fs-host-refusal-enters', 'fullscreen', 'fullscreen', '    if (!entered || !may_be_fullscreen(node)) {', '    if (!may_be_fullscreen(node)) {'),
+    ('fs-disconnected-allowed', 'fullscreen', 'fullscreen', '    if (node->kind != OS64_HTML_ELEMENT || !d_connected(node))\n        return false;', '    if (node->kind != OS64_HTML_ELEMENT)\n        return false;'),
+    ('fs-state-bit-never-set', 'fullscreen', 'fullscreen', '    set_bit(dom, node, true);', '    (void)0;'),
+    ('fs-replaced-keeps-old', 'fullscreen', 'fullscreen', '        unfullscreen(dom);      /* replaced', '        (void)0;      /* replaced'),
+    ('fs-removal-unseen', 'fullscreen', 'fullscreen', '        f->check = true;', '        (void)0;'),
+    ('fs-host-exit-keeps-element', 'fullscreen', 'fullscreen', '    if (f->element != NULL) {\n        unfullscreen(dom);\n    } else', '    if (false) {\n        unfullscreen(dom);\n    } else'),
+    ('fs-exit-with-none-asks', 'fullscreen', 'fullscreen', '    if (f == NULL || f->element == NULL || f->leaving || f->pending != NULL ||', '    if (f == NULL || (f->element == NULL && false) || f->leaving || f->pending != NULL ||'),
+    ('fs-exit-never-asks-host', 'fullscreen', 'fullscreen', '    f->leave = held;\n    if (f->provider.leave != NULL)\n        f->provider.leave(f->provider.opaque);', '    f->leave = held;'),
+    ('fs-refusal-resolves', 'fullscreen', 'fullscreen', 't->refusal != NULL ? t->promise.reject : t->promise.resolve', 't->promise.resolve'),
+    ('fs-change-does-not-bubble', 'fullscreen', 'fullscreen', 'd_event_new(dom, ctx, type, true, false, true)', 'd_event_new(dom, ctx, type, false, false, true)'),
+    ('fs-no-webkit-twin', 'fullscreen', 'fullscreen', 'if (d_delivery_active(dom) && os64_dom_listens(dom, prefixed))', 'if (false && os64_dom_listens(dom, prefixed))'),
+    ('fs-error-named-change', 'fullscreen', 'fullscreen', 'const char *type = t->error ? "fullscreenerror" : "fullscreenchange";', 'const char *type = "fullscreenchange";'),
+    ('fs-no-provider-allowed', 'fullscreen', 'fullscreen', '    if (f == NULL || !f->has_provider)\n        refusal', '    if (f == NULL)\n        refusal'),
 ]
 
 # Runtime output is bounded independently of compiler object sizes. Never read
@@ -309,7 +328,7 @@ def child_limits():
 if args.only:
     mutants=[m for m in mutants if args.only in m[0]]
 else:
-    chosen='realms' if args.realms else 'reclaim' if args.reclaim else 'events' if args.events else 'turn' if args.turn else 'base'
+    chosen='realms' if args.realms else 'reclaim' if args.reclaim else 'events' if args.events else 'turn' if args.turn else 'fullscreen' if args.fullscreen else 'base'
     mutants=[m for m in mutants if m[1]==chosen]
 
 def mode_of(m): return args.probe or PROBES[m[1]]
@@ -332,7 +351,7 @@ if args.objects is None:
 
 # The probes the chosen mutants run, each run once unmutated first (the sets
 # whose probe the host suite's own run does not cover).
-for mode in sorted({mode_of(m) for m in mutants if m[1] in ('realms','turn') or args.probe}):
+for mode in sorted({mode_of(m) for m in mutants if m[1] in ('realms','turn','fullscreen') or args.probe}):
     with (args.logs/f'baseline{mode}.log').open('w') as log:
         result=subprocess.run(['timeout',PROBE_SECONDS,str(args.objects/'sanitized-core-probe'),mode],stdout=log,stderr=log,preexec_fn=child_limits)
     if result.returncode: raise SystemExit(f'host baseline {mode} failed; no mutants run')
