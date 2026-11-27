@@ -894,8 +894,37 @@ what it decided, in the code's own words:
 - `/tests/fullscreentest` is the contract (`--chord` and `--vt` take a
   person's keys); `/sys/gui`'s `full screen:` line counts the edges.
 
-Slice 2 is libdom's Fullscreen API and yonder obeying it; slice 3 the
-player widget's button.
+**As built (V8 slice 2): the web's Fullscreen API, and yonder obeying it.**
+
+- **libdom** (`fullscreen.c`, `dom/fullscreen.h`):
+  - `requestFullscreen` and `exitFullscreen` with their promises;
+  - `fullscreenElement`, `fullscreenEnabled` and `fullscreen`;
+  - `onfullscreenchange` and `onfullscreenerror`;
+  - the webkit names Chrome and Safari still answer to (a quarter of the
+    pages that ask do so only by them).
+- **One element a document.** A request for another element replaces the
+  first; there is no stack.
+- **How a request is decided.** It needs the person's transient activation
+  (five seconds, used up by the request), which the host's provider keeps.
+  The host's answers queue the events, fired one a call by the view step.
+- **Removing the element** asks the host to bring the window back.
+- **A frame's document** has no provider and is not allowed.
+- **`:fullscreen`** (and `:-webkit-full-screen`) matches libhtml's element
+  state bit. libflow applies the standard's user-agent rules after the
+  page's sheets.
+- **yonder** answers at the loop's next turn:
+  - It puts its window over the screen, unless the person already did with
+    Ctrl+Alt+F; it leaves only what it entered.
+  - It hides its rows.
+  - It paints the black backdrop and then the element alone, in every paint
+    of the page, plane paints included (`paint.h`'s top layer).
+  - The pointer reaches only the element (`flow_hit_within`).
+- **Leaving.** Escape leaves full screen, and so does everything that needs
+  a hidden row or asks the person something. The window manager's chord
+  ends the element's full screen. `/tests/pages/fullscreen*.html` are the
+  pages to try.
+
+Slice 3 is the player widget's button.
 
 ## 10. Slices (a first cut, to be argued)
 
