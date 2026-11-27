@@ -581,14 +581,15 @@ static inline int64_t os64_gui_window_set_pinned(int64_t handle,bool pinned)
 { return (int64_t)os64_syscall2(SYSCALL_GUI_WINDOW_SET_PINNED,(uint64_t)handle,pinned?1:0); }
 
 // Put an owned ordinary window over the whole screen, or bring it back.
-//   - Entering is refused for a desktop or popup window (BAD_ARGS), unless
-//     the window or a popup it owns has focus and the screen is the
-//     desktop's rather than a text terminal's (NOT_FOCUSED), and when the
-//     screen does not fit the window's minimum or reservation (SCREEN_FIT).
+//   - Entering is refused for a desktop or popup window (BAD_ARGS); when
+//     neither the window nor a popup it owns has focus, or a text terminal
+//     holds the screen (NOT_FOCUSED); and when the screen is smaller than
+//     the window's minimum or larger than its reservation (SCREEN_FIT).
 //   - Leaving is always allowed, and returns the window to exactly where it
 //     was: maximized if it was, else its old frame.
 //   - Either way the window gets OS64_GUI_EVENT_WINDOW_FULL_SCREEN, and
-//     WINDOW_RESIZE when its size changed. Until its next publish the
+//     WINDOW_RESIZE when its size changed. Until it next publishes pixels
+//     (a publish of plane edits alone, with no damage, is not one) the
 //     compositor shows its content black and none of its planes, so the
 //     glass never shows the old picture at the new size.
 //   - Losing focus to another program does not leave full screen: the

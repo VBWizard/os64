@@ -319,9 +319,10 @@ static void unlink_window(window_t *w)
 }
 
 // WHICH BAND A WINDOW LIVES IN. The z-list had two bands from 2026-08-23
-// (pin-on-top) and has THREE since the desktop moved to ring 3: the desktop
+// (pin-on-top), three once the desktop moved to ring 3 (the desktop
 // shell's window is a client like any other, and the only thing that makes
-// it the desktop is that nothing can get beneath it.
+// it the desktop is that nothing can get beneath it), and four with full
+// screen.
 //
 //   3  FRONT    — the full-screen window whose own focus chain holds focus,
 //                 and the popups it owns (s_front); nothing else ranks here
@@ -333,8 +334,9 @@ static void unlink_window(window_t *w)
 // Expressed as a NUMBER rather than as two more branches, because the old
 // two-band code already carried the warning: "three copies of find the band
 // boundary is three chances to disagree". A rank makes link_on_top and
-// at_band_top say the same thing by construction, and a fourth band later
-// costs one line here and nothing anywhere else.
+// at_band_top say the same thing by construction. A band read off a
+// window's own flags costs one line here; one that moves with focus, as
+// rank 3 does, also needs front_set to relink the windows it moves.
 //
 // Rank 3 is not a flag anyone sets: it follows focus. front_set, which
 // focus_window calls at every focus change, moves s_front and relinks the

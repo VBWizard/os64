@@ -207,10 +207,11 @@ typedef struct window
     // only while GUI_WINDOW_FULL_SCREEN is set.
     rect_t    fullFrom;
 
-    // Set at each full-screen edge, cleared by the owner's next publish:
-    // until then composite_one paints the content black and composes no
-    // plane, because what the window holds is a picture of its old size
-    // and its planes' places were agreed for its old box.
+    // Set at each full-screen edge, cleared by the owner's next publish of
+    // pixels (gui_window_snapshot_locked; a publish of plane edits alone
+    // copies none): until then composite_one paints the content black and
+    // composes no plane, because what the window holds is a picture of its
+    // old size and its planes' places were agreed for its old box.
     bool      blank_until_publish;
 
     // Ranked in band 3, above every other band: this window's focus root is
@@ -572,9 +573,11 @@ typedef enum {
 wm_full_screen_result_t wm_set_full_screen(window_t *w, bool on, bool by_chord);
 
 // Would the window take the screen's size, chrome-less, without clamping?
-// The test maximize's titlebar button and Ctrl+Alt+M are withheld by
-// (wm_decoration_disabled), asked with full screen's geometry: the chord
-// declines where this is false.
+// The question maximize's titlebar button and Ctrl+Alt+M are withheld by
+// (wm_decoration_disabled: does wm_clamp_frame's minimum or reservation
+// change the screen-sized frame?), asked of full screen's content, which
+// has no chrome and so no decoration minimum: the chord declines where
+// this is false.
 bool wm_full_screen_fits(const window_t *w);
 
 // /sys/gui's full-screen line, under kGuiLock: the window ranked above
