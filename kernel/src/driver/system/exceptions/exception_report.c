@@ -608,23 +608,26 @@ void exception_report(const exception_context_t *ctx, const char *why)
 
 // ── Dispatch ────────────────────────────────────────────────────────────────
 //
-// THE CURRENT CONTEXT, PER CORE. The demand pager (still in simple_exceptions.c
-// while EXCOLD exists) is shared by both reporting paths, and duplicating a
-// couple of hundred lines of paging policy so each path could own a copy would
-// be far worse than this pointer: two demand pagers that must be kept in sync
-// is a bug factory. So the pager asks "is a new-style context registered for my
-// core?" and reports accordingly.
+// THE CURRENT CONTEXT, PER CORE: the frame each CPU's innermost exception is
+// handling, for the debugger (tools/test_early_exceptions.py reads it). The
+// kernel itself hands a frame down explicitly instead of reading this: a page
+// fault whose resolve parks on a file read resumes on another CPU, so a
+// per-CPU slot names whatever that CPU was last doing (USER_COPY.md § The
+// fault's own frame).
 //
 // Per CORE, never a single global — that was one of the three bugs this module
 // exists to end (two cores faulting at once used to overwrite each other's
 // capture, so the report could describe a fault on a different CPU).
 static exception_context_t *kCurrentCtx[MAX_CPUS];
 
-exception_context_t *exception_current_context(void)
+// The way out of exception_dispatch: put back the slot this exception took,
+// only if it still names this exception. A page fault that parked and moved
+// returns with `core` naming the CPU it arrived on, whose slot belongs to
+// whatever that CPU has taken since.
+static void exception_slot_restore(uint32_t core, exception_context_t *ctx, exception_context_t *prev)
 {
-	// Use the same CPU identity before and after GS setup. An AP without
-	// CLS must retain its own capture instead of borrowing the BSP's slot.
-	return kCurrentCtx[exception_core_index()];
+	if (kCurrentCtx[core] == ctx)
+		kCurrentCtx[core] = prev;
 }
 
 void exception_dispatch(exception_context_t *ctx)
@@ -633,10 +636,9 @@ void exception_dispatch(exception_context_t *ctx)
 
 	// Save-and-restore rather than set-and-clear, because exceptions NEST: a
 	// #PF taken inside the pager re-enters here with its own context, and a
-	// plain clear on its way out would unregister the OUTER fault's capture —
-	// the exact clobber the old gLastFault* globals suffered. The contexts
-	// themselves stack naturally (they live on the stack); this pointer must
-	// stack with them.
+	// plain clear on its way out would unregister the OUTER fault's capture.
+	// The contexts themselves stack naturally (they live on the stack); this
+	// pointer must stack with them.
 	exception_context_t *prev = kCurrentCtx[core];
 	kCurrentCtx[core] = ctx;
 
@@ -644,11 +646,11 @@ void exception_dispatch(exception_context_t *ctx)
 		uint64_t cr2;
 		__asm__ volatile("mov %0, cr2" : "=r"(cr2));
 
-		// The demand pager. Returns for a fault it RESOLVED, which is the
-		// common case and the reason this whole path is allowed to return;
-		// for a fatal one it reports (through us, via the registered context)
+		// The demand pager. Returns for a fault it RESOLVED (or a user copy's
+		// it recovered), which is the common case and the reason this whole
+		// path is allowed to return; for a fatal one it reports from `ctx`
 		// and never comes back.
-		handle_page_fault(cr2, ctx->error_code, ctx->rip);
+		handle_page_fault(cr2, ctx->error_code, ctx->rip, ctx);
 
 		// The page-fault self-test steers the resume. This used to be done by
 		// writing through a global pointer into the interrupt frame; now it is
@@ -657,7 +659,7 @@ void exception_dispatch(exception_context_t *ctx)
 			ctx->rip = kTestingPageFaultResumeRip;
 		}
 
-		kCurrentCtx[core] = prev;
+		exception_slot_restore(core, ctx, prev);
 		return;   // resolved — the prologue's iretq retries the instruction
 	}
 
@@ -682,7 +684,7 @@ void exception_dispatch(exception_context_t *ctx)
 			exception_report(ctx, why);
 			kExcResumingCore[core] = false;
 			if (keepRunning) {
-				kCurrentCtx[core] = prev;
+				exception_slot_restore(core, ctx, prev);
 				return;
 			}
 			// Halt mode: the story is told, and telling it twice (by falling
