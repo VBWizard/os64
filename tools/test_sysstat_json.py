@@ -31,6 +31,8 @@ for r in full[:-1]:
     assert selected["switches_delta"] == 17 and selected["major_faults_delta"] == 0
     assert selected["threads_complete"]
     assert [t["thread_id"] for t in selected["threads"]] == [7, 8]
+    # A named thread carries its name; an unnamed one its task's.
+    assert [t["name"] for t in selected["threads"]] == ["decode", selected["name"]]
     assert [c["core_id"] for c in r["cores"]] == [0, 7]
     assert r["cores"][1]["parked"] and r["cores"][1]["cpu"]["busy_percent"] is None
     assert r["memory"]["used_delta_bytes"] == 4096

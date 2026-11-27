@@ -93,7 +93,7 @@ yonder_ticker_t *yonder_ticker_start(int64_t window, uint32_t bell)
         os64_free(t);
         return NULL;
     }
-    t->thread = os64_thread(tick, t);
+    t->thread = os64_thread_named(tick, t, "ticker");
     if (t->thread < 0) {
         os64_close(t->wake[0]);
         os64_close(t->wake[1]);

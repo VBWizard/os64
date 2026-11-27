@@ -47,7 +47,7 @@ static void thread_join_unref(thread_join_t* j)
 }
 
 thread_join_t* thread_join_create(void* taskv, uint64_t entry, uint64_t arg,
-                                  uint64_t exit_stub)
+                                  uint64_t exit_stub, const char* name)
 {
 	task_t* task = (task_t*)taskv;
 
@@ -76,6 +76,8 @@ thread_join_t* thread_join_create(void* taskv, uint64_t entry, uint64_t arg,
 	// it tried to `ret` into the kernel's half of the map.)
 	t->regs.RIP = entry;
 	t->regs.RDI = arg;
+	// Before the splice below, which is where a reader can first find it.
+	thread_name_init(t, name);
 
 	// AFFINITY, and the trap in it: "run anywhere" is THREAD_NO_AFFINITY,
 	// which is 0xFFFFFFFFFFFFFFFF — NOT zero. createThread doesn't set the

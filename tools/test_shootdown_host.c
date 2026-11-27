@@ -157,23 +157,33 @@ static void directed(void)
 	CHECK(shootdown_answered(&s_sd, SHOOTDOWN_MAX_CPUS, 9), "a CPU past the table is waited for");
 
 	// The books: rounds, the late ones, the longest wait, and the window.
-	CHECK(!shootdown_settled(&s_sd, 40, 1, 100), "40 us of 100 called late");
-	CHECK(!shootdown_settled(&s_sd, 100, 2, 100), "exactly the limit called late");
-	CHECK(shootdown_settled(&s_sd, 250, 3, 100), "250 us of 100 not called late");
-	CHECK(!shootdown_settled(&s_sd, 70, 4, 100), "70 us of 100 called late");
+	CHECK(!shootdown_settled(&s_sd, 40, (shootdown_last_t){ 1, 100, 1000 }, 100), "40 us of 100 called late");
+	CHECK(!shootdown_settled(&s_sd, 100, (shootdown_last_t){ 2, 200, 2000 }, 100), "exactly the limit called late");
+	CHECK(shootdown_settled(&s_sd, 250, (shootdown_last_t){ 3, 300, 3000 }, 100), "250 us of 100 not called late");
+	CHECK(!shootdown_settled(&s_sd, 70, (shootdown_last_t){ 4, 400, 4000 }, 100), "70 us of 100 called late");
 	shootdown_counts_t c;
 	shootdown_read(&s_sd, &c);
 	CHECK(c.rounds == 4 && c.late == 1 && c.wait_most_us == 250, "totals %lu rounds %lu late %lu most",
 	      (unsigned long)c.rounds, (unsigned long)c.late, (unsigned long)c.wait_most_us);
 	CHECK(c.wait_most_cpu == 3 && c.window_wait_most_cpu == 3, "the longest wait's CPU %u/%u, not 3",
 	      c.wait_most_cpu, c.window_wait_most_cpu);
+	CHECK(c.wait_most_thread == 300 && c.wait_most_task == 3000 && c.window_wait_most_thread == 300 &&
+	          c.window_wait_most_task == 3000,
+	      "the longest wait's thread %lu/%lu and task %lu/%lu, not 300 and 3000",
+	      (unsigned long)c.wait_most_thread, (unsigned long)c.window_wait_most_thread,
+	      (unsigned long)c.wait_most_task, (unsigned long)c.window_wait_most_task);
 	CHECK(c.window_rounds == 4 && c.window_late == 1 && c.window_wait_most_us == 250,
 	      "window %lu rounds %lu late %lu most", (unsigned long)c.window_rounds, (unsigned long)c.window_late,
 	      (unsigned long)c.window_wait_most_us);
-	CHECK(!shootdown_settled(&s_sd, 30, 5, 100), "30 us called late");
+	CHECK(!shootdown_settled(&s_sd, 30, (shootdown_last_t){ 5, 500, 5000 }, 100), "30 us called late");
 	shootdown_read(&s_sd, &c);
 	CHECK(c.wait_most_cpu == 3 && c.window_wait_most_cpu == 5, "after a window: CPUs %u/%u, not 3 and 5",
 	      c.wait_most_cpu, c.window_wait_most_cpu);
+	CHECK(c.wait_most_thread == 300 && c.window_wait_most_thread == 500 && c.wait_most_task == 3000 &&
+	          c.window_wait_most_task == 5000,
+	      "after a window: threads %lu/%lu tasks %lu/%lu", (unsigned long)c.wait_most_thread,
+	      (unsigned long)c.window_wait_most_thread, (unsigned long)c.wait_most_task,
+	      (unsigned long)c.window_wait_most_task);
 	CHECK(c.rounds == 5 && c.late == 1 && c.wait_most_us == 250, "totals moved wrongly after a window");
 	CHECK(c.window_rounds == 1 && c.window_late == 0 && c.window_wait_most_us == 30,
 	      "second window %lu rounds %lu late %lu most", (unsigned long)c.window_rounds,

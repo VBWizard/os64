@@ -16,6 +16,7 @@ typedef struct {
     os64_monitor_snapshot_t snapshot;
     os64_monitor_task_t *tasks;
     os64_monitor_thread_t *threads;
+    char (*thread_names)[OS64_THREAD_NAME_MAX];   // beside threads, "" when unnamed
     os64_monitor_core_t *cores;
     os64_proc_cpu_split_t *task_split, *thread_split;
     os64_monitor_split_t *task_usage, *thread_usage;
@@ -128,10 +129,12 @@ os64_monitor_t *os64_monitor_create(size_t tasks, size_t threads, size_t cores)
         if (threads) b->threads = array_alloc(threads, sizeof(*b->threads));
         if (threads) b->thread_split = array_alloc(threads, sizeof(*b->thread_split));
         if (threads) b->thread_usage = array_alloc(threads, sizeof(*b->thread_usage));
+        if (threads) b->thread_names = array_alloc(threads, sizeof(*b->thread_names));
         b->cores = array_alloc(cores, sizeof(*b->cores));
         b->core_split = array_alloc(cores, sizeof(*b->core_split));
         if (!b->tasks || !b->task_split || !b->task_usage ||
-            (threads && (!b->threads || !b->thread_split || !b->thread_usage)) ||
+            (threads && (!b->threads || !b->thread_split || !b->thread_usage ||
+                         !b->thread_names)) ||
             !b->cores || !b->core_split) {
             os64_monitor_destroy(m);
             return NULL;
@@ -151,6 +154,7 @@ void os64_monitor_destroy(os64_monitor_t *m)
         os64_free(m->buffers[i].threads);
         os64_free(m->buffers[i].thread_split);
         os64_free(m->buffers[i].thread_usage);
+        os64_free(m->buffers[i].thread_names);
         os64_free(m->buffers[i].cores);
         os64_free(m->buffers[i].core_split);
     }
@@ -176,9 +180,17 @@ static void collect_threads(os64_monitor_t *m, monitor_buffer_t *b, uint64_t pid
         os64_monitor_thread_t *t = &b->threads[s->thread_count];
         os64_memset(t, 0, sizeof(*t));
         os64_memset(&b->thread_usage[s->thread_count], 0, sizeof(*b->thread_usage));
-        if (os64_proc_read_thread_split(pid, tid, &t->info,
-                                        &b->thread_split[s->thread_count]) == 0)
+        // Cleared here, not left to the reader: a slot is reused every
+        // sample, and a read that fails must not leave the name of the
+        // thread it held before.
+        b->thread_names[s->thread_count][0] = '\0';
+        if (os64_proc_read_thread_named(pid, tid, &t->info,
+                                        &b->thread_split[s->thread_count],
+                                        b->thread_names[s->thread_count],
+                                        OS64_THREAD_NAME_MAX) == 0)
             s->thread_count++;
+        else
+            b->thread_names[s->thread_count][0] = '\0';
     }
     if (os64_close((int32_t)h) < 0 || rc < 0) s->partial |= OS64_MONITOR_THREADS_PARTIAL;
 }
@@ -486,6 +498,24 @@ bool os64_monitor_thread_split(const os64_monitor_t *m, uint64_t pid,
             *out = b->thread_usage[i]; return true;
         }
     return false;
+}
+
+const char *os64_monitor_thread_name(const os64_monitor_t *m, uint64_t pid,
+                                     uint64_t tid)
+{
+    if (!m || !m->have_previous) return NULL;
+    const monitor_buffer_t *b = &m->buffers[m->current];
+    for (size_t i = 0; i < b->snapshot.thread_count; i++)
+        if (b->threads[i].info.pid == pid && b->threads[i].info.tid == tid)
+            return b->thread_names[i][0] ? b->thread_names[i] : NULL;
+    return NULL;
+}
+
+const char *os64_monitor_thread_label(const os64_monitor_t *m, uint64_t pid,
+                                      uint64_t tid, const char *task_name)
+{
+    const char *name = os64_monitor_thread_name(m, pid, tid);
+    return name ? name : task_name;
 }
 
 bool os64_monitor_core_split(const os64_monitor_t *m, uint32_t id,

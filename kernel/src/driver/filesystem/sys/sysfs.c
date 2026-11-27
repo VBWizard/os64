@@ -1259,9 +1259,13 @@ static void sys_gen_memory_shootdown(synth_text_t *t)
 	// The CPU that answered the longest round last: a CPU long with
 	// interrupts off holds a round, in a syscall (which runs with them off)
 	// or in a scheduler pass, whose interrupt also keeps the flush's out
-	// until its end of interrupt (same priority class).
-	synth_text_addf(t, "longest wait: %lu us (CPU %u answered last), %lu us since last read (CPU %u)\n",
-	                c.wait_most_us, c.wait_most_cpu, c.window_wait_most_us, c.window_wait_most_cpu);
+	// until its end of interrupt (same priority class). The thread and task
+	// are what that CPU was running when the flush got in.
+	synth_text_addf(t, "longest wait: %lu us (CPU %u answered last, from thread %lu of task %lu), "
+	                "%lu us since last read (CPU %u, thread %lu of task %lu)\n",
+	                c.wait_most_us, c.wait_most_cpu, c.wait_most_thread, c.wait_most_task,
+	                c.window_wait_most_us, c.window_wait_most_cpu, c.window_wait_most_thread,
+	                c.window_wait_most_task);
 }
 
 static void sys_gen_memory_ledger(synth_text_t *t)

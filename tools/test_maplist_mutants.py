@@ -88,6 +88,7 @@ mutants = [
     ('may-lead-adjacent', 'm->start < n->end && n->start < m->end', 'm->start <= n->end && n->start <= m->end'),
     ('may-lead-uncounted', '        (*steps)++;\n', '        (void)steps;\n'),
     ('linked-not-numbered', '    n->linked = ++l->links;', '    n->linked = l->links;'),
+    ('last-steps-unset', '    l->last_steps = steps;\n', ''),
     # The misses.
     ('miss-uncounted', '        l->misses++;\n', '        ;\n'),
     ('read-no-restart-misses', '    l->read_misses = l->misses;\n', ''),

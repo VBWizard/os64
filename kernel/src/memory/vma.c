@@ -243,6 +243,7 @@ vma_t* vma_lookup_hold(task_t* task, uintptr_t addr)
         return NULL;
     uint64_t f = counted_lock_acquire(&task->mapLock);
     maplist_node_t *n = maplist_find_hold(&task->mmaps, addr);
+    task->mapLock.hold_tag = task->mmaps.last_steps;
     counted_lock_release(&task->mapLock, f);
     return vma_of(n);
 }
@@ -272,6 +273,7 @@ bool vma_lookup_facts(task_t* task, uintptr_t addr, vma_facts_t *out)
     maplist_node_t *n = maplist_find(&task->mmaps, addr);
     if (n != NULL)
         vma_facts_copy(vma_of(n), out);
+    task->mapLock.hold_tag = task->mmaps.last_steps;
     counted_lock_release(&task->mapLock, f);
     return n != NULL;
 }
@@ -286,6 +288,7 @@ vma_t* vma_lookup_anon_start_hold(task_t* task, uintptr_t start)
         maplist_hold(n);
     else
         n = NULL;
+    task->mapLock.hold_tag = task->mmaps.last_steps;
     counted_lock_release(&task->mapLock, f);
     return vma_of(n);
 }
@@ -344,6 +347,7 @@ uint32_t vma_copy_all_facts(task_t* task, vma_facts_t *out, uint32_t cap, uint32
         vma_facts_copy(vma_of(m), &out[n++]);
     if (listed != NULL)
         *listed = task->mmaps.count;
+    task->mapLock.hold_tag = n;   // nodes walked, one a row copied
     counted_lock_release(&task->mapLock, f);
     return n;
 }

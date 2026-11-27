@@ -500,20 +500,28 @@ static uint64_t proc_cycles_to_ns(uint64_t cycles)
 
 // A counted lock's line: taken, waited, the worst wait and hold, since it
 // began and since the last read.
-static void proc_add_counted_lock(synth_text_t *t, const char *key, const counted_lock_stats_t *l)
+// `tag`, when not NULL, names what a holder's hold_tag counts, printed after
+// each worst hold.
+static void proc_add_counted_lock(synth_text_t *t, const char *key, const counted_lock_stats_t *l, const char *tag)
 {
-	synth_text_addf(t, "%s\t%lu taken %lu waited %lu ns worst wait %lu ns worst hold %lu ns; "
-	                "since read %lu taken %lu waited %lu ns worst wait %lu ns worst hold %lu ns\n",
+	synth_text_addf(t, "%s\t%lu taken %lu waited %lu ns worst wait %lu ns worst hold %lu ns",
 	                key, l->acquires, l->contended, proc_cycles_to_ns(l->wait_cycles),
-	                proc_cycles_to_ns(l->max_wait_cycles), proc_cycles_to_ns(l->max_hold_cycles),
+	                proc_cycles_to_ns(l->max_wait_cycles), proc_cycles_to_ns(l->max_hold_cycles));
+	if (tag != NULL)
+		synth_text_addf(t, " (%lu %s)", l->max_hold_tag, tag);
+	synth_text_addf(t, "; since read %lu taken %lu waited %lu ns worst wait %lu ns worst hold %lu ns",
 	                l->window_acquires, l->window_contended, proc_cycles_to_ns(l->window_wait_cycles),
 	                proc_cycles_to_ns(l->window_max_wait_cycles), proc_cycles_to_ns(l->window_max_hold_cycles));
+	if (tag != NULL)
+		synth_text_addf(t, " (%lu %s)", l->window_max_hold_tag, tag);
+	synth_text_addf(t, "\n");
 }
 
 // The task's list of mappings: how many, the walks the lookups took (in
 // mappings stepped over; a miss steps over all of them), the pages of
 // syscall ranges the page table answered for without a lookup, and the
-// waits and holds of its lock and of the task's page lock (which a fault
+// waits and holds of its lock (each worst hold with the nodes its holder
+// walked) and of the task's page lock (which a fault
 // publishes a page under and unmap removes one under), each since the task
 // began and since this file was last read (MAPPING_LIST.md). A long walk is
 // the list lock's hold, which is why both are here.
@@ -527,8 +535,8 @@ static void proc_add_mapping_counts(synth_text_t *t, task_t *task)
 	                c.walks.lookups, c.walks.misses, c.walks.steps, c.walks.steps_most,
 	                c.walks_since.lookups, c.walks_since.misses, c.walks_since.steps, c.walks_since.steps_most);
 	synth_text_addf(t, "pages_by_table\t%lu; since read %lu\n", c.table_answers, c.table_answers_since);
-	proc_add_counted_lock(t, "mapping_lock", &c.lock);
-	proc_add_counted_lock(t, "page_lock", &c.page_lock);
+	proc_add_counted_lock(t, "mapping_lock", &c.lock, "walked");
+	proc_add_counted_lock(t, "page_lock", &c.page_lock, NULL);
 }
 
 static void proc_add_system_causes(synth_text_t *t, const accounting_thread_cycles_t *cycles,
@@ -1261,6 +1269,9 @@ static void proc_gen_thread_status(synth_text_t *t, task_t *task, thread_t *th)
 
 	synth_text_addf(t, "thread\t%lu\n", th->threadID);
 	synth_text_addf(t, "task\t%lu\n", task->taskID);
+	// Empty when unnamed. Printed as it is: the rule admits printable ASCII
+	// alone (os64/thread_name.h), so no tab or newline can split the record.
+	synth_text_addf(t, "name\t%s\n", th->name);
 	synth_text_addf(t, "state\t%s\n", proc_state_name(th->threadState));
 	// pinnedCPU is the thread's PINNED AFFINITY, not the CPU it is running on —
 	// a distinction worth the extra word, because labelling it "core" printed

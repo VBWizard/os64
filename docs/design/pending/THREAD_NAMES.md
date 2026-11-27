@@ -212,3 +212,57 @@ caller of the thread syscall that passes three arguments hands the kernel
 whatever R10 held, and the kernel refuses the creation when that is not a
 readable name. Every caller is found before the kernel half lands, numeric
 syscall calls and assembly included.
+
+## As built, part A (the kernel and the ABI)
+
+- The rule is `abi/include/os64/thread_name.h` (`OS64_THREAD_NAME_MAX`,
+  `os64_thread_name_valid`), shared by the kernel and libos64, with a host
+  test and mutants (`tools/test_thread_name_host.sh`,
+  `tools/test_thread_name_mutants.py`).
+- `syscall_thread` copies and checks the name right after the entry and the
+  exit stub, before the reap backlog's park, the handle and the thread, so
+  a refusal leaves nothing behind: -1
+  for a name with no end within 64 bytes or a byte outside the range, -2 for
+  one that cannot be read.
+- Both creation doors name the thread through one helper,
+  `thread_name_init`, before the thread is published: `thread_join_create`
+  for a thread a program asks for, `task_create` for a kernel task's thread
+  (named for its task, on the caller's asking for a kernel task, never on
+  the path). A program spawned from ring 3 has its first thread unnamed. The
+  name stays out of the dispatch pointer mask (which, as it happens, passes
+  NULL through): the handler's guarded string reads vet every page, and
+  badptr's name group reaches their own bound that way. createThread takes no
+  name: a kernel task's thread is made before its task's name is worked out.
+- `/proc/<id>/thread/<tid>/status` prints `name` after `task`.
+- Fixtures: `/tests/threadnames`, and `badptr thread`'s name group.
+
+## As built, part B (the readers, the display and the namers)
+
+- `os64_proc_read_thread_named` reads a thread's status with its name, the
+  name line taken verbatim after its tab (a name may begin with a space).
+- The monitor keeps each sampled thread's name beside its record, from the
+  same read, clearing the slot before each read so a reused slot or a
+  failed read never shows another thread's name. `os64_monitor_thread_name`
+  answers NULL for an unnamed or absent thread; `os64_monitor_thread_label`
+  answers the name, else the owning task's name, and is what top's and
+  htop's thread rows and sysstat's thread line (text and `-j`) print, so the
+  three cannot disagree. Process rows, sorting, search, identities and
+  task-directed actions are unchanged. `tools/test_monitor_host.sh` and
+  `tools/test_sysstat_host.sh` cover it.
+- `os64_work_pool_create_named(..., prefix)` names workers `prefix-01` on;
+  a prefix whose names would break the rule refuses the pool before any
+  worker starts (`/tests/worktest`).
+- The names, one word or two with a hyphen and no program prefix, since a
+  row already sits under its task. This overrides the `yonder-worker`,
+  `yonder-ticker` and `yonder-settings` of the 10/26 text (Fable's review):
+  - libmedia: `decode`, `convert` (pictures to the window's pixels), `show`,
+    `audio-out`;
+  - libfetch: `h2-reader`;
+  - libos64's browser pool and yonder's pool: `worker-01` on;
+  - yonder: `ticker`, `keys`, and per media element `opener`, `loader`,
+    `plane`;
+  - gplay: `keys`.
+- yonder has no settings relay thread any more, so there is nothing to name.
+- Threads left unnamed for now, each a one-line change when wanted:
+  desktop's reaper, controlcenter's, telnetd's, sshd's and vncd's I/O
+  threads, gmandel's second view and pulse's timer.

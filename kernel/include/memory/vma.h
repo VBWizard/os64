@@ -122,7 +122,8 @@ vma_t* vma_chain_next(vma_t* vma);
 // how many mappings are listed, the walks, the pages the page table answered
 // for without one, and the waits and holds of the list's lock and the task's
 // page lock, each since the task began and since the last read, which starts
-// the windows again.
+// the windows again. A door that walks the list tags its hold of the list's
+// lock with the nodes it walked, so the worst hold says what it was.
 typedef struct {
     uint32_t listed;
     maplist_walks_t walks, walks_since;

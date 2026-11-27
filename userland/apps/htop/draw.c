@@ -180,7 +180,8 @@ static void task_rows(const ht_view_t *v, const os64_monitor_t *monitor, ht_cell
             unsigned indent = r->depth > 6 ? 6 : r->depth;
             x += indent * 2; text(v, g, y, x - 2, selected ? style : HT_DIM, r->is_thread ? ": " : "+-");
         }
-        const char *name = th ? t->info.name : t->info.command;
+        const char *name = th ? os64_monitor_thread_label(monitor, t->info.pid, th->tid, t->info.name)
+                              : t->info.command;
         if (!*name) name = t->info.name;
         size_t n = os64_strlen(name), offset = v->command_offset < n ? v->command_offset : n;
         text(v, g, y, x, selected ? style : t->info.kernel || th ? HT_DIM : HT_NORMAL, name + offset);

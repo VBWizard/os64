@@ -202,7 +202,7 @@ os64_ui_status_code_t os64_browser_create(os64_ui_dataview_t *view,
     }
     os64_ui_data_projection_release(projection); os64_ui_data_release(data);
     if (!rc) {
-        b->pool=os64_work_pool_create(2,2u*BROWSER_WORK_RESERVE,window,doorbell_bit);
+        b->pool=os64_work_pool_create_named(2,2u*BROWSER_WORK_RESERVE,window,doorbell_bit,"worker");
         if (!b->pool) rc=OS64_UI_ERROR;
     }
     if (rc) {

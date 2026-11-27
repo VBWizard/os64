@@ -267,6 +267,7 @@ static void cases(void)
     check(found(model_of(maplist_find(&l, 0x2fff))) == a, "find: the node whose range holds it");
     check(l.lookups == before + 1 && l.steps == steps + 3 && l.steps_most >= 3,
           "the walk: a lookup counted with the nodes it stepped over, the second look included");
+    check(l.last_steps == 3, "the walk: the latest walk's steps are kept for its caller");
     check(l.head == a->n && a->n->prev == NULL && b->n->prev == a->n && b->n->next == NULL,
           "move to front: a hit at the tail is the head, its links whole");
     compare(&l, "moved to the head");

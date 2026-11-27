@@ -157,6 +157,27 @@ static bool make_stacks(thread_t *t, task_t *task, bool kernelThread, uint64_t a
 	return true;
 }
 
+void thread_name_init(thread_t* thread, const char* name)
+{
+	thread->name[0] = '\0';
+	if (name == NULL)
+		return;
+	// The syscall has already refused a name that breaks the rule; a kernel
+	// caller's name is checked here, and one the rule refuses leaves the
+	// thread unnamed rather than putting bytes in a status line that a
+	// reader cannot split.
+	if (!os64_thread_name_valid(name))
+	{
+		printd(DEBUG_THREAD, "thread_name_init: thread 0x%08lx left unnamed; its name breaks the rule\n",
+		       thread->threadID);
+		return;
+	}
+	size_t i = 0;
+	for (; name[i] != '\0'; i++)
+		thread->name[i] = name[i];
+	thread->name[i] = '\0';
+}
+
 thread_t* createThread(void* ownerTask, bool kernelThread, uint64_t userStack, bool mayRefuse)
 {
 	thread_t* newThread;

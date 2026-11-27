@@ -56,7 +56,7 @@ bool yonder_keys_open(void (*bell)(void))
         return false;
     s_session = (int32_t)h;
     s_bell = bell;
-    int64_t reader = os64_thread(reader_main, NULL);
+    int64_t reader = os64_thread_named(reader_main, NULL, "keys");
     if (reader < 0) {
         os64_close(s_session);
         s_session = -1;
