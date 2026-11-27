@@ -128,6 +128,7 @@ static const char *const kPlanePage =
     "<!doctype html><style>body{margin:0;background:#123}"
     "#v{position:absolute;left:40px;top:40px;width:320px;height:180px}</style><video id=v></video>";
 
+static void plane_fullscreen_container(void);
 static void plane_cases(void)
 {
     Video *v = &s_videos[0];
@@ -985,6 +986,58 @@ static void plane_cases(void)
     planes_prepare();
     s_planes = true;
     check(fake_plane.asks == 0, "planes: off, never asked");
+    plane_drop();
+    plane_fullscreen_container();
+}
+
+/* A CONTAINER full screen (the web's common shape: a player's div, not its
+ * video), holding the video and the page's own control bar over it, with a
+ * box of the page outside it stacked over everything. The top layer's
+ * paint is the same paint the planes ride on (paint.h's top layer): the
+ * video placed with its hole, the bar an overlay in the edit, --plane-check
+ * finding nothing wrong, the box outside not painted, and what the
+ * container leaves see-through the black backdrop, not the page. The state
+ * bit is set as libdom sets it, and the page laid out again for it. */
+static void plane_fullscreen_container(void)
+{
+    Video *v = &s_videos[0];
+    plane_page("<!doctype html><style>body{margin:0;background:#123}"
+               "#c{position:relative;width:400px;height:300px}"
+               "#v{position:absolute;left:40px;top:40px;width:320px;height:180px;background:#456}"
+               "#bar{position:absolute;left:40px;top:180px;width:320px;height:40px;background:#0a0}"
+               "#out{position:fixed;left:600px;top:500px;width:100px;height:50px;background:red;z-index:9999}"
+               "</style><div id=c><video id=v></video><div id=bar></div></div><div id=out></div>");
+    os64_html_node_t *c = (os64_html_node_t *)probe_id("c");
+    check(c != NULL && os64_html_set_state(g.page.way.doc, c, OS64_HTML_STATE_FULLSCREEN) == OS64_HTML_OK,
+          "planes, full screen: the container's state set");
+    check(relayout(true), "planes, full screen: laid out again");
+    s_videos[0].node = probe_id("v");
+    s_fs.active = true;
+    s_fs.element = c;
+    yonder_paint_set_top(c);
+    const flow_box_t *cb = flow_box_for(g.page.tree, c);
+    check(cb != NULL && cb->rect.x == 0 && cb->rect.y == 0 && cb->rect.w == 800 && cb->rect.h == 600,
+          "planes, full screen: the container fills the view (the UA rules)");
+    s_plane_check = 1;
+    planes_prepare();
+    os64_gui_rect_t d = plane_render();
+    planes_judge(&d, 0, 1);
+    planes_hole(&d, 1);
+    os64_gui_plane_edit_t edits[OS64_GUI_PLANE_EDITS_MAX];
+    os64_gui_rect_t all = d;
+    uint32_t n = planes_edits(edits, &all, true, edit_clips, &nedit_clips);
+    check(v->place && n == 1 && !edits[0].hide && edits[0].noverlays >= 1,
+          "planes, full screen: the video placed, the bar an overlay in the edit");
+    check(v->checked > 0 && v->checked_wrong == 0, "planes, full screen: --plane-check, nothing wrong");
+    check(plane_screen.surf.pixels[(size_t)520 * 800 + 650] == 0xff000000u,
+          "planes, full screen: the box outside the container not painted, the backdrop there");
+    check(plane_screen.surf.pixels[(size_t)10 * 800 + 10] == 0xff000000u,
+          "planes, full screen: what the container leaves see-through is the black backdrop");
+    check(page_hit(650, 520, scroll_now()) == cb, "planes, full screen: the box outside takes no pointer");
+    planes_release();
+    s_fs.active = false;
+    s_fs.element = NULL;
+    yonder_paint_set_top(NULL);
     plane_drop();
 }
 

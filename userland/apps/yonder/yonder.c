@@ -1274,6 +1274,7 @@ static struct {
     bool enter_owed, leave_owed;
     bool active;
     bool ours;
+    const os64_html_node_t *element;    // the element while `active` (libdom's), for the paint and the pointer
 } s_fs;
 static void fs_leave(bool notify);
 static void fs_page_going(Page *p);
@@ -25503,7 +25504,8 @@ static bool window_full_screen(void)
 // The rows go or come back, and the page is laid out for its new view.
 static void fs_relayout(void)
 {
-    yonder_paint_set_top(s_fs.active ? yonder_scripts_fullscreen_element(g.page.scripts) : NULL);
+    s_fs.element = s_fs.active ? yonder_scripts_fullscreen_element(g.page.scripts) : NULL;
+    yonder_paint_set_top(s_fs.element);
     layout();
     g.relayout_due = true;
     mark_whole(WHOLE_WINDOW, true);
@@ -25576,8 +25578,7 @@ static const flow_box_t *page_hit(int32_t x, int32_t y, flow_point_t scroll)
         return NULL;
     if (!s_fs.active)
         return flow_hit(g.page.tree, x, y, scroll);
-    const os64_html_node_t *element = yonder_scripts_fullscreen_element(g.page.scripts);
-    const flow_box_t *top = element != NULL ? flow_box_for(g.page.tree, element) : NULL;
+    const flow_box_t *top = s_fs.element != NULL ? flow_box_for(g.page.tree, s_fs.element) : NULL;
     return top != NULL ? flow_hit_within(g.page.tree, x, y, scroll, top) : NULL;
 }
 

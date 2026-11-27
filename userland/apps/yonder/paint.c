@@ -3110,11 +3110,14 @@ const flow_box_t *yonder_canvas_owner(const flow_tree_t *tree, const yonder_verb
 
 // The top layer (paint.h): the element yonder named, and the visitor that
 // hands over only the boxes inside the element's. A tree is its document's
-// (its root box's node's), so a relayout's new tree is still the element's
+// (top_applies), so a relayout's new tree is still the element's
 // and a frame's or an SVG document's is not. A group's open and close come
 // for the same box, so skipping both for one outside keeps them paired;
 // `inside` is asked only after an open that was made.
 static const os64_html_node_t *s_top_element;
+// The backdrop's black, in libflow's colour (whose top byte is the
+// transparency: 0 is opaque).
+#define TOP_BACKDROP 0x00000000u
 
 void yonder_paint_set_top(const os64_html_node_t *element)
 {
@@ -3123,9 +3126,12 @@ void yonder_paint_set_top(const os64_html_node_t *element)
 
 static bool top_applies(const flow_tree_t *tree)
 {
-    const flow_box_t *root = s_top_element != NULL ? flow_root(tree) : NULL;
-    return root != NULL && root->node != NULL &&
-           os64_html_node_document(root->node) == os64_html_node_document(s_top_element);
+    // The root box may be anonymous: the tree's document is that of the
+    // first box down its first children that a node made.
+    const flow_box_t *b = s_top_element != NULL ? flow_root(tree) : NULL;
+    while (b != NULL && b->node == NULL)
+        b = b->first;
+    return b != NULL && os64_html_node_document(b->node) == os64_html_node_document(s_top_element);
 }
 
 typedef struct {
@@ -3205,7 +3211,7 @@ bool yonder_paint_from(const flow_tree_t *tree, os64_gui_rect_t viewport, os64_g
         TopWalk t = {&p, flow_box_for(tree, s_top_element)};
         bool cover_inside = cover != NULL && t.top != NULL && in_top(&t, cover);
         if (!cover_inside)
-            fill(&p, viewport.x, viewport.y, viewport.w, viewport.h, 0xFF000000u);
+            fill(&p, viewport.x, viewport.y, viewport.w, viewport.h, TOP_BACKDROP);
         bool found = cover == NULL;
         if (t.top != NULL && (cover == NULL || cover_inside)) {
             flow_visitor_t v = {top_visit, top_open, top_close, &t, top_outline, top_inside};
