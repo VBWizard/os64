@@ -327,16 +327,13 @@ static void border(const Ctx *c, Spec *sp, flow_border_style_t style, int32_t wi
 //   object-fit:contain — the one rule that is not, so it comes with the
 //     chapter's sheet, where an author's sheet can still change it.
 //
-// A fixed box is always in the initial containing block here (computed.c),
-// which is the view, so nothing in layout is new. Not honoured: a CSS
-// animation of these properties still runs over them (the cascade puts
-// important user-agent declarations above animations; animate() comes
-// after this), which no page in hand does to its fullscreen element.
-static bool fullscreen(const os64_html_node_t *n, bool root)
-{
-    return !root && n->kind == OS64_HTML_ELEMENT && (n->state & OS64_HTML_STATE_FULLSCREEN) != 0;
-}
-
+// The element is in the top layer (f_top_layer), whose containing block is
+// the initial one, the view, whatever its ancestors are: a transformed,
+// filtered or clipping ancestor neither sizes, moves nor clips it, nor a
+// fixed box inside it. Not honoured: a CSS animation of these properties
+// still runs over them (the cascade puts important user-agent declarations
+// above animations; animate() comes after this), which no page in hand
+// does to its fullscreen element.
 static void fullscreen_rules(const Ctx *c, const os64_html_node_t *n, Spec *sp)
 {
     sp->s.position = FLOW_POSITION_FIXED;
@@ -4908,7 +4905,7 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
             sp.s.display = FLOW_DISPLAY_INLINE;
         else
             sheet(c, n, &sp);
-        if (fullscreen(n, root))
+        if (f_top_layer(n))
             sp.s.object_fit = FLOW_OBJECT_CONTAIN;   // the one fullscreen rule an author may change
         if (is(n->parent, OS64_HTML_TAG_DETAILS) && sp.s.display != FLOW_DISPLAY_NONE) {
             // §15.5.5: the first summary is the disclosure the person
@@ -4941,7 +4938,7 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
         if (is(n, OS64_HTML_TAG_NOSCRIPT) && c->env->scripting)
             sp.s.display = FLOW_DISPLAY_NONE;
         // So have the Fullscreen API's rules (fullscreen_rules).
-        if (fullscreen(n, root))
+        if (f_top_layer(n))
             fullscreen_rules(c, n, &sp);
         // CSS Display 3 Appendix B: `contents` on a replaced element (a
         // picture, a frame, a canvas, a form control) computes to `none`,
@@ -4993,9 +4990,11 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
     out->quotes = own_quotes(c->env->cascade != NULL
                                  ? winner(garb_style_for(c->env->cascade, n), GARB_QUOTES) : NULL,
                              up != NULL ? up->quotes : NULL);
+    // The top layer leaves its ancestors behind: a fixed box inside it is
+    // the viewport's unless something inside it anchors one (f_top_layer).
     out->anchor = f_anchors(&sp.s, root, false) ? n : up != NULL ? up->anchor : NULL;
     out->fixed_anchor = f_anchors(&sp.s, root, true) ? n
-                      : up != NULL ? up->fixed_anchor : NULL;
+                      : up != NULL && !f_top_layer(n) ? up->fixed_anchor : NULL;
     // An opacity an animation moves is the painter's to judge as it paints
     // (PILE3.md § Animations): none of it is gone for the layout.
     out->transparent = (sp.s.opacity == 0 && !(sp.s.animating & FLOW_WILL_OPACITY)) ||

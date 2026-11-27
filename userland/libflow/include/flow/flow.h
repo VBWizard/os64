@@ -2450,8 +2450,8 @@ const flow_style_t *flow_style_for(const flow_tree_t *tree, const os64_html_node
 // containing blocks): in the flow, its parent element; an absolute box's
 // containing block, the nearest element that can contain one (a position
 // other than static, a transform, a filter); a fixed box's, the nearest
-// transformed or filtered one. NULL for the viewport, and for an element
-// the layout styled nothing for. Walked to the top it is the chain
+// transformed or filtered one; the fullscreen element's, the viewport. NULL
+// for the viewport, and for an element the layout styled nothing for. Walked to the top it is the chain
 // Intersection Observer calls the containing block chain; a parent that
 // is inline, or makes no box, is on it and clips nothing.
 const os64_html_node_t *flow_clip_parent(const flow_tree_t *tree, const os64_html_node_t *node);

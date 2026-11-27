@@ -2,9 +2,9 @@
  * state's Part B): the members and their prefixed names, a request with
  * and without the person's activation, the host's answers (in, refused,
  * out), a request for an element in no document, exitFullscreen, the
- * element removed while full screen, a request for another element, the
- * binding drained under a full-screen element, and a document with no
- * host. A fake host records what it was asked; the view step fires the
+ * element removed or moved into another document while full screen, a
+ * request for another element, the binding drained under a full-screen
+ * element, and a document with no host. A fake host records what it was asked; the view step fires the
  * events, one a call. The page records each event it hears in L as
  * "type@where". */
 
@@ -210,10 +210,38 @@ static void dom_fullscreen_cases(void)
                   "document.body.appendChild(v);",
               "fullscreen: removed");
 
+    /* Moved into another document (one script made, as a frame's would
+     * be): still connected, but no longer in this one, so the host is
+     * asked to leave just as for a removal; and an element in that other
+     * document is refused. */
+    fs_host.activated = true;
+    fs_script(&f, "v.requestFullscreen();", "fullscreen: in before the move");
+    os64_dom_fullscreen_settled(f.binding, true);
+    fs_steps(&f, "fullscreen: in before the move, settled");
+    fs_script(&f, "heard();globalThis.other=document.implementation.createHTMLDocument('');"
+                  "other.body.appendChild(v);assert(v.isConnected,'connected to the other document');",
+              "fullscreen: v moved");
+    before = fs_host.left;
+    fs_steps(&f, "fullscreen: the move seen");
+    check(fs_host.left == before + 1, "fullscreen: an element moved to another document asks the host to leave");
+    os64_dom_fullscreen_exit(f.binding);
+    fs_steps(&f, "fullscreen: left after the move");
+    fs_host.activated = true;
+    fs_script(&f, "const h=heard();assert(h==='fullscreenchange@doc webkitfullscreenchange@doc',"
+                  "'the change at this document: '+h);"
+                  "assert(document.fullscreenElement===null&&!v.matches(':fullscreen'),'cleared');R.length=0;"
+                  "v.requestFullscreen().then(()=>R.push('ok'),e=>R.push(e.name));",
+              "fullscreen: moved");
+    check(fs_host.entered == 5 && fs_host.activated, "fullscreen: an element in another document is refused");
+    fs_host.activated = false;
+    fs_steps(&f, "fullscreen: the other document's refusal");
+    fs_script(&f, "heard();assert(R.join()==='TypeError','refused: '+R.join());document.body.appendChild(v);",
+              "fullscreen: refused in another document");
+
     /* The host's own exit (Escape, the window manager's chord). */
     fs_host.activated = true;
     fs_script(&f, "v.webkitRequestFullscreen();", "fullscreen: prefixed request");
-    check(fs_host.entered == 5, "fullscreen: the prefixed request asks the host");
+    check(fs_host.entered == 6, "fullscreen: the prefixed request asks the host");
     os64_dom_fullscreen_settled(f.binding, true);
     fs_steps(&f, "fullscreen: prefixed in");
     fs_script(&f, "heard();assert(document.webkitFullscreenElement===v&&v.webkitRequestFullScreen()===undefined,"

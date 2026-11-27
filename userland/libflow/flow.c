@@ -4732,7 +4732,10 @@ const os64_html_node_t *flow_clip_parent(const flow_tree_t *tree, const os64_htm
     if (position != FLOW_POSITION_ABSOLUTE && position != FLOW_POSITION_FIXED)
         return parent;
     // An absolute or fixed box's containing block is its parent's anchor
-    // (FStyled.anchor, fixed_anchor): the nearest element that can be one.
+    // (FStyled.anchor, fixed_anchor): the nearest element that can be one;
+    // the top layer's is the viewport (f_top_layer).
+    if (f_top_layer(node))
+        return NULL;
     const FStyled *of = f_style_of(tree->styles, parent);
     if (of == NULL)
         return NULL;

@@ -3,10 +3,13 @@
 yonder (VIDEO.md § 9, V8 slice 2): paint.c's top layer (the backdrop, then
 the element's boxes alone), libflow's hit walk kept inside one box
 (flow_hit_within), the user-agent rules that make the element cover the
-view (style.c), and yonder's pointer and widgets through them (page_hit,
-page_covered_at), against the scripts host's planes case for a
-full-screen container (tools/test_yonder_scripts_host.sh with
-YONDER_COVER_ONLY, test_yonder_planes.inc, plane_fullscreen_container).
+view (style.c), its containing block (boxes.c, style.c's anchors and
+flow_clip_parent), and yonder's pointer and widgets through them
+(page_hit, page_covered_at), against the scripts host's planes case for a
+full-screen container inside a transformed, clipping wrapper
+(tools/test_yonder_scripts_host.sh with YONDER_COVER_ONLY,
+test_yonder_planes.inc, plane_fullscreen_container) and, where a mutant
+names them, libflow's cases.
 A mutant is CAUGHT
 when the cases fail, MISSED when they pass, which means a test is missing
 and gets written. A break that changes nothing a rule promises is not in
@@ -38,7 +41,12 @@ PAINT = 'userland/apps/yonder/paint.c'
 YONDER = 'userland/apps/yonder/yonder.c'
 FLOW = 'userland/libflow/flow.c'
 STYLE = 'userland/libflow/style.c'
+BOXES = 'userland/libflow/boxes.c'
 CASES = 'YONDER_COVER_ONLY=1 bash tools/test_yonder_scripts_host.sh'
+# libflow's own cases (test_libflow_scroll.inc's top layer: the element
+# under a transformed, filtered, clipping wrapper), for what the scripted
+# page cannot see; a mutant that names no cases runs CASES.
+FLOW_CASES = 'bash tools/test_libflow_host.sh'
 
 mutants = [
     # The paint: the top layer at all, its backdrop, and only its boxes.
@@ -55,7 +63,12 @@ mutants = [
     ('yonder-hits-the-whole-page', YONDER, '    return top != NULL ? flow_hit_within(g.page.tree, x, y, scroll, top) : NULL;',
      '    return top != NULL ? flow_hit(g.page.tree, x, y, scroll) : NULL;'),
     # The user-agent rules.
-    ('no-user-agent-rules', STYLE, '        if (fullscreen(n, root))\n            fullscreen_rules(c, n, &sp);',
+    # The top layer's containing block: the initial one, whatever is round it.
+    ('anchored-by-its-ancestors', BOXES, 'up == NULL || f_top_layer(el) ? NULL', 'up == NULL ? NULL'),
+    ('a-fixed-box-inside-anchored-outside', STYLE, 'up != NULL && !f_top_layer(n) ? up->fixed_anchor',
+     'up != NULL ? up->fixed_anchor', FLOW_CASES),
+    ('the-clip-parent-an-ancestor', FLOW, '    if (f_top_layer(node))\n        return NULL;\n', '', FLOW_CASES),
+    ('no-user-agent-rules', STYLE, '        if (f_top_layer(n))\n            fullscreen_rules(c, n, &sp);',
      '        if (0)\n            fullscreen_rules(c, n, &sp);'),
 ]
 
@@ -84,7 +97,8 @@ mutants = [
 
 env = dict(os.environ)
 caught, missed, unbuilt = [], [], []
-for name, path_rel, old, new in mutants:
+for name, path_rel, old, new, *own in mutants:
+    cases = own[0] if own else CASES
     if args.only and args.only not in name:
         continue
     path = root / path_rel
@@ -100,7 +114,7 @@ for name, path_rel, old, new in mutants:
         path.write_text(changed)
         with log.open('w') as out:
             try:
-                result = subprocess.run(['bash', '-c', CASES], cwd=root, stdout=out, stderr=out, env=env, timeout=1500)
+                result = subprocess.run(['bash', '-c', cases], cwd=root, stdout=out, stderr=out, env=env, timeout=1500)
                 code = result.returncode
             except subprocess.TimeoutExpired:
                 code = 'timeout'

@@ -108,12 +108,14 @@ static void set_bit(os64_dom_t *dom, const os64_html_node_t *node, bool on)
     (void)os64_html_set_state(dom->document, (os64_html_node_t *)node, state);
 }
 
-/* An element the standard lets be full screen: in its document, and an
- * HTML element or an outermost <svg> (Fullscreen's "fullscreen element
- * ready check", the parts that apply: no modal dialog here, no frames). */
-static bool may_be_fullscreen(const os64_html_node_t *node)
+/* An element the standard lets be full screen: in this binding's own
+ * document (shadow-including: connected to some other document, a frame's
+ * or one script made, is not enough), and an HTML element or an outermost
+ * <svg> (Fullscreen's "fullscreen element ready check", the parts that
+ * apply: no modal dialog here, no frames). */
+static bool may_be_fullscreen(const os64_dom_t *dom, const os64_html_node_t *node)
 {
-    if (node->kind != OS64_HTML_ELEMENT || !d_connected(node))
+    if (node->kind != OS64_HTML_ELEMENT || !d_in_window_tree(dom, node))
         return false;
     if (node->ns == OS64_HTML_NS_HTML)
         return true;
@@ -160,7 +162,7 @@ void os64_dom_fullscreen_settled(os64_dom_t *dom, bool entered)
     JSValue wrapper = f->pending_wrapper;
     f->pending = NULL;
     f->pending_wrapper = JS_UNDEFINED;
-    if (!entered || !may_be_fullscreen(node)) {
+    if (!entered || !may_be_fullscreen(dom, node)) {
         /* Refused, or the element left its document while the host was
          * answering: the request fails. A window that did go over the
          * screen is brought back, with nothing to change for the page. */
@@ -212,7 +214,7 @@ static void check_connected(os64_dom_t *dom)
     if (!f->check)
         return;
     f->check = false;
-    if (f->element != NULL && !f->leaving && !d_connected(f->element) && f->has_provider &&
+    if (f->element != NULL && !f->leaving && !d_in_window_tree(dom, f->element) && f->has_provider &&
         f->provider.leave != NULL) {
         f->leaving = true;
         f->provider.leave(f->provider.opaque);
@@ -280,8 +282,9 @@ bool d_fullscreen_step(os64_dom_t *dom, os64_js_outcome_t *outcome)
         if (ctx == NULL)
             d_outcome_fold(outcome, &access);
         if (ctx != NULL && t->event) {
-            /* At the element while it is in the document, else at it. */
-            const os64_html_node_t *at = t->node != NULL && d_connected(t->node) ? t->node
+            /* At the element while it is in this document, else at the
+             * document. */
+            const os64_html_node_t *at = t->node != NULL && d_in_window_tree(dom, t->node) ? t->node
                                                                                   : dom->document->document;
             dispatch(dom, ctx, type, at, outcome);
             const char *prefixed = t->error ? "webkitfullscreenerror" : "webkitfullscreenchange";
@@ -378,7 +381,7 @@ static JSValue request(os64_dom_t *dom, JSContext *ctx, JSValueConst self, bool 
     const char *refusal = NULL;
     if (f == NULL || !f->has_provider)
         refusal = "Fullscreen is not enabled in this document";
-    else if (!may_be_fullscreen(node))
+    else if (!may_be_fullscreen(owner, node))
         refusal = "The element cannot be made fullscreen";
     else if (f->pending != NULL || f->leaving)
         refusal = "A fullscreen change is already under way";

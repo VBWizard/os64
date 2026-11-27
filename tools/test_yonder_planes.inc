@@ -991,8 +991,9 @@ static void plane_cases(void)
 }
 
 /* A CONTAINER full screen (the web's common shape: a player's div, not its
- * video), holding the video and the page's own control bar over it, with a
- * box of the page outside it stacked over everything. The top layer's
+ * video), holding the video and the page's own control bar over it, inside
+ * a transformed wrapper that clips (which the top layer leaves behind), with
+ * a box of the page outside it stacked over everything. The top layer's
  * paint is the same paint the planes ride on (paint.h's top layer): the
  * video placed with its hole, the bar an overlay in the edit, --plane-check
  * finding nothing wrong, the box outside not painted, hit or uncovered for
@@ -1003,11 +1004,13 @@ static void plane_fullscreen_container(void)
 {
     Video *v = &s_videos[0];
     plane_page("<!doctype html><style>body{margin:0;background:#123}"
+               "#wrap{transform:translateX(5px);overflow:hidden;width:300px;height:200px}"
                "#c{position:relative;width:400px;height:300px}"
                "#v{position:absolute;left:40px;top:40px;width:320px;height:180px;background:#456}"
                "#bar{position:absolute;left:40px;top:180px;width:320px;height:40px;background:#0a0}"
                "#out{position:fixed;left:600px;top:500px;width:100px;height:50px;background:red;z-index:9999}"
-               "</style><div id=c><video id=v></video><div id=bar></div></div><div id=out></div>");
+               "</style><div id=wrap><div id=c><video id=v></video><div id=bar></div></div></div>"
+               "<div id=out></div>");
     os64_html_node_t *c = (os64_html_node_t *)probe_id("c");
     check(c != NULL && os64_html_set_state(g.page.way.doc, c, OS64_HTML_STATE_FULLSCREEN) == OS64_HTML_OK,
           "planes, full screen: the container's state set");
@@ -1033,6 +1036,8 @@ static void plane_fullscreen_container(void)
           "planes, full screen: the box outside the container not painted, the backdrop there");
     check(plane_screen.surf.pixels[(size_t)10 * 800 + 10] == 0xff000000u,
           "planes, full screen: what the container leaves see-through is the black backdrop");
+    check(plane_screen.surf.pixels[(size_t)200 * 800 + 350] == 0xff00aa00u,
+          "planes, full screen: the bar is painted past the wrapper's clip, where the view puts it");
     check(page_hit(650, 520, scroll_now()) == cb, "planes, full screen: the box outside takes no pointer");
     const flow_box_t *ob = flow_box_for(g.page.tree, probe_id("out"));
     const flow_box_t *bb = flow_box_for(g.page.tree, probe_id("bar"));
