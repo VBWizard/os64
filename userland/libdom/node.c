@@ -8,12 +8,114 @@ static size_t bucket(const os64_html_node_t *node)
     return (key >> 3) % D_BUCKETS;
 }
 
+/* THE DOOR to a node's wrapper: every lookup of the record for a node goes
+ * through here, and a dead record is no wrapper. */
 DValue *d_find(os64_dom_t *dom, const os64_html_node_t *node)
 {
     DValue **table = dom->cluster ? dom->cluster->buckets : dom->buckets;
     for (DValue *entry = table[bucket(node)]; entry != NULL; entry = entry->hash_next)
-        if (entry->node == node) return entry;
+        if (entry->node == node && !entry->dead) return entry;
     return NULL;
+}
+
+void d_view_keep(const DValue *owner, DValue *view)
+{
+    view->holder = JS_VALUE_GET_PTR(JS_DupValueRT(owner->dom->engine, owner->value));
+}
+
+void d_view_mark(JSRuntime *rt, const DValue *view, JS_MarkFunc *mark)
+{
+    if (view != NULL && view->holder != NULL) JS_MarkValue(rt, JS_MKPTR(JS_TAG_OBJECT, view->holder), mark);
+}
+
+void d_view_release(JSRuntime *rt, DValue *view)
+{
+    if (view == NULL || view->holder == NULL) return;
+    void *holder = view->holder;
+    view->holder = NULL;
+    JS_FreeValueRT(rt, JS_MKPTR(JS_TAG_OBJECT, holder));
+}
+
+void d_view_class_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark)
+{
+    d_view_mark(rt, JS_GetOpaque(value, JS_GetClassID(value)), mark);
+}
+
+void d_view_class_finalize(JSRuntime *rt, JSValue value)
+{
+    d_view_release(rt, JS_GetOpaque(value, JS_GetClassID(value)));
+    JS_SetOpaque(value, NULL);
+}
+
+static void mark_kept(JSRuntime *rt, const DValue *view, JS_MarkFunc *mark)
+{
+    if (view != NULL) JS_MarkValue(rt, view->value, mark);
+}
+
+static void mark_kept_query(JSRuntime *rt, const DQuery *query, JS_MarkFunc *mark)
+{
+    if (query != NULL && query->entry != NULL) JS_MarkValue(rt, query->entry->value, mark);
+}
+
+/* Each count the record owns: its listeners' callbacks, and the views it
+ * keeps (VIEWS), its attached Attrs among them. */
+void d_node_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark)
+{
+    const DValue *entry = JS_GetOpaque(value, JS_GetClassID(value));
+    if (entry == NULL) return;
+    for (const DListener *listener = entry->listeners; listener != NULL; listener = listener->next)
+        if (listener->engine) JS_MarkValue(rt, listener->callback, mark);
+    mark_kept_query(rt, entry->child_nodes, mark);
+    if (entry->attrs_attached) d_attrs_mark(rt, entry, mark);
+    const DValueMore *more = entry->more;
+    if (more == NULL) return;
+    const DValue *const records[] = {
+        more->style, more->class_list, more->rel_list, more->for_list, more->dataset, more->attributes,
+        more->sheet, more->validity, more->files, more->implementation, more->canvas_object,
+    };
+    for (size_t i = 0; i < sizeof(records) / sizeof(records[0]); i++)
+        mark_kept(rt, records[i], mark);
+    const DQuery *const queries[] = {
+        more->children, more->images, more->forms, more->links, more->scripts, more->elements, more->options,
+        more->selected_options, more->labels, more->members, more->bodies, more->style_sheets,
+    };
+    for (size_t i = 0; i < sizeof(queries) / sizeof(queries[0]); i++)
+        mark_kept_query(rt, queries[i], mark);
+    for (const DQuery *query = more->radio_lists; query != NULL; query = query->radio_next)
+        mark_kept_query(rt, query, mark);
+    d_adopted_mark(rt, more, mark);
+}
+
+JSValue d_holder_take(os64_dom_t *dom, const os64_html_node_t *node)
+{
+    /* A closed binding's records are freed after its engine is gone, so
+     * they take no engine value; in a cluster, neither may a wrapper be
+     * made on a member that has closed, whose drain has passed. */
+    if (node == NULL || dom->closed) return JS_UNDEFINED;
+    if (dom->cluster) {
+        uint8_t slot = os64_html_node_creation_realm(node);
+        if (slot >= dom->cluster->count || dom->cluster->members[slot]->closed) return JS_UNDEFINED;
+    }
+    os64_js_outcome_t access;
+    JSContext *ctx = os64_js_realm_context(dom->realm, OS64_JS_ABI_ID, &access);
+    if (ctx == NULL) return JS_UNDEFINED;
+    JSValue wrapper = d_wrap(dom, ctx, node);
+    if (!JS_IsException(wrapper)) return wrapper;
+    JS_FreeValue(ctx, JS_GetException(ctx));
+    return JS_UNDEFINED;
+}
+
+DValue *d_wrap_record(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, JSValue *held)
+{
+    *held = d_wrap(dom, ctx, node);
+    if (JS_IsException(*held)) return NULL;
+    DValue *entry = JS_GetOpaque(*held, dom->node_class);
+    if (entry == NULL) {
+        JS_FreeValue(ctx, *held);
+        *held = JS_UNDEFINED;
+        JS_ThrowTypeError(ctx, "Missing node wrapper");
+    }
+    return entry;
 }
 
 os64_dom_t *d_owner(os64_dom_t *dom, const os64_html_node_t *node)
@@ -111,6 +213,13 @@ static DValue *wrapper_prepare(os64_dom_t *dom, JSContext *ctx,
 {
     DValue *entry = d_alloc_kind(dom, sizeof(*entry), OS64_DOM_MEM_WRAPPER);
     if (entry == NULL) { d_error(ctx, "QuotaExceededError", "DOM wrapper quota exceeded"); return NULL; }
+    /* An image's room on `images`, so wrapper_attach cannot fail. */
+    if (node->ns == OS64_HTML_NS_HTML && node->tag == OS64_HTML_TAG_IMG &&
+        !d_turn_list_room(dom, &dom->images, dom->nimages, &dom->images_cap, dom->nimages + 1)) {
+        d_free(dom, entry);
+        d_error(ctx, "QuotaExceededError", "DOM wrapper quota exceeded");
+        return NULL;
+    }
     JSValue value = JS_NewObjectProtoClass(ctx, JS_IsObject(prototype) ? prototype :
         d_node_prototype(dom, node), dom->node_class);
     if (JS_IsException(value)) { d_free(dom, entry); return NULL; }
@@ -132,6 +241,10 @@ static JSValue wrapper_attach(os64_dom_t *dom, JSContext *ctx, DValue *entry,
     DValue **table = dom->cluster ? dom->cluster->buckets : dom->buckets;
     entry->hash_next = table[slot];
     table[slot] = entry;
+    if (node->ns == OS64_HTML_NS_HTML && node->tag == OS64_HTML_TAG_IMG) {
+        dom->images[dom->nimages++] = entry;
+        d_images_moved(dom);
+    }
     return JS_DupValue(ctx, entry->value);
 }
 
@@ -210,11 +323,19 @@ const os64_html_node_t *d_node(os64_dom_t *dom, JSContext *ctx, JSValueConst val
 /* Native verbs preflight and migrate state before publishing changes.
  * The borrowed adoption scope lets reactions queue adoption between source
  * removal and destination connection, including an unwrapped detached run. */
+void d_documents_moved(os64_dom_t *dom, const os64_html_node_t *parent, const os64_html_node_t *node)
+{
+    if (!node || !parent || os64_html_node_document(node) == os64_html_node_document(parent)) return;
+    os64_dom_t *from = d_owner(dom, node);
+    d_images_moved(dom);
+    if (from != dom) d_images_moved(from);
+}
 int64_t d_insert(os64_dom_t *dom, os64_html_node_t *parent, os64_html_node_t *node,
                   os64_html_node_t *before)
 {
     dom = d_owner(dom, parent);
     d_ranges_sweep(dom);
+    d_documents_moved(dom, parent, node);
     DAdopting scope;
     d_adopting_begin(dom, &scope, node, parent);
     int64_t status = os64_page_node_insert(dom->state, parent, node, before);
@@ -232,6 +353,7 @@ int64_t d_replace(os64_dom_t *dom, os64_html_node_t *parent, os64_html_node_t *n
 {
     dom = d_owner(dom, parent);
     d_ranges_sweep(dom);
+    d_documents_moved(dom, parent, node);
     DAdopting scope;
     d_adopting_begin(dom, &scope, node, parent);
     int64_t status = os64_page_node_replace(dom->state, parent, node, old);
@@ -625,7 +747,7 @@ static JSValue method(JSContext *ctx, JSValueConst self, int argc,
         DString string = {0};
         if (!d_string(dom, ctx, argv[0], &string)) return JS_EXCEPTION;
         JSValue result = JS_NULL;
-        if (magic == D_GET_TAG) result = d_collection(dom, ctx, node, true, true, string.data);
+        if (magic == D_GET_TAG) result = d_collection(dom, ctx, node, true, true, string.data, NULL);
         else if (string.length != 0) {
             for (const os64_html_node_t *at = node->first_child; at != NULL; at = d_walk_next(node, at)) {
                 const os64_html_attr_t *id = os64_html_attr(at, "id");
@@ -800,4 +922,41 @@ int d_node_install(os64_dom_t *dom, JSContext *ctx)
     if(d_svg_geometry_prototypes(dom,ctx)<0)return -1;
     if (d_shadow_prototypes(dom, ctx) < 0 || d_data_prototypes(dom, ctx) < 0) return -1;
     return d_geometry_install(dom, ctx);
+}
+
+size_t os64_dom_wrappers(const os64_dom_t *dom, const os64_html_node_t **out, size_t cap, os64_dom_wrappers_t *counts)
+{
+    *counts = (os64_dom_wrappers_t){0};
+    if (dom == NULL || dom->document == NULL)
+        return 0;
+    const os64_html_node_t *root = dom->document->document;
+    size_t n = 0;
+    for (const DValue *entry = dom->values; entry != NULL; entry = entry->next) {
+        if (entry->node == NULL || !JS_IsObject(entry->value) || JS_GetClassID(entry->value) != dom->node_class)
+            continue;
+        counts->wrappers++;
+        if (os64_html_shadow_including_root(entry->node) == root) {
+            counts->connected++;
+            continue;
+        }
+        counts->elsewhere++;
+        // The registry's own reference is one; any other is script's,
+        // another engine value's (a closure, a property, a queued job), or
+        // one of the binding's holders' (a view, a queued record).
+        if (__js_rc(JS_VALUE_GET_PTR(entry->value))->ref_count == 1)
+            counts->elsewhere_only_ours++;
+        if (n < cap)
+            out[n] = entry->node;
+        n++;
+    }
+    for (const DQuery *query = dom->queries; query != NULL; query = query->next) {
+        if (query->dead) {
+            counts->collections_dead++;
+            continue;
+        }
+        counts->collections++;
+        if (query->entry == NULL)
+            counts->collections_script++;
+    }
+    return n;
 }

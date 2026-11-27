@@ -35,6 +35,8 @@ LIBDOM_SRCS += libdom/frames.c
 LIBDOM_SRCS += libdom/media.c libdom/video.c
 # AUDIO_YONDER.md § Y.6: navigator.mediaSession, the media keys' door.
 LIBDOM_SRCS += libdom/media_session.c
+# VIDEO.md § 9: the Fullscreen API.
+LIBDOM_SRCS += libdom/fullscreen.c
 # P2a: a script's failures, as the window's error and rejection events.
 LIBDOM_SRCS += libdom/report.c
 # P1-Da: the document's state reads and document.body's setter.

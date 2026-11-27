@@ -204,13 +204,48 @@ void d_query_free(os64_dom_t *dom, DQuery *query)
     d_free(dom, query);
 }
 
+void d_query_finalize(JSRuntime *rt, JSValue value)
+{
+    DQuery *query = JS_GetOpaque(value, JS_GetClassID(value));
+    if (query == NULL) return;
+    JS_FreeValueRT(rt, query->holder);
+    query->holder = JS_UNDEFINED;
+    if (query->entry == NULL) {
+        query->dead = true;
+        query->dom->queries_dead = true;
+    }
+}
+
+void d_query_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark)
+{
+    DQuery *query = JS_GetOpaque(value, JS_GetClassID(value));
+    if (query != NULL) JS_MarkValue(rt, query->holder, mark);
+}
+
+void d_queries_sweep(os64_dom_t *dom)
+{
+    if (!dom->queries_dead) return;
+    dom->queries_dead = false;
+    for (DQuery **link = &dom->queries; *link != NULL;) {
+        DQuery *query = *link;
+        if (query->dead) {
+            *link = query->next;
+            d_query_free(dom, query);
+        } else {
+            link = &query->next;
+        }
+    }
+}
+
 JSValue d_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *root,
-                     bool descendants, bool elements, const char *name)
+                     bool descendants, bool elements, const char *name, const DValue *keeper)
 {
     if (!d_context(dom, ctx, OS64_JS_ABI_ID)) return JS_EXCEPTION;
+    d_queries_sweep(dom);
     DQuery *query = d_alloc_kind(dom, sizeof(*query), OS64_DOM_MEM_COLLECTION);
     if (query == NULL) return d_error(ctx, "QuotaExceededError", "DOM query quota exceeded");
     query->dom = dom;
+    query->holder = JS_UNDEFINED;
     query->root = root;
     os64_html_hold(dom->document, root);
     query->descendants = descendants;
@@ -228,17 +263,32 @@ JSValue d_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *ro
         os64_memcpy(query->folded, name, size);
         d_fold(query->folded);
     }
+    JSValue holder = keeper != NULL ? JS_DupValue(ctx, keeper->value) : d_wrap(dom, ctx, root);
+    if (JS_IsException(holder)) { d_query_free(dom, query); return holder; }
     JSValue object = JS_NewObjectClass(ctx, dom->collection_class);
-    if (JS_IsException(object)) { d_query_free(dom, query); return object; }
-    /* Set opaque only after native registry storage exists; a failed registry
-     * allocation frees the engine object without a dangling query pointer. */
-    DValue *entry = d_retain(dom, ctx, object);
-    if (entry == NULL) { d_query_free(dom, query); return JS_EXCEPTION; }
+    if (JS_IsException(object)) {
+        JS_FreeValue(ctx, holder);
+        d_query_free(dom, query);
+        return object;
+    }
+    if (keeper != NULL) {
+        /* Set opaque only after native registry storage exists; a failed
+         * registry allocation frees the engine object without a dangling
+         * query pointer. */
+        DValue *entry = d_retain(dom, ctx, object);
+        if (entry == NULL) {
+            JS_FreeValue(ctx, holder);
+            d_query_free(dom, query);
+            return JS_EXCEPTION;
+        }
+        query->entry = entry;
+        object = JS_DupValue(ctx, object);
+    }
+    query->holder = holder;
     JS_SetOpaque(object, query);
-    query->entry = entry;
     query->next = dom->queries;
     dom->queries = query;
-    return JS_DupValue(ctx, object);
+    return object;
 }
 
 static JSValue as_node_list(os64_dom_t *dom, JSContext *ctx, JSValue collection);
@@ -258,7 +308,7 @@ JSValue d_children(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *root
     if (query != NULL) return JS_DupValue(ctx, query->entry->value);
     DValueMore *more = elements ? d_more(dom, ctx, entry) : NULL;
     if (elements && more == NULL) return JS_EXCEPTION;
-    JSValue value = d_collection(dom, ctx, root, false, elements, NULL);
+    JSValue value = d_collection(dom, ctx, root, false, elements, NULL, entry);
     if (!elements) value = as_node_list(dom, ctx, value);
     if (JS_IsException(value)) return value;
     query = JS_GetOpaque(value, dom->collection_class);
@@ -275,7 +325,7 @@ JSValue d_labels(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *contro
     if (d_more_peek(entry)->labels != NULL) return JS_DupValue(ctx, d_more_peek(entry)->labels->entry->value);
     DValueMore *more = d_more(dom, ctx, entry);
     if (more == NULL) return JS_EXCEPTION;
-    JSValue value = d_special_collection(dom, ctx, control, D_QUERY_LABELS, NULL);
+    JSValue value = d_special_collection(dom, ctx, control, D_QUERY_LABELS, NULL, entry);
     if (JS_IsException(value)) return value;
     /* refresh() roots it at the control's tree, whose root moves with it. */
     DQuery *query = JS_GetOpaque(value, dom->collection_class);
@@ -708,7 +758,7 @@ JSValue d_select(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *root,
 }
 
 JSValue d_special_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *root,
-                             unsigned kind, const char *named)
+                             unsigned kind, const char *named, const DValue *keeper)
 {
     char *copy = NULL;
     if (named != NULL) {
@@ -717,7 +767,7 @@ JSValue d_special_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_no
         if (copy == NULL) return d_error(ctx,"QuotaExceededError","DOM named collection quota exceeded");
         os64_memcpy(copy, named, len);
     }
-    JSValue result = d_collection(dom, ctx, root, true, true, NULL);
+    JSValue result = d_collection(dom, ctx, root, true, true, NULL, keeper);
     if (JS_IsException(result)) { d_free(dom, copy); return result; }
     DQuery *query = JS_GetOpaque(result, dom->collection_class);
     query->kind = kind;
@@ -730,14 +780,11 @@ DQuery *d_table_query(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *o
     if (!d_context(dom, ctx, OS64_JS_ABI_ID)) return NULL;
     /* The owner may be a node no script has touched (a row's table, asked
      * for its rowIndex): its entry is made with its wrapper. */
-    JSValue wrapper = d_wrap(dom, ctx, owner);
-    if (JS_IsException(wrapper)) return NULL;
-    JS_FreeValue(ctx, wrapper);
-    DValue *entry = d_find(dom, owner);
-    if (entry == NULL) {
-        JS_ThrowTypeError(ctx, "Missing node wrapper");
-        return NULL;
-    }
+    JSValue held;
+    DValue *entry = d_wrap_record(dom, ctx, owner, &held);
+    if (entry == NULL) return NULL;
+    /* The record outlives `held`: the registry owns the wrapper. */
+    JS_FreeValue(ctx, held);
     DValueMore *more = d_more(dom, ctx, entry);
     if (more == NULL) return NULL;
     DQuery **made = kind == D_QUERY_TBODIES ? &more->bodies : &more->members;
@@ -745,7 +792,7 @@ DQuery *d_table_query(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *o
     /* Children, but for a table's rows, which reach into its sections,
      * and a map's areas, which may lie anywhere below it. */
     bool descendants = kind == D_QUERY_TABLE_ROWS || kind == D_QUERY_AREAS;
-    JSValue value = d_collection(dom, ctx, owner, descendants, true, NULL);
+    JSValue value = d_collection(dom, ctx, owner, descendants, true, NULL, entry);
     if (JS_IsException(value)) return NULL;
     DQuery *query = JS_GetOpaque(value, dom->collection_class);
     query->kind = kind;
@@ -773,7 +820,7 @@ JSValue d_attribute_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_
     DString string = {0};
     if (!d_string(dom, ctx, text, &string)) return JS_EXCEPTION;
     JSValue result = d_special_collection(dom, ctx, root, by_name ? D_QUERY_NAME : D_QUERY_CLASSES,
-                                          string.data);
+                                          string.data, NULL);
     d_string_free(dom, &string);
     /* getElementsByName's answer is a NodeList, getElementsByClassName's an
      * HTMLCollection. */
@@ -791,7 +838,7 @@ JSValue d_radio_list(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *fo
     DValueMore *more = entry != NULL ? d_more(dom, ctx, entry) : NULL;
     if (entry != NULL && more == NULL) return JS_EXCEPTION;
     /* refresh() roots a form's controls at the document its form is in. */
-    JSValue value = d_special_collection(dom, ctx, form, D_QUERY_CONTROLS, name);
+    JSValue value = d_special_collection(dom, ctx, form, D_QUERY_CONTROLS, name, more != NULL ? entry : NULL);
     if (JS_IsException(value)) return value;
     DQuery *query = JS_GetOpaque(value, dom->collection_class);
     query->owner = form;
@@ -910,7 +957,7 @@ JSValue d_style_sheets(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *
     if (d_more_peek(entry)->style_sheets != NULL) return JS_DupValue(ctx, d_more_peek(entry)->style_sheets->entry->value);
     DValueMore *more = d_more(dom, ctx, entry);
     if (more == NULL) return JS_EXCEPTION;
-    JSValue value = d_special_collection(dom, ctx, document, D_QUERY_SHEETS, NULL);
+    JSValue value = d_special_collection(dom, ctx, document, D_QUERY_SHEETS, NULL, entry);
     if (JS_IsException(value)) return value;
     DQuery *query = JS_GetOpaque(value, dom->collection_class);
     /* Its entries are reached by index alone, as a NodeList's are. */

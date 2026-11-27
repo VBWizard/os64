@@ -352,7 +352,8 @@ a codec we decode); everything else `""`. The day AAC is configured in,
 `emptied`, `stalled`, `loadedmetadata`, `loadeddata`, `canplay`,
 `canplaythrough`, `playing`, `waiting`, `seeking`, `seeked`, `ended`,
 `durationchange`, `timeupdate` (every 250 ms while playing, as other
-browsers do), `play`, `pause`, `ratechange`, `volumechange`. Twenty-two.
+browsers do; one at most waits undelivered, and `progress` likewise, so a
+page slower than the clock hears one when it gets there), `play`, `pause`, `ratechange`, `volumechange`. Twenty-two.
 `addEventListener` hears any type today; the `on…` handler properties
 come from a bit per event type in a 64-bit mask with 13 bits free. **The
 mask is widened to 128 bits** in this arc — the alternative, `on…`

@@ -50,11 +50,22 @@ typedef struct DMediaElement DMediaElement;
 typedef struct DMediaTask {
     struct DMediaTask *next;
     DMediaElement *media;
+    JSValue wrapper;                /* the element's, while queued (HOLDERS) */
     const char *type;               /* the event, NULL to only settle */
     uint8_t settle;
+    uint8_t clocked;                /* its CLOCKED_* bit, 0 for an event of a change */
     DMediaPromise *promises;        /* the task's own */
     uint32_t promise_count;
 } DMediaTask;
+
+/* The events the element fires on a clock while it plays or loads, not at
+ * a change of state: `timeupdate` every 250 ms of play and `progress` every
+ * 350 ms of arrival. HTML asks for them only "if the handler is keeping
+ * up", so one undelivered of each per element is the most ever queued
+ * (queue_clocked): a page slower than the clock hears one when it gets
+ * there, not a backlog. The event carries nothing of its time: the
+ * handler reads currentTime and buffered when it runs, which is then. */
+enum { CLOCKED_TIMEUPDATE = 1, CLOCKED_PROGRESS = 2 };
 
 struct DMediaElement {
     DMediaElement *next;
@@ -89,6 +100,9 @@ struct DMediaElement {
     double seek_to;
     uint64_t seek_generation;
     uint64_t last_timeupdate_ms, last_progress_ms;
+    /* The clocked events (CLOCKED_*) queued and not yet delivered: one of
+     * each at most (queue_clocked). */
+    uint8_t clocked_queued;
     double last_arrived;
     int error;
     char message[96];
@@ -206,6 +220,7 @@ static void queue(os64_dom_t *dom, DMediaElement *m, const char *type, uint8_t s
     DMediaTask *t = d_alloc(dom, sizeof(*t));
     if (t == NULL) return;
     t->media = m;
+    t->wrapper = d_holder_take(dom, m->node);
     t->type = type;
     t->settle = settle;
     if (settle != SETTLE_NONE) {
@@ -217,6 +232,26 @@ static void queue(os64_dom_t *dom, DMediaElement *m, const char *type, uint8_t s
     if (s->tail != NULL) s->tail->next = t;
     else s->head = t;
     s->tail = t;
+}
+
+/* A clocked event (CLOCKED_*) for `m`, unless one of that kind is queued
+ * and not yet delivered. */
+static void queue_clocked(os64_dom_t *dom, DMediaElement *m, const char *type, uint8_t bit)
+{
+    if (m->clocked_queued & bit) return;
+    DMediaTask *tail = dom->media_elements->tail;
+    queue(dom, m, type, SETTLE_NONE);
+    if (dom->media_elements->tail != tail) {
+        dom->media_elements->tail->clocked = bit;
+        m->clocked_queued |= bit;
+    }
+}
+
+/* A task leaves the queue, delivered or dropped: its element may queue
+ * another of its clocked kind. */
+static void task_leaves(DMediaTask *t)
+{
+    if (t->clocked != 0 && t->media != NULL) t->media->clocked_queued &= (uint8_t)~t->clocked;
 }
 
 static void promises_release(os64_dom_t *dom, DMediaPromise *p, uint32_t count)
@@ -315,6 +350,7 @@ static void media_load(os64_dom_t *dom, JSContext *ctx, DMediaElement *m)
             DMediaTask *t = *link;
             if (t->media != m) { last = t; link = &t->next; continue; }
             *link = t->next;
+            task_leaves(t);
             for (uint32_t i = 0; i < t->promise_count; i++) {
                 DMediaPromise *p = &t->promises[i];
                 JSValue arg = JS_UNDEFINED;
@@ -330,6 +366,7 @@ static void media_load(os64_dom_t *dom, JSContext *ctx, DMediaElement *m)
                 JS_FreeValue(ctx, arg);
             }
             promises_release(dom, t->promises, t->promise_count);
+            JS_FreeValueRT(dom->engine, t->wrapper);
             d_free(dom, t);
         }
         s->tail = last;
@@ -425,6 +462,8 @@ static void session_wake(os64_dom_t *dom, DMediaElement *m)
     if (m->session == NULL) {
         m->error = OS64_DOM_MEDIA_ERR_NETWORK;
         set_message(m, "The sound could not be loaded again");
+        if (dom->media_provider.failed != NULL && m->current_src != NULL)
+            dom->media_provider.failed(dom->media_provider.opaque, m->node, NULL, m->current_src, m->error, m->message);
         m->error_seen = true;
         queue(dom, m, "error", SETTLE_NONE);
         return;
@@ -497,6 +536,9 @@ static void select_resource(os64_dom_t *dom, DMediaElement *m)
         m->current_src = copy_text(dom, url);
     d_free(dom, url);
     if (m->current_src == NULL) {
+        if (dom->media_provider.failed != NULL)
+            dom->media_provider.failed(dom->media_provider.opaque, m->node, NULL, reference,
+                                       OS64_DOM_MEDIA_ERR_SRC_NOT_SUPPORTED, "The address does not resolve");
         source_failed(dom, m, "The address does not resolve");
         return;
     }
@@ -515,6 +557,9 @@ static void select_resource(os64_dom_t *dom, DMediaElement *m)
                                    all ? OS64_DOM_MEDIA_PRELOAD_AUTO : OS64_DOM_MEDIA_PRELOAD_METADATA)
         : NULL;
     if (m->session == NULL) {
+        if (dom->media_provider.failed != NULL)
+            dom->media_provider.failed(dom->media_provider.opaque, m->node, NULL, m->current_src,
+                                       OS64_DOM_MEDIA_ERR_SRC_NOT_SUPPORTED, "The sound could not be loaded");
         source_failed(dom, m, "The sound could not be loaded");
         return;
     }
@@ -569,6 +614,10 @@ static void fold_facts(os64_dom_t *dom, DMediaElement *m)
     if (f.error != 0 && !m->error_seen) {
         m->error_seen = true;
         f.message[sizeof(f.message) - 1] = '\0';
+        if (dom->media_provider.failed != NULL)
+            dom->media_provider.failed(dom->media_provider.opaque, m->node, m->session, m->current_src,
+                                       m->ready == R_NOTHING ? OS64_DOM_MEDIA_ERR_SRC_NOT_SUPPORTED : f.error,
+                                       f.message);
         if (m->ready == R_NOTHING) {
             source_failed(dom, m, f.message);
             return;
@@ -605,7 +654,7 @@ static void fold_facts(os64_dom_t *dom, DMediaElement *m)
         if (f.arrived != m->last_arrived && now - m->last_progress_ms >= 350) {
             m->last_arrived = f.arrived;
             m->last_progress_ms = now;
-            queue(dom, m, "progress", SETTLE_NONE);
+            queue_clocked(dom, m, "progress", CLOCKED_PROGRESS);
         }
         if (f.loaded) {
             if (f.arrived != m->last_arrived || m->last_progress_ms == 0) queue(dom, m, "progress", SETTLE_NONE);
@@ -636,7 +685,7 @@ static void fold_facts(os64_dom_t *dom, DMediaElement *m)
         if (f.position > m->played_end) m->played_end = f.position;
         if ((f.sounding || f.running) && now - m->last_timeupdate_ms >= 250) {
             m->last_timeupdate_ms = now;
-            queue(dom, m, "timeupdate", SETTLE_NONE);
+            queue_clocked(dom, m, "timeupdate", CLOCKED_TIMEUPDATE);
         }
     }
     /* The end with loop on: the host loops by itself when loop was on as
@@ -797,6 +846,7 @@ bool os64_dom_media_fire(os64_dom_t *dom, os64_js_outcome_t *outcome)
     DMediaTask *t = s->head;
     s->head = t->next;
     if (s->head == NULL) s->tail = NULL;
+    task_leaves(t);
     char name[OS64_JS_SOURCE_NAME_CAP];
     os64_snprintf(name, sizeof(name), "%.*s#media-%s", (int)(sizeof(name) - 40),
                   dom->url != NULL ? dom->url : "about:blank", t->type != NULL ? t->type : "settle");
@@ -819,6 +869,7 @@ bool os64_dom_media_fire(os64_dom_t *dom, os64_js_outcome_t *outcome)
     }
     d_task_close(dom, name, outcome);
     promises_release(dom, t->promises, t->promise_count);
+    JS_FreeValueRT(dom->engine, t->wrapper);
     d_free(dom, t);
     return true;
 }
@@ -831,7 +882,9 @@ static void tasks_drop(os64_dom_t *dom)
     while (s->head != NULL) {
         DMediaTask *t = s->head;
         s->head = t->next;
+        task_leaves(t);
         promises_release(dom, t->promises, t->promise_count);
+        JS_FreeValueRT(dom->engine, t->wrapper);
         d_free(dom, t);
     }
     s->tail = NULL;

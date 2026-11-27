@@ -57,6 +57,7 @@
 extern bool test_window_minimum_clamp(void);
 extern bool test_window_opacity(void);
 extern bool test_window_title(void);
+extern bool test_planes(void);
 extern bool test_bell(void);
 extern bool test_window_maximized(void);
 extern bool test_surface_blit(void);
@@ -81,6 +82,11 @@ static bool g_framework_initialized = false;
 
 bool test_vma_file_backed_page_fault_resolved(void);
 bool test_vma_partial_page_bss_zero_filled(void);
+bool test_handle_table_grows(void);
+bool test_handle_table_ceiling(void);
+bool test_handle_table_no_grow_in_teardown(void);
+bool test_task_va_reserve(void);
+bool test_vma_list_doors(void);
 bool test_pty_publication_hold(void);
 bool test_pty_resize_modes(void);
 bool test_pty_history(void);
@@ -288,23 +294,43 @@ static bool test_allocator_try_refuses(void)
     return true;
 }
 
-// A stack a program declared, refused, degrades (SCRIPT_STACK.md): the
-// fallible stack allocator answers NULL for more than all memory, panics
-// nothing, reserves nothing, and the refusal is counted, so createThread's
-// fallback to the default can run (Codex #441 rd1).
+// A stack a program declared, refused, degrades (SCRIPT_STACK.md), and a
+// thread a program asked for, refused, is no thread (task.c § Stacks): a
+// stack's fallible frames answer 0 for more than all memory, panic nothing,
+// change no books, and the refusal is counted (Codex #441 rd1). Its range
+// is taken only after its frames, so a refusal here takes none.
 static bool test_stack_try_refuses(void)
 {
     allocator_stats_t before, after;
     allocator_stats(&before, 0);
-    uintptr_t next = task_reserve_task_virt(kKernelTask, 0);    // the counter, unmoved
-    void *got = task_try_guarded_stack(kKernelTask, (before.frames_usable + 1) * PAGE_SIZE, false);
+    uintptr_t got = task_stack_frames((before.frames_usable + 1) * PAGE_SIZE, true);
     allocator_stats(&after, 0);
-    if (got != NULL)
-        TEST_FAIL("task_try_guarded_stack of more than all memory answered a stack");
-    if (task_reserve_task_virt(kKernelTask, 0) != next)
-        TEST_FAIL("a refused stack reserved address space");
+    if (got != 0)
+        TEST_FAIL("task_stack_frames of more than all memory answered frames");
     if (after.free_bytes != before.free_bytes || after.refusals != before.refusals + 1)
         TEST_FAIL("a refused stack changed the books, or was not counted");
+    return true;
+}
+
+// ktask's own draw (ktask_reserve_virt) serves ktask alone, whole pages
+// only, and never reaches the fixed windows at TASK_ARGV_VIRT; a refusal
+// moves nothing, so the next draw follows the last one granted.
+static bool test_ktask_reserve_virt(void)
+{
+    task_t other = {0};   // a task not on kKernelPML4
+    if (ktask_reserve_virt(&other, PAGE_SIZE) != 0)
+        TEST_FAIL("ktask_reserve_virt served a task that is not ktask");
+    uintptr_t a = ktask_reserve_virt(kKernelTask, PAGE_SIZE);
+    if (a == 0 || (a & (PAGE_SIZE - 1)) != 0)
+        TEST_FAIL("ktask_reserve_virt refused ktask a page");
+    if (ktask_reserve_virt(kKernelTask, PAGE_SIZE + 1) != 0 || ktask_reserve_virt(kKernelTask, 0) != 0)
+        TEST_FAIL("ktask_reserve_virt took a size that is not whole pages");
+    if (ktask_reserve_virt(kKernelTask, TASK_ARGV_VIRT) != 0 ||
+        ktask_reserve_virt(kKernelTask, TASK_ARGV_VIRT - a) != 0)
+        TEST_FAIL("ktask_reserve_virt handed out a range reaching TASK_ARGV_VIRT");
+    uintptr_t b = ktask_reserve_virt(kKernelTask, PAGE_SIZE);
+    if (b != a + PAGE_SIZE)
+        TEST_FAIL("a refused draw moved ktask's counter");
     return true;
 }
 
@@ -536,12 +562,7 @@ static bool test_vma_insert_and_lookup(void)
 	}
 
 	memset(task, 0, sizeof(task_t));
-
-	task->mmaps = kmalloc(sizeof(dlist_t));
-	if (!task->mmaps) {
-		TEST_FAIL("test_vma: failed to allocate mmaps list");
-	}
-	dlist_init(task->mmaps);
+	maplist_init(&task->mmaps);
 
 	uintptr_t start = 0x100000;
 	uintptr_t end = 0x102000;
@@ -552,18 +573,20 @@ static bool test_vma_insert_and_lookup(void)
 
 	vma_add(task, vma);
 
-	vma_t* found = vma_lookup(task, 0x101000);
+	vma_t* found = vma_lookup_hold(task, 0x101000);
 	if (!found || found != vma) {
-		TEST_FAIL("vma_lookup failed to find inserted VMA");
+		TEST_FAIL("vma_lookup_hold failed to find inserted VMA");
 	}
+	vma_release(task, found);
 
-    found = vma_lookup(task, 0x11101000);
+    found = vma_lookup_hold(task, 0x11101000);
     if (found)
-        TEST_FAIL("vma_lookup found inserted VMA when it should not have");
+        TEST_FAIL("vma_lookup_hold found inserted VMA when it should not have");
 
-    dlist_destroy(task->mmaps);
-	kfree(task->mmaps);
-	vma_destroy(vma);
+	if (!vma_delist(task, vma))   // unheld, so the delist frees it
+		TEST_FAIL("vma_delist did not delist a listed VMA");
+	if (task->mmaps.head != NULL || task->mmaps.count != 0)
+		TEST_FAIL("vma_delist left the list non-empty");
 	kfree(task);
 
 	return true;
@@ -590,10 +613,7 @@ bool test_vma_page_fault_resolved()
     bool ok = wasUnmapped && (after != 0 && after != 0xbadbadba) && (*ptr == 0xBEEFCAFE);
 
     paging_unmap_page((pt_entry_t *)task->pml4v, test_addr);
-    if (task->mmaps != NULL && vma->listItem != NULL) {
-        dlist_remove(task->mmaps, vma->listItem);
-    }
-    vma_destroy(vma);
+    vma_delist(task, vma);   // unheld, so the delist frees it
 
     return ok;
 }
@@ -819,9 +839,6 @@ static bool test_task_arena_create_and_destroy(void)
         TEST_FAIL("No current task available for testing");
     }
 
-    // Save original next virtual address
-    uintptr_t orig_next_virt = task->taskMemoryNextVirt;
-
     task_arena_t *arena = task_arena_create(task, 4096);
     if (arena == NULL) {
         TEST_FAIL("task_arena_create returned NULL");
@@ -853,9 +870,6 @@ static bool test_task_arena_create_and_destroy(void)
 
     task_arena_destroy(arena);
 
-    // Restore original next virtual address for cleanup
-    task->taskMemoryNextVirt = orig_next_virt;
-
     return true;
 }
 
@@ -865,8 +879,6 @@ static bool test_task_arena_alloc_and_convert(void)
     if (task == NULL) {
         TEST_FAIL("No current task available for testing");
     }
-
-    uintptr_t orig_next_virt = task->taskMemoryNextVirt;
 
     task_arena_t *arena = task_arena_create(task, 4096);
     if (arena == NULL) {
@@ -914,7 +926,6 @@ static bool test_task_arena_alloc_and_convert(void)
     }
 
     task_arena_destroy(arena);
-    task->taskMemoryNextVirt = orig_next_virt;
 
     return true;
 }
@@ -925,8 +936,6 @@ static bool test_task_arena_aligned_alloc(void)
     if (task == NULL) {
         TEST_FAIL("No current task available for testing");
     }
-
-    uintptr_t orig_next_virt = task->taskMemoryNextVirt;
 
     task_arena_t *arena = task_arena_create(task, 8192);
     if (arena == NULL) {
@@ -959,7 +968,6 @@ static bool test_task_arena_aligned_alloc(void)
     }
 
     task_arena_destroy(arena);
-    task->taskMemoryNextVirt = orig_next_virt;
 
     return true;
 }
@@ -971,7 +979,6 @@ static bool test_task_arena_exhaustion(void)
         TEST_FAIL("No current task available for testing");
     }
 
-    uintptr_t orig_next_virt = task->taskMemoryNextVirt;
 
     // Create a small arena (will be rounded to PAGE_SIZE)
     task_arena_t *arena = task_arena_create(task, 4096);
@@ -999,7 +1006,6 @@ static bool test_task_arena_exhaustion(void)
     }
 
     task_arena_destroy(arena);
-    task->taskMemoryNextVirt = orig_next_virt;
 
     return true;
 }
@@ -1063,9 +1069,7 @@ static bool test_vma_cow_write(void)
 
     // Cleanup: unmap, remove VMA, free both physical pages.
     paging_unmap_page((pt_entry_t *)task->pml4v, test_addr);
-    if (task->mmaps != NULL && vma->listItem != NULL)
-        dlist_remove(task->mmaps, vma->listItem);
-    vma_destroy(vma);
+    vma_delist(task, vma);   // unheld, so the delist frees it
     free_memory(orig_phys);
     kfree((void *)(new_phys | kHHDMOffset)); // new_phys was kmalloc_aligned in the CoW handler
 
@@ -6387,6 +6391,7 @@ static void register_builtin_tests(void)
 	// Pre-boot, beside the allocator's own refusal test: after kKernelTask
 	// exists, and before any other task allocates under the books it reads.
 	test_register("stack_try_refuses", test_stack_try_refuses, TEST_PHASE_PREBOOT);
+	test_register("ktask_reserve_virt", test_ktask_reserve_virt, TEST_PHASE_PREBOOT);
 	test_register("allocator_zero_after_free", test_allocator_zero_after_free, TEST_PHASE_PREBOOT);
 	test_register("fpu_state_round_trip", test_fpu_state_round_trip, TEST_PHASE_PREBOOT);
 	test_register("fpu_image_on_this_cpu", test_fpu_image_on_this_cpu, TEST_PHASE_PREBOOT);
@@ -6399,6 +6404,7 @@ static void register_builtin_tests(void)
     test_register("arena_reset", test_arena_reset, TEST_PHASE_PREBOOT);
     test_register("arena_growth", test_arena_growth, TEST_PHASE_PREBOOT);
     test_register("vma_insert_and_lookup", test_vma_insert_and_lookup, TEST_PHASE_PREBOOT);
+    test_register("vma_list_doors", test_vma_list_doors, TEST_PHASE_PREBOOT);
     test_register("vma_page_fault_resolved", test_vma_page_fault_resolved, TEST_PHASE_PREBOOT);
     test_register("vma_cow_write", test_vma_cow_write, TEST_PHASE_PREBOOT);
     test_register("env_create_empty",        test_env_create_empty,          TEST_PHASE_PREBOOT);
@@ -6421,6 +6427,10 @@ static void register_builtin_tests(void)
     test_register("vma_partial_page_bss_zero_filled", test_vma_partial_page_bss_zero_filled, TEST_PHASE_POSTBOOT);
     test_register("elf_loader", test_elf_loader, TEST_PHASE_POSTBOOT);
     test_register("dynamic_linking", test_dynamic_linking, TEST_PHASE_POSTBOOT);
+    test_register("handle_table_grows", test_handle_table_grows, TEST_PHASE_POSTBOOT);
+    test_register("handle_table_ceiling", test_handle_table_ceiling, TEST_PHASE_POSTBOOT);
+    test_register("handle_table_no_grow_in_teardown", test_handle_table_no_grow_in_teardown, TEST_PHASE_POSTBOOT);
+    test_register("task_va_reserve", test_task_va_reserve, TEST_PHASE_POSTBOOT);
     test_register("pty_publication_hold", test_pty_publication_hold, TEST_PHASE_POSTBOOT);
     test_register("pty_history", test_pty_history, TEST_PHASE_POSTBOOT);
     test_register("pty_resize_modes", test_pty_resize_modes, TEST_PHASE_POSTBOOT);
@@ -6441,6 +6451,7 @@ static void register_builtin_tests(void)
     test_register("bell", test_bell, TEST_PHASE_LATE);
     test_register("window_opacity", test_window_opacity, TEST_PHASE_LATE);
     test_register("window_title", test_window_title, TEST_PHASE_LATE);
+    test_register("planes", test_planes, TEST_PHASE_LATE);
     test_register("window_maximized", test_window_maximized, TEST_PHASE_LATE);
     test_register("ext2_real_partition", test_ext2_real_partition, TEST_PHASE_POSTBOOT);
     test_register("mount_table", test_mount_table, TEST_PHASE_POSTBOOT);

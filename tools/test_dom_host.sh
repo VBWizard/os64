@@ -11,7 +11,7 @@ for name in core node collection content inner_text event timer window geometry 
     storage performance url encoding screen base64 implementation attr exception abort blob fetch xhr \
     browsing crypto subtle subtle_core report document frames clone message idle animation webanimation pointer options selection importmap controls elements tables \
     forms validity compare custom observer streams \
-    sheets point rect intersection resize kept css svg_geometry image_data canvas canvas_path canvas_path2d canvas_text canvas_image mutation walker shadow adopted range data_nodes hit media video media_session blob_url file_reader; do
+    sheets point rect intersection resize kept css svg_geometry image_data canvas canvas_path canvas_path2d canvas_text canvas_image mutation walker shadow adopted range data_nodes hit media video media_session fullscreen blob_url file_reader; do
     test -f "userland/libdom/$name.c" || { echo "libdom implementation pending: $name.c" >&2; exit 1; }
 done
 # THE ONE DOOR (attr.c): libdom sets and removes attributes through d_set_attr
@@ -34,6 +34,10 @@ flags=(-O2 -g -std=gnu11 -Wall -Wextra -Werror -ffreestanding -fno-builtin
     -Iuserland/libgarb/include -Iuserland/libway/include -Iuserland/libpage/upstream/ryu -Iuserland/libos64/include -Iabi/include
     -Iuserland/libtls/upstream/inc -isystem userland/obj/js/upstream -fsanitize=address,undefined -fno-sanitize-recover=all
     '-DGARB_MODERN_PROBE="animation-name"')
+# DOM_GC_STRESS=1: a whole engine collection at each of libdom's safe points
+# (report.c d_safe_point), so every mark is checked by the engine's
+# assertions many times over.
+if [ "${DOM_GC_STRESS:-0}" = 1 ]; then flags+=(-DOS64_DOM_GC_STRESS); fi
 # The probe marks a property the Modern Web arc did not add, so the binding's
 # side of the mark (a style member that goes with the switch) has one to
 # hold to (tools/test_dom_modern.inc); libgarb's own suite proves the rest.
@@ -67,7 +71,7 @@ for name in core node collection content inner_text event timer window geometry 
     storage performance url encoding screen base64 implementation attr exception abort blob fetch xhr \
     browsing crypto subtle subtle_core report document frames clone message idle animation webanimation pointer options selection importmap controls elements tables \
     forms validity compare custom observer streams \
-    sheets point rect intersection resize kept css svg_geometry image_data canvas canvas_path canvas_path2d canvas_text canvas_image mutation walker shadow adopted range data_nodes hit media video media_session blob_url file_reader; do
+    sheets point rect intersection resize kept css svg_geometry image_data canvas canvas_path canvas_path2d canvas_text canvas_image mutation walker shadow adopted range data_nodes hit media video media_session fullscreen blob_url file_reader; do
     object="$work/dom-$name.o"
     cc "${flags[@]}" -Dd_alloc=dom_host_private_alloc -Dos64_malloc=dom_host_malloc -Dos64_calloc=dom_host_calloc \
         -Dos64_realloc=dom_host_realloc -Dos64_free=dom_host_free \

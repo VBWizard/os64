@@ -555,7 +555,7 @@ APP_EXTRA_LIBS_$(1) := $(if $(filter $(1),yonder),$(LIBSVG_SO) $(LIBDRAW2D_SO)) 
                        $(if $(filter $(1),$(LIBPNG_PROGRAMS)),$(LIBPNG_SO)) \
                        $(if $(filter $(1),$(LIBFETCH_PROGRAMS)),$(LIBFETCH_SO)) \
                        $(if $(filter $(1),$(LIBTLS_PROGRAMS)),$(LIBTLS_SO)) \
-                       $(if $(filter $(1),bearssltest tlstrusttest tlsinputtest sshd sshtest),$(BEARSSL_ARCHIVE))
+                       $(if $(filter $(1),bearssltest tlstrusttest tlsinputtest sshd sshtest porter),$(BEARSSL_ARCHIVE))
 APP_BASE_STAMP_$(1) := $(OBJ)/$(2)/$(1)/.base-$(APP_BASE_$(1))
 $$(APP_BASE_STAMP_$(1)):
 	@mkdir -p "$$(dir $$@)"
@@ -670,6 +670,12 @@ $(foreach a,$(OPTIMIZED_APPS),\
 SSH_CFLAGS := -O2 -I$(CURDIR)/libtls/port/include
 $(OBJ)/apps/sshd/%.c.o: CFLAGS += $(SSH_CFLAGS)
 $(OBJ)/tests/sshtest/%.c.o: CFLAGS += $(SSH_CFLAGS)
+PORTER_CFLAGS := -I$(CURDIR)/libtls/port/include -I$(CURDIR)/libtls/upstream/inc
+$(OBJ)/apps/porter/%.c.o: CFLAGS += $(PORTER_CFLAGS)
+# yonder's --plane-check composes with the kernel's own blend (plane_blend.c
+# includes kernel/src/gui/plane_compose.c, whose header is the kernel's).
+PLANE_BLEND_CFLAGS := -I$(CURDIR)/../kernel/include
+$(OBJ)/apps/yonder/plane_blend.c.o: CFLAGS += $(PLANE_BLEND_CFLAGS)
 
 # A program that calls FFmpeg compiles against its headers (libav/shared.mk).
 $(foreach p,$(LIBAV_PROGRAMS),\
@@ -691,7 +697,7 @@ $(if $(call flags_same,$(strip $(2)),$(strip $(file <$(1)))),,$(file >$(1),$(str
 endef
 $(shell mkdir -p $(OBJ)/flags)
 $(eval $(call flags_stamp,$(PIC_FLAGS_STAMP),$(LIBOS64_CFLAGS) | $(LIBGZIP_CFLAGS) | $(LIBPNG_CFLAGS) | $(LIBFETCH_CFLAGS)))
-$(eval $(call flags_stamp,$(STATIC_FLAGS_STAMP),$(CFLAGS) | $(OPTIMIZED_APPS) | $(OPTIMIZED_CFLAGS) | $(SSH_CFLAGS) | $(LIBAV_PROGRAMS) | $(LIBAV_CONSUMER_CFLAGS)))
+$(eval $(call flags_stamp,$(STATIC_FLAGS_STAMP),$(CFLAGS) | $(OPTIMIZED_APPS) | $(OPTIMIZED_CFLAGS) | $(SSH_CFLAGS) | $(PORTER_CFLAGS) | $(PLANE_BLEND_CFLAGS) | $(LIBAV_PROGRAMS) | $(LIBAV_CONSUMER_CFLAGS)))
 
 $(OBJ)/%.c.o: %.c $(STATIC_FLAGS_STAMP)
 	@mkdir -p "$(dir $@)"

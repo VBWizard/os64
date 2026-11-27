@@ -1,0 +1,39 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>A video's session ends while it is on its plane</title>
+<!--
+  VIDEO_PLANE.md § 5, P3's rule that no black hole is left where a video
+  was. While the video is on its plane the page paints a see-through hole
+  where its picture goes; when its session ends the plane is hidden, in the
+  same turn, and the page paints the last picture back there.
+
+  "Remove the source" takes the video's src away while the page stays: the
+  box keeps the last picture, as it does with no plane. "Slow navigation"
+  goes to a page that takes four seconds to arrive (served by
+  tools/pages_serve.py, `?delay=4000`): this page and its video stay on the
+  glass until then, and the new page takes its place whole.
+
+  `?remove=MS` removes the source by itself after MS milliseconds, and
+  `?go=MS` starts the slow navigation after MS, for a run with no hands.
+-->
+<style>
+  body { font: 16px sans-serif; margin: 16px; background: #223; color: #ddd; }
+  video { display: block; width: 480px; background: #678; }
+</style>
+<h1>A video's session ends while it is on its plane</h1>
+<video id="v" src="bbb-480p-3s-av.mp4" autoplay muted loop></video>
+<p><input type="button" id="remove" value="Remove the source">
+   <a id="slow" href="http://10.0.2.2:8731/video.html?delay=4000">Slow navigation</a>
+   <span id="state"></span></p>
+<script>
+  const v = document.getElementById('v');
+  const state = document.getElementById('state');
+  function remove() { v.removeAttribute('src'); v.load(); state.textContent = 'source removed'; }
+  document.getElementById('remove').addEventListener('click', remove);
+  const asks = new URLSearchParams(location.search);
+  if (asks.get('remove')) setTimeout(remove, Number(asks.get('remove')));
+  if (asks.get('go')) setTimeout(function () {
+    state.textContent = 'navigating';
+    location.href = document.getElementById('slow').href;
+  }, Number(asks.get('go')));
+</script>

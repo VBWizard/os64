@@ -39,7 +39,19 @@ extern os64_image_status_t fixture_gif_sequence_next(os64_image_sequence_t *);
  * (tools/test_dom_media.inc) plays the element against a fake host. */
 void yonder_media_start(const yonder_media_env_t *env) { (void)env; }
 void yonder_media_stop(void) {}
-yonder_media_t *yonder_media_open(const yonder_media_request_t *r) { (void)r; return NULL; }
+/* Unless `fake_media_on`: then a session opens and plays, a long clip
+ * whose position follows yonder's clock from `fake_media_began`, for the
+ * loop's fairness case (a media event always ready). */
+static bool fake_media_on;
+static bool fake_media_failing, fake_media_failure_taken;
+static uint64_t fake_media_began;
+static int fake_media_session;
+uint64_t yonder_now_ms(void);
+yonder_media_t *yonder_media_open(const yonder_media_request_t *r)
+{
+    (void)r;
+    return fake_media_on ? (yonder_media_t *)&fake_media_session : NULL;
+}
 void yonder_media_close(yonder_media_t *m) { (void)m; }
 void yonder_media_play(yonder_media_t *m) { (void)m; }
 void yonder_media_pause(yonder_media_t *m) { (void)m; }
@@ -48,9 +60,72 @@ void yonder_media_settings(yonder_media_t *m, double gain, bool muted, bool loop
 bool yonder_media_frame(yonder_media_t *m, int64_t blank, int64_t period, os64_media_player_frame_t *out)
 { (void)m; (void)blank; (void)period; memset(out, 0, sizeof(*out)); return false; }
 void yonder_media_size(yonder_media_t *m, uint32_t width, uint32_t height) { (void)m; (void)width; (void)height; }
+/* A player with a plane, for the planes' cases (test_yonder_planes.inc):
+ * its facts, and `shown` a picture of its own. Off, there is no player. */
+static struct {
+    bool on;
+    os64_media_player_facts_t facts;
+    const uint32_t *pixels;
+    uint32_t w, h, serial;
+    int pins, asks;
+    bool want;
+    int64_t gap;            /* what the next plane_gap_take answers */
+} fake_plane;
 bool yonder_media_player_facts(yonder_media_t *m, os64_media_player_facts_t *out)
-{ (void)m; memset(out, 0, sizeof(*out)); return false; }
-void yonder_media_facts(yonder_media_t *m, os64_dom_media_facts_t *out) { (void)m; memset(out, 0, sizeof(*out)); }
+{
+    (void)m;
+    memset(out, 0, sizeof(*out));
+    if (!fake_plane.on)
+        return false;
+    *out = fake_plane.facts;
+    return true;
+}
+bool yonder_media_plane_ask(yonder_media_t *m, int64_t win) { (void)m; (void)win; fake_plane.asks++; return true; }
+void yonder_media_plane_want(yonder_media_t *m, bool want) { (void)m; fake_plane.want = want; }
+int64_t yonder_media_plane_gap_take(yonder_media_t *m) { (void)m; int64_t g = fake_plane.gap; fake_plane.gap = 0; return g; }
+bool yonder_media_shown(yonder_media_t *m, os64_media_player_view_t *out)
+{
+    (void)m;
+    memset(out, 0, sizeof(*out));
+    if (!fake_plane.on || fake_plane.pixels == NULL)
+        return false;
+    *out = (os64_media_player_view_t){fake_plane.pixels, fake_plane.w, fake_plane.h, fake_plane.serial, &fake_plane};
+    fake_plane.pins++;
+    return true;
+}
+void yonder_media_shown_done(yonder_media_t *m, os64_media_player_view_t *view)
+{
+    (void)m;
+    if (view->frame != NULL)
+        fake_plane.pins--;
+    memset(view, 0, sizeof(*view));
+}
+void yonder_media_facts(yonder_media_t *m, os64_dom_media_facts_t *out)
+{
+    memset(out, 0, sizeof(*out));
+    if (m != (yonder_media_t *)&fake_media_session)
+        return;
+    out->probed = out->seekable = out->current = out->future = out->enough = out->loaded = true;
+    out->duration = out->arrived = 3600;
+    out->sounding = true;
+    out->position = (double)(yonder_now_ms() - fake_media_began) / 1000.0;
+    if (fake_media_failing) {
+        out->error = 3;
+        snprintf(out->message, sizeof(out->message), "damaged past decoding");
+    }
+}
+/* A failure's line, for the fake session when `fake_media_failing` says
+ * the next facts fail: given once, as media.c gives it. */
+bool yonder_media_failure_take(yonder_media_t *m, int code, char *out, size_t cap)
+{
+    static const char *const kClass[] = {"error", "aborted", "network", "decode", "not supported"};
+    if (m != (yonder_media_t *)&fake_media_session || !fake_media_failing || fake_media_failure_taken)
+        return false;
+    fake_media_failure_taken = true;
+    snprintf(out, cap, "http://x.test/v.mp4: video 1, %s: damaged past decoding (HTTP 200, video/mp4, "
+             "4096 bytes received, the first request)", kClass[code >= 1 && code <= 4 ? code : 3]);
+    return true;
+}
 bool yonder_media_report(uint32_t i, char *out, size_t cap) { (void)i; (void)out; (void)cap; return false; }
 size_t yonder_media_seconds(double s, char *out, size_t cap) { (void)s; if (cap > 0) out[0] = '\0'; return 0; }
 int yonder_media_can_play(const char *type) { (void)type; return 0; }
@@ -935,6 +1010,7 @@ static yonder_page_memory_t probe_page_memory;  /* the next probe_page's documen
  * from one handed the window's. */
 static const way_identity_t s_window_identity={.hints="sec-ch-ua: \"Window\";v=\"1\"\r\n",.language="en"};
 static void probe_page(const char *html, bool scripts) {
+    yonder_canvas_keeps_free(g.canvas_keeps);       /* made at a paint, as the window's close frees them */
     os64_memset(&g,0,sizeof(g));
     /* A new page, a new window: the cases set the window's clock back
      * between pages, which a real clock never does, so the frames start
@@ -2101,6 +2177,7 @@ static void motion_cases(void) {
     memset(g.page.way.url,'a',sizeof(g.page.way.url)-1);
     g.page.way.url[sizeof(g.page.way.url)-1]='\0';
     g.scripts_on=true;
+    s_diag.on=true;     /* the scripts' mode is said with diagnostics on */
     say_laid_out(MOTION_COST_MS+1);
     size_t len=strlen(g.status_text);
     const char *modes="SCRIPTS ON | ANIMATIONS PAUSED: the layout took 201 ms, over 200 | aaa";
@@ -2111,6 +2188,10 @@ static void motion_cases(void) {
     check(strcmp(g.status_text,"SCRIPTS ON | ANIMATIONS PAUSED: the layout took 201 ms, over 200 | "
                  "Page says: hello")==0,
         "motion: a message in the status row keeps the pause said before it");
+    s_diag.on=false;
+    status_rest("Page says: hello");
+    check(strcmp(g.status_text,"ANIMATIONS PAUSED: the layout took 201 ms, over 200 | Page says: hello")==0,
+        "status: with diagnostics off, scripts running are not said, and the pause still is");
     g.scripts_on=false;
     os64_strcopy(g.page.way.url,sizeof(g.page.way.url),was);
     free(was);
@@ -2725,6 +2806,55 @@ static void input_key(char ascii) {
     os64_gui_event_t ev={.type=OS64_GUI_EVENT_KEY_DOWN,.key={.ascii=ascii}};
     if(!key_event(&ev) && !password_key(&ev)) os64_ui_dispatch(&g.ui,&ev);
     inputs_run();
+}
+/* THE READING CHORD: Ctrl+Shift+D is yonder's alone, taken before any key
+ * reaches the page or a control. A page with a focused field and a keydown
+ * handler that cancels every key, and logs any key it hears: the chord
+ * takes a reading, and the page hears nothing of it. Exactly Ctrl and
+ * Shift: with Alt too it is no chord (Ctrl+Alt with a letter is the window
+ * manager's, which never hands it on), nor is Ctrl alone. This hands the
+ * event to yonder directly, past the window manager; the key sent at the
+ * keyboard is proved in QEMU. */
+static void reading_chord_case(void) {
+    char was_dir[sizeof(s_diag.dir)];
+    memcpy(was_dir,s_diag.dir,sizeof(was_dir));
+    snprintf(s_diag.dir,sizeof(s_diag.dir),"/tmp/diag");
+    probe_page("<p id=log>-</p><input id=field value=x>"
+        "<script>document.addEventListener('keydown',function(e){e.preventDefault();"
+        "document.getElementById('log').textContent='heard '+e.key},true);"
+        "document.addEventListener('keypress',function(e){e.preventDefault()},true);</script>",true);
+    script_turn();
+    FormWidget *field=probe_field("field");
+    os64_ui_set_focus(&g.ui,field->w);
+    bool own_record=g.page.diag==NULL;
+    if(own_record) g.page.diag=yonder_diag_new("http://fixture.test/chord",1,0);
+    bool was_running=g.running;
+    g.running=true;
+    s_cost_readings=0; s_reading_keys=0;
+    os64_gui_event_t chord={.type=OS64_GUI_EVENT_KEY_DOWN,.key={.ascii='D'&0x1F,.modifiers=OS64_GUI_MOD_CTRL|OS64_GUI_MOD_SHIFT}};
+    window_event(NULL,&chord);
+    inputs_run();
+    script_turn();
+    check(s_cost_readings==1 && probe_text_is("log","-") && os64_streq(field->text,"x"),
+          "reading chord: Ctrl+Shift+D takes a reading through a focused field and a page that cancels every key, "
+          "and the page hears nothing of it");
+    os64_gui_event_t not_chord=chord;
+    check(reading_chord(&chord),"reading chord: Ctrl and Shift with the control code is the chord");
+    not_chord.key.modifiers=OS64_GUI_MOD_CTRL|OS64_GUI_MOD_SHIFT|OS64_GUI_MOD_ALT;
+    check(!reading_chord(&not_chord),"reading chord: with Alt too it is not");
+    not_chord.key.modifiers=OS64_GUI_MOD_CTRL;
+    check(!reading_chord(&not_chord),"reading chord: nor with Ctrl alone");
+    not_chord.key.modifiers=OS64_GUI_MOD_CTRL|OS64_GUI_MOD_SHIFT|OS64_GUI_MOD_CAPS;
+    check(reading_chord(&not_chord),"reading chord: Caps Lock on makes no difference");
+    char rec[4096];
+    yonder_diag_render(g.page.diag,rec,sizeof(rec));
+    check(strstr(rec,"\nreading key: pressed 1 times, 1 readings kept\n")!=NULL,
+          "reading chord: the record counts the chord with the readings it kept");
+    g.running=was_running;
+    s_cost_readings=0; s_reading_keys=0;
+    memcpy(s_diag.dir,was_dir,sizeof(was_dir));
+    if(own_record) { yonder_diag_free(g.page.diag); g.page.diag=NULL; }
+    probe_drop();
 }
 static bool status_says(const char *text) { return strstr(g.status_text,text)!=NULL; }
 static void input_links(void) {
@@ -3426,6 +3556,7 @@ static void input_cases(void) {
     yonder_bar_lower(&g.bar);
 
     input_links();
+    reading_chord_case();
     input_activation();
     player_cases();
     input_javascript_links();
@@ -3445,6 +3576,7 @@ static void input_cases(void) {
  * the parser a slice per turn until the page arrives through the same
  * arrive() a worker's page used to take. */
 static void stream_window(void) {
+    yonder_canvas_keeps_free(g.canvas_keeps);       /* as probe_page's */
     os64_memset(&g,0,sizeof(g));
     os64_memset(&s_frames,0,sizeof(s_frames));      /* as probe_page's: the clock goes back between windows */
     g.scripts_on=false; g.way.agent=YONDER_AGENT; g.way.identity=&s_window_identity; g.way.name="yonder";
@@ -5818,10 +5950,12 @@ static void geometry_cases(void)
         "var rects=box.getClientRects();eq(rects.length,1);eq(rects[0].width,150);eq(rects[0].height,50);"
         "box.setAttribute('data-geometry-pass','yes');"
         "</script>",true);
+    s_diag.on=true;     /* the forced layouts are said with diagnostics on */
     check(script_turn(), "geometry script task completes and rebuilds");
     const os64_html_attr_t *passed=os64_html_attr(probe_id("box"),"data-geometry-pass");
     check(passed!=NULL && os64_streq(passed->value,"yes"), "geometry script reaches every numeric assertion");
     check(strstr(g.status_text,"forced 2 layouts") != NULL, "status reports forced layouts and repeated reads reuse them");
+    s_diag.on=false;
     os64_dom_geometry_t value;
     const os64_html_node_t *fixed=probe_id("fixed");
     check(yonder_geometry_snapshot(g.page.way.doc,g.page.tree,fixed,800,600,1000,
@@ -6169,7 +6303,9 @@ static void geometry_failure_cases(void)
     /* One native layout a second longer than the page's whole task budget. */
     int64_t overrun_us=((int64_t)g.script_ms+1000)*1000;
     geometry_layout_delay=overrun_us;
+    s_diag.on=true;     /* the forced layouts are said with diagnostics on */
     script_turn();
+    s_diag.on=false;
     geometry_layout_delay=0;
     clock_us=10000000;
     os64_dom_geometry_stats_t stats=yonder_scripts_geometry_stats(g.page.scripts,false);
@@ -6560,11 +6696,16 @@ static void join_every_kind_counts(void) {
         "join: every kind of task is on its way");
     check(loop_settle() && g.page.tree!=NULL,"join: the counting page arrives");
     now_ms+=50;
+    s_diag.on=true;     /* the forced layouts are said with diagnostics on */
     check(script_turn() && status_says("Script forced 1 layouts in"),
         "join: a timer that forces a layout says so on the status line");
+    s_diag.on=false;
+    status_rest("before the click");
     input_click_at("box");
     check(attr_is(probe_id("box"),"style","height:10px;width:15px"),
         "join: the click listener ran");
+    check(strcmp(g.status_rest,"before the click")==0 && strstr(g.status_text,"Script forced")==NULL,
+        "status: with diagnostics off, a task that forced a layout says nothing and leaves the line");
     check(audit_forced("script http://fixture.test/final#inline-1",1) &&
           audit_forced("script http://fixture.test/final#inline-2",1) &&
           audit_forced("script http://fixture.test/a.js",1),
@@ -6587,7 +6728,9 @@ static void join_click_overrun(void) {
         "b.setAttribute('data-after','bad')});</script>");
     check(loop_settle() && g.page.tree!=NULL && !g.stream.active,"join: the overrunning page arrives");
     geometry_layout_delay=((int64_t)g.script_ms+1000)*1000;
+    s_diag.on=true;     /* the forced layouts are said with diagnostics on */
     input_click_at("go");
+    s_diag.on=false;
     geometry_layout_delay=0;
     clock_us=10000000;
     /* The navigation the link starts writes the status line after it; the
@@ -6685,8 +6828,11 @@ static uint32_t *stand_in_shot(void) {
     view_paint(&g.view,&screen,NULL);
     yonder_paint_cache_free(g.paint_cache); g.paint_cache=NULL;
     yonder_scratch_free(g.paint_scratch); g.paint_scratch=NULL;
+    yonder_canvas_keeps_free(g.canvas_keeps); g.canvas_keeps=NULL;
     return screen.surf.pixels;
 }
+#include "test_yonder_cover.inc"
+#include "test_yonder_planes.inc"
 #include "test_yonder_svg_images.inc"
 #include "test_yonder_canvas.inc"
 #include "test_yonder_animation.inc"
@@ -7196,6 +7342,7 @@ static void classic_browser_cases(void)
  * that includes this file for its fakes (YONDER_HOST_FAKES_ONLY) gets none
  * of it, so the replay runner's every file goes through its own door. */
 #include "test_yonder_layout_profile.inc"
+#include "test_yonder_damage.inc"
 #include "test_yonder_restyle.inc"
 #include "test_yonder_graft.inc"
 
@@ -7859,6 +8006,19 @@ static void diag_lost_distinct_case(void) {
           "diag: a line given room after all is no longer counted as not kept");
     yonder_diag_free(d);
 }
+/* Forgetting one key exactly leaves the lines whose keys begin with it:
+ * the page's script profile goes, its readings stay. */
+static void diag_forget_key_case(void) {
+    yonder_diag_t *d=yonder_diag_new("http://fixture.test/",1,0);
+    static char text[16384];
+    yonder_diag_fact(d,"script profile","now");
+    yonder_diag_reading_fact(d,"script profile reading 1","then");
+    yonder_diag_forget_key(d,"script profile");
+    yonder_diag_render(d,text,sizeof(text));
+    check(strstr(text,"\nscript profile: now\n")==NULL && strstr(text,"\nscript profile reading 1: then\n")!=NULL,
+          "diag: forgetting a key exactly keeps the lines that begin with it");
+    yonder_diag_free(d);
+}
 /* Past the lines the record can tell apart, it says there are more and
  * never counts one twice. */
 static void diag_lost_overflow_case(void) {
@@ -8187,6 +8347,7 @@ static void round_picture_glass_cases(void) {
         view_paint(&g.view,&screen,NULL);
         yonder_paint_cache_free(g.paint_cache); g.paint_cache=NULL;
         yonder_scratch_free(g.paint_scratch); g.paint_scratch=NULL;
+        yonder_canvas_keeps_free(g.canvas_keeps); g.canvas_keeps=NULL;
         shot[i]=screen.surf.pixels;
         probe_drop();
     }
@@ -8424,7 +8585,9 @@ static void diag_page_cases(void) {
         "<script>setTimeout(function(){null.x},50)</script>");
     check(loop_settle() && g.page.tree!=NULL,"diag: a page whose script dies arrives");
     yonder_diag_file_name(g.page.diag,name,sizeof(name));
-    char arrival[4096]; snprintf(arrival,sizeof(arrival),"%s",diag_file("/tmp/diag",name));
+    char arrival[16384]; int arrival_len=snprintf(arrival,sizeof(arrival),"%s",diag_file("/tmp/diag",name));
+    check(arrival_len>0 && (size_t)arrival_len<sizeof(arrival),"diag: the arrival write fits the copy it is compared with");
+    if(arrival_len>=4096) fprintf(stderr,"note: the arrival write is %d bytes\n",arrival_len);
     check(has(arrival,"\nverdict: 1 MISSING, 1 FAILED\nMISSING global nothere (1)\nFAILED script http://fixture.test/final#inline-1: ") &&
         has(arrival,"nothere"),
         "diag: a dying script writes a FAILED line by its source name, and the verdict counts it");
@@ -8835,6 +8998,36 @@ static void diag_keep_cases(void) {
               !has(big,YONDER_DIAG_LINES_LOST) && strlen(big)>4 && !strcmp(big+strlen(big)-4,YONDER_DIAG_END "\n"),
               "keep: 512 ordinary facts and the head's together lose nothing, and the record ends with `end`");
         free(big); yonder_diag_free(d);
+        /* A page whose scripts fill the ordinary room still keeps its `d`
+         * readings, which come late, and forgetting one gives its place
+         * back to the readings' room, not the ordinary one. */
+        d=yonder_diag_new("http://fixture.test/readings",1,0);
+        for(unsigned i=0;i<YONDER_DIAG_FACTS_MAX+5;i++) { char k[16]; snprintf(k,sizeof(k),"script %u",i); yonder_diag_fact(d,k,"ran"); }
+        for(unsigned i=1;i<=YONDER_DIAG_READING_FACTS;i++) { char k[32]; snprintf(k,sizeof(k),"paint reading %u",i); yonder_diag_reading_fact(d,k,"at y 0"); }
+        yonder_diag_reading_fact(d,"paint reading past","at y 0");
+        yonder_diag_forget(d,"paint reading 1");
+        yonder_diag_fact(d,"late ordinary","x");
+        yonder_diag_reading_fact(d,"paint reading again","at y 0");
+        big=malloc(1<<17); yonder_diag_render(d,big,1<<17);
+        check(has(big,"\npaint reading 2: at y 0\n") && has(big,"\npaint reading 64: at y 0\n") &&
+              has(big,"\npaint reading again: at y 0\n") && !has(big,"\npaint reading past:") &&
+              !has(big,"\nlate ordinary:") && !has(big,"\nscript 512:"),
+              "keep: readings have a room of their own, which a full ordinary room leaves them");
+        check(has(big,"\nfacts not kept by kind: plain lines 6, readings 1\n"),
+              "keep: what each room refused is said by kind, so a reading lost is never silent");
+        free(big); yonder_diag_free(d);
+        /* So do the measuring switches' summaries, which a page writes as
+         * it runs, after its scripts have filled the ordinary room. */
+        d=yonder_diag_new("http://fixture.test/summaries",1,0);
+        for(unsigned i=0;i<YONDER_DIAG_FACTS_MAX+5;i++) { char k[16]; snprintf(k,sizeof(k),"script %u",i); yonder_diag_fact(d,k,"ran"); }
+        for(unsigned i=1;i<=YONDER_DIAG_SUMMARY_FACTS;i++) { char k[32]; snprintf(k,sizeof(k),"layout line %u",i); yonder_diag_summary_fact(d,k,"x"); }
+        yonder_diag_summary_fact(d,"layout line past","x");
+        yonder_diag_reading_fact(d,"paint reading 1","at y 0");
+        big=malloc(1<<17); yonder_diag_render(d,big,1<<17);
+        check(has(big,"\nlayout line 1: x\n") && has(big,"\nlayout line 32: x\n") && !has(big,"\nlayout line past:") &&
+              has(big,"\npaint reading 1: at y 0\n"),
+              "keep: the measuring switches' summaries have a room of their own, apart from the readings'");
+        free(big); yonder_diag_free(d);
     }
 
     /* THE NAME IS CLAIMED: another yonder's record at the next number, a
@@ -9134,6 +9327,21 @@ static uint64_t first_text_font(void) {
     }
     return 0;
 }
+/* The font the first text box under the element `id` was drawn in, 0 for
+ * none. */
+static uint64_t text_font_of(const char *id) {
+    const flow_box_t *top=g.page.tree!=NULL ? flow_box_for(g.page.tree,probe_id(id)) : NULL;
+    for(const flow_box_t *b=top;b!=NULL;) {
+        if(b->kind==FLOW_BOX_TEXT && b->run!=NULL) {
+            os64_text_run_view_t v;
+            if(os64_text_run_view(b->run,&v)==OS64_FONT_OK && v.glyph_count>0) return v.glyphs[0].font_identity;
+        }
+        if(b->first) { b=b->first; continue; }
+        while(b!=NULL && b!=top && b->next==NULL) b=b->parent;
+        b=b!=NULL && b!=top ? b->next : NULL;
+    }
+    return 0;
+}
 static int32_t web_file(const char *url) {
     for(int32_t i=0;i<s_web.nfiles;i++) if(!strcmp(s_web.files[i].url,url)) return i;
     return -1;
@@ -9308,7 +9516,7 @@ static void paint_cost_cases(void) {
     snprintf(saved_diagnostics,sizeof(saved_diagnostics),"/tmp/diag");
     check(diag_dir_open()==NULL,"paint counts: the record has a directory");
     web_page("<p>hello");
-    static char rec[8192];
+    static char rec[65536];   /* its readings carry the thread lines too */
     cost_reset();
     diag_paint(&g.page);
     yonder_diag_render(g.page.diag,rec,sizeof(rec));
@@ -9343,6 +9551,88 @@ static void paint_cost_cases(void) {
           strstr(rec,", laid 1.0 (0.0), publish")!=NULL &&
           strstr(rec,"; window 2.0, the view's rest 8.0\n")!=NULL,
           "paint counts: each stage in milliseconds a paint, the window and the view's rest beside them");
+    /* The effects the filters and warps stages spend, told apart: a
+     * backdrop blur twice, and a filtered layer opened at its size and
+     * closed (its open's time and its close's counted together), the
+     * costliest first; what the table has no room for is the rest. A blur
+     * made on a reduced copy says at what reduction; a small one, made at
+     * full size, says nothing more. */
+    effects_reset();
+    effect_counted("backdrop blur(8) 2560x56",5000000);
+    effect_counted("backdrop blur(8) 2560x56",5000000);
+    {
+        flow_filter_t blur={.fn=FLOW_FILTER_BLUR,.amount=12,.shadow.blur=24};
+        char said[40];
+        effect_filters(said,sizeof(said),&blur,1);
+        s_layers_open[0].w=200; s_layers_open[0].h=100; s_layers_open[0].cycles=30000; s_nlayers_open=1;
+        effect_layer_closed("filter",said,70000);
+        flow_filter_t small={.fn=FLOW_FILTER_BLUR,.amount=2,.shadow.blur=4};
+        effect_filters(said,sizeof(said),&small,1);
+        check(strcmp(said,"blur(2)")==0,"paint effects: a blur made at full size names no reduction");
+        flow_filter_t big={.fn=FLOW_FILTER_BLUR,.amount=15,.shadow.blur=30};
+        effect_filters(said,sizeof(said),&big,1);
+        check(strcmp(said,"blur(15) at 1/4")==0,"paint effects: blur(15) is made at a quarter");
+    }
+    diag_paint(&g.page);
+    yonder_diag_render(g.page.diag,rec,sizeof(rec));
+    check(strstr(rec,"\npaint effects: backdrop blur(8) 2560x56: 2, 10.0 ms (5000 us each); "
+                     "filter blur(12) at 1/2 200x100: 1, 0.1 ms (100 us each); boxes handed the painter 0, 0 a paint\n")!=NULL && s_nlayers_open==0,
+          "paint effects: each by what it was, the costliest first, a layer's open and close together");
+    for(int i=0;i<EFFECTS_MAX+3;i++) {
+        char what[24];
+        snprintf(what,sizeof(what),"warp %dx1",i);
+        effect_counted(what,1);
+    }
+    diag_paint(&g.page);
+    yonder_diag_render(g.page.diag,rec,sizeof(rec));
+    check(strstr(rec,"; the rest: 25, 0.0 ms; boxes handed the painter ")!=NULL,
+          "paint effects: past the twelve said and the table's room, the rest counted together");
+    /* The table keeps the costliest, not the first met: a costly kind met
+     * once the table is full of cheap ones heads the line, and the cheap one
+     * whose place it took is in the rest. */
+    effects_reset();
+    for(int i=0;i<EFFECTS_MAX;i++) {
+        char what[24];
+        snprintf(what,sizeof(what),"warp %dx2",i);
+        effect_counted(what,1);
+    }
+    effect_counted("filter blur(4) 9x9",5000000);
+    effect_counted("cheaper than any kept",0);
+    {
+        bool held=false;
+        for(int32_t i=0;i<s_neffects;i++) held|=!strcmp(s_effects[i].what,"cheaper than any kept");
+        check(!held,"paint effects: a kind cheaper than every kind kept goes to the rest");
+    }
+    effect_counted("as cheap as the cheapest",1);
+    {
+        bool held=false;
+        for(int32_t i=0;i<s_neffects;i++) held|=!strcmp(s_effects[i].what,"as cheap as the cheapest");
+        check(held,"paint effects: a kind as costly as the cheapest kept takes its place");
+    }
+    diag_paint(&g.page);
+    yonder_diag_render(g.page.diag,rec,sizeof(rec));
+    check(strstr(rec,"\npaint effects: filter blur(4) 9x9: 1, 5.0 ms (5000 us each); ")!=NULL &&
+          strstr(rec,"; the rest: 23, 0.0 ms; boxes handed the painter ")!=NULL,
+          "paint effects: a costly kind met once the table is full heads the line");
+    /* What a paint draws after a video is counted apart. */
+    effects_reset();
+    effect_counted("fills",3000000);
+    s_effects_past_video=true;
+    effect_counted("fills",1000000);
+    diag_paint(&g.page);
+    yonder_diag_render(g.page.diag,rec,sizeof(rec));
+    check(strstr(rec,"\npaint effects: fills: 1, 3.0 ms (3000 us each); fills over the video: 1, 1.0 ms (1000 us each);")!=NULL,
+          "paint effects: what is drawn after a video, counted apart");
+    effects_reset();
+    check(!s_effects_past_video,"paint effects: the count starting again starts before any video");
+    /* The reading chord's presses beside the readings kept: presses that
+     * kept none (no page files, no record) are said, not left silent. */
+    s_reading_keys=3; s_cost_readings=1;
+    reading_key_fact(&g.page);
+    yonder_diag_render(g.page.diag,rec,sizeof(rec));
+    check(strstr(rec,"\nreading key: pressed 3 times, 1 readings kept; the rest had no page files or no record\n")!=NULL,
+          "readings: presses that kept no reading are counted beside the readings kept");
+    s_reading_keys=0; s_cost_readings=0;
     /* The biggest part marked and by what, the biggest painted, and the
      * marks of the canvases and the form controls (YONDER_DIAGNOSTICS.md §
      * What paints cost). */
@@ -9393,17 +9683,18 @@ static void paint_cost_cases(void) {
               "paint counts: a deadline already past is counted against its source");
         g.settle_due=settle; now_ms=0;
     }
-    /* `d` in the view writes the record on asking and starts the counts again. */
+    /* A reading writes the record on asking and starts the counts again; a
+     * bare `d` is no reading key, the page's like any other key. */
     {
         os64_gui_event_t ev={0};
         ev.key.ascii='d';
-        check(view_key(&ev)==KEY_RECORD,"paint counts: d in the view asks for the record");
+        check(view_key(&ev)==KEY_NONE,"paint counts: a bare d is no key of the view's");
         diag_asked();
         char name[64]; yonder_diag_file_name(g.page.diag,name,sizeof(name));
         const char *file=diag_file("/tmp/diag",name);
         check(has(file,"\nwritten: when asked\n") && has(file,"\npaint reading 1: at y 0: 2 paints in ") &&
               has(file," | ms a paint (most): render 12.0 (13.0)") && s_cost.paints==0 && s_cost.total[PS_RENDER]==0,
-              "paint counts: d keeps the counts as a reading, writes the record, and starts them again");
+              "paint counts: a reading keeps the counts, writes the record, and starts them again");
         s_cost.paints=1; s_cost.total[PS_RENDER]=5000000;
         s_cost.from_cycles=cycles()-1000000000000ull; s_cost.from_us=os64_micros()-1000000000;
         diag_asked();
@@ -10865,10 +11156,68 @@ static void webfont_cases(void) {
         reported |= !strcmp(s_web.families.f[i].name,"Web") && s_web.families.f[i].served==WF_SERVED_PAGE;
     check(reported && (s_web.face_use[0]&WF_USE_LISTED),
           "graft fonts: copied text retains current family and face-use reporting");
+    /* A DOM change with @font-face present moves no font answer: its text
+     * is laid out afresh in the dirty part, and the rest is grafted. */
     uint64_t revision=s_layout_resources.fonts;
     os64_html_set_text(g.page.way.doc,probe_id("font-changed")->first_child,"new characters",14);
+    check(script_rebuild() && s_layout_resources.fonts==revision && last_graft_profile.reused>0,
+          "graft fonts: a DOM change with @font-face present grafts");
+    web_drop();
+    /* Rules that differ only by where an address ends and its format()
+     * begins are different rules: one is readable, the other not. */
+    {
+        garb_face_src_t cut={GARB_FACE_URL,"font.",5,"woff2",5}, whole={GARB_FACE_URL,"font.woff2",10,NULL,0};
+        garb_font_face_t a={.family="F",.family_len=1,.src=&cut,.nsrc=1,.weight_min=400,.weight_max=400};
+        garb_font_face_t b=a;
+        b.src=&whole;
+        check(font_faces_digest(&a,1)!=font_faces_digest(&b,1),
+              "graft fonts: the rules' digest tells where a source's address ends");
+    }
+    /* A face arriving refuses the graft once and its text is drawn in it;
+     * the next change grafts again. */
+    web_page("<!doctype html><style>@font-face{font-family:Web;src:url(web.ttf)}p{font-family:Web}</style>"
+        "<p id=arrive-a>first text</p><p id=arrive-b>second text</p><p>padding</p><p>padding</p>");
+    uint64_t fallback=text_font_of("arrive-a");
+    revision=s_layout_resources.fonts;
+    check(font_land("web.ttf","A",NULL) && s_layout_resources.fonts>revision,
+          "graft fonts: a face arriving moves the fonts revision");
+    pictures_settle();
+    check(!last_graft_profile.reused && text_font_of("arrive-a")!=fallback && text_font_of("arrive-a")!=0,
+          "graft fonts: and the layout after it is whole, its text drawn in the face");
+    os64_html_set_text(g.page.way.doc,probe_id("arrive-b")->first_child,"other text",10);
+    check(script_rebuild() && last_graft_profile.reused>0,"graft fonts: the next change grafts again");
+    web_drop();
+    /* Late text whose characters meet a ranged face nothing met before:
+     * the revision moves (a face newly listed changes the lists of text it
+     * does not draw), the face is asked for, and the text takes it when it
+     * lands. Taking the text away moves nothing (met stays met); a face
+     * yonder cannot read moves nothing when met. */
+    web_page("<!doctype html><style>"
+        "@font-face{font-family:Web;src:url(cjk.ttf);unicode-range:U+4E00-9FFF}"
+        "@font-face{font-family:Web;src:url(cyr.woff2) format(\"woff2\");unicode-range:U+0400-04FF}"
+        "p{font-family:Web}</style>"
+        "<p id=late>latin only</p><p id=still>still here</p><p>padding</p><p>padding</p>");
+    check(web_file("https://fixture.test/cjk.ttf")<0 && nfont_jobs==0,
+          "graft fonts: a ranged face the text does not meet is not asked for");
+    revision=s_layout_resources.fonts;
+    os64_html_set_text(g.page.way.doc,probe_id("late")->first_child,"\xe4\xb8\xad",3);
     check(script_rebuild() && s_layout_resources.fonts>revision && !last_graft_profile.reused,
-          "graft fonts: document character changes invalidate unicode-range-dependent answers");
+          "graft fonts: late text meeting a loadable face moves the revision and lays out whole");
+    webfonts_feed(true);
+    check(web_file("https://fixture.test/cjk.ttf")>=0 && nfont_jobs==1,"graft fonts: and the face is asked for");
+    check(font_land("cjk.ttf","A",NULL),"graft fonts: the late face lands");
+    pictures_settle();
+    /* (Listed, as the record tells it: the fixture's one-byte face draws no
+     * glyph for the character, so the box itself cannot say.) */
+    check((s_web.face_use[0]&WF_USE_LISTED) && !(s_web.face_use[1]&WF_USE_LISTED),
+          "graft fonts: the late text takes the face, and the unreadable one stays out");
+    revision=s_layout_resources.fonts;
+    os64_html_set_text(g.page.way.doc,probe_id("late")->first_child,"latin again",11);
+    check(script_rebuild() && s_layout_resources.fonts==revision && last_graft_profile.reused>0,
+          "graft fonts: taking the text away moves nothing, and grafts");
+    os64_html_set_text(g.page.way.doc,probe_id("still")->first_child,"\xd0\x96",2);
+    check(script_rebuild() && s_layout_resources.fonts==revision && last_graft_profile.reused>0,
+          "graft fonts: meeting a face yonder cannot read moves nothing, and grafts");
     web_drop();
     web_page("<!doctype html><style>@font-face{font-family:Web;src:url(web.ttf)}</style>"
         "<p>text<span id=metric-only style='font-family:Web'></span></p><p>padding</p>");
@@ -11750,6 +12099,7 @@ static void diag_cases(void) {
     diag_css_unasked_case();
     diag_style_case();
     diag_lost_distinct_case();
+    diag_forget_key_case();
     picture_tick_cases();
     picture_text_cases();
     round_picture_glass_cases();
@@ -12397,6 +12747,32 @@ static void ledger_case(void)
               "ledger: the record's ledger lines are written");
     }
     loop_drop();
+    // With the profile on, a reading (the whole of one, as the chord makes
+    // it) writes the functions its span sampled:
+    // the first counts from the page's script's start and says so; one after
+    // the ledger and the counts start again is the span alone.
+    s_ledger = YONDER_LEDGER_PROFILE;
+    loop_page("<p id=out></p><script>function spin(){var x=0;for(var i=0;i<2000000;i++)x+=i%7;return x}"
+              "document.getElementById('out').textContent=''+spin();</script>");
+    settled = loop_settle();
+    host = g.page.scripts != NULL ? g.page.scripts : g.stream.scripts;
+    p = page_of_host(host);
+    check(settled && p != NULL && p->diag != NULL && yonder_scripts_ledger(host) != NULL,
+          "ledger profile: the page's runtime keeps a ledger");
+    if (p != NULL && p->diag != NULL) {
+        diag_paint_reading(p, 1);
+        const char *first = yonder_diag_fact_value(p->diag, "script profile reading 1");
+        check(first != NULL && !strncmp(first, "since the page's script began: ", 31) && strstr(first, " samples") != NULL,
+              "ledger profile: the first reading's profile counts from the script's start");
+        cost_reset();
+        yonder_scripts_ledger_reset(host);
+        diag_paint_reading(p, 2);
+        const char *second = yonder_diag_fact_value(p->diag, "script profile reading 2");
+        check(second != NULL && !strncmp(second, "0 samples", 9),
+              "ledger profile: a reading after the reset is its own span, here with nothing sampled");
+        printf("  profile reading 1: %.200s\n", first ? first : "(none)");
+    }
+    loop_drop();
     s_ledger = YONDER_LEDGER_OFF;
     os64_dom_name_host_functions(false);
     loop_page("<p id=out>off</p><script>document.getElementById('out').textContent='ran';</script>");
@@ -12866,6 +13242,546 @@ static void sheet_worker_cases(void)
  * its own main. */
 #ifndef YONDER_HOST_FAKES_ONLY
 #include "test_yonder_svg_hit.inc"
+/* A MEDIA ELEMENT THAT FAILS IS NAMED (media.h, yonder_media_failure_take):
+ * one FAILED media line on its page's record, and so on the console, by
+ * its address, its kind and place, and why: a session that never began
+ * (no sound here: the hosted open answers none) is the element's network
+ * error, said by yonder itself; one that failed later is media.c's line,
+ * with the class libdom handed the page, taken once however often its
+ * facts are read. */
+static void media_failure_cases(void)
+{
+    probe_page("<!doctype html><audio src=http://x.test/a.mp3></audio><video src=http://x.test/c.mp4></video>"
+               "<audio src=http://x.test/b.mp3></audio><audio src=\"\"></audio>", true);
+    g.page.diag = diag_new_claimed("http://x.test/", 1);
+    for (int i = 0; i < 4; i++) {
+        script_turn();
+        players_ask_run();
+        media_turn();
+    }
+    char text[4096];
+    yonder_diag_render(g.page.diag, text, sizeof(text));
+    check(has(text, "\nFAILED media: http://x.test/a.mp3: audio 1, not supported: it could not begin: no memory, no thread or no sound output (no request made) (1)\n") &&
+          has(text, "\nFAILED media: http://x.test/c.mp4: video 1, not supported: it could not begin: no memory, no thread or no sound output (no request made) (1)\n") &&
+          has(text, "\nFAILED media: http://x.test/b.mp3: audio 2, not supported: it could not begin: no memory, no thread or no sound output (no request made) (1)\n"),
+          "media failed: a session that never began, each element by its kind and place");
+    check(has(text, "\nFAILED media: (no address): audio 3, not supported: The address does not resolve (no request made) (1)\n"),
+          "media failed: an address libdom could not resolve, which never reached the open");
+    if (!has(text, "FAILED media: http://x.test/b.mp3"))
+        printf("%s\n", text);
+    yonder_diag_free(g.page.diag);
+    g.page.diag = NULL;
+    probe_drop();
+
+    fake_media_on = fake_media_failing = true;
+    fake_media_failure_taken = false;
+    fake_media_began = now_ms;
+    probe_page("<!doctype html><video src=http://x.test/v.mp4></video>", true);
+    g.page.diag = diag_new_claimed("http://x.test/", 2);
+    for (int i = 0; i < 6; i++) {
+        now_ms += 300;
+        script_turn();
+        players_ask_run();
+        media_turn();
+    }
+    yonder_diag_render(g.page.diag, text, sizeof(text));
+    check(has(text, "\nFAILED media: http://x.test/v.mp4: video 1, not supported: damaged past decoding (HTTP 200, "
+                    "video/mp4, 4096 bytes received, the first request) (1)\n"),
+          "media failed: a session's own failure before its length, its line taken once with the class the page has");
+    if (!has(text, "FAILED media: http://x.test/v.mp4"))
+        printf("%s\n", text);
+    yonder_diag_free(g.page.diag);
+    g.page.diag = NULL;
+    probe_drop();
+    fake_media_on = fake_media_failing = false;
+}
+
+/* WHAT A SCHEDULE CALL COSTS (pictures_schedule): asked with nothing to do
+ * but find the next deadline, on pages of 200 and 20,000 elements of each
+ * shape a page's growth takes, the bigger page's call may cost three times
+ * the smaller's and 20 us more at most, the slack a timing needs: a call
+ * is made at every turn of the loop, a hundred times a second, and one that
+ * walked the page cost fifty times as much (motion_due's stacked boxes).
+ * Each is the best of three rounds, so a preemption does not fail it. */
+static char *schedule_page(int32_t n, int32_t shape)
+{
+    size_t cap = (size_t)n * 64 + 4096, at = 0;
+    char *html = os64_malloc(cap);
+    at += (size_t)snprintf(html + at, cap - at, "<!doctype html><style>body{margin:0}"
+                           "@keyframes op{to{opacity:.5}}@keyframes hue{to{background-color:blue}}"
+                           ".a{width:40px;height:20px;animation:op 1s linear infinite}"
+                           ".h{display:none;animation:hue 1s linear infinite}.r{position:relative}</style>%s",
+                           shape >= 1 ? "<div class=a></div>" : "");
+    if (shape == 2)
+        at += (size_t)snprintf(html + at, cap - at, "<div class=h>");
+    for (int32_t i = 0; i < n; i++)
+        at += (size_t)snprintf(html + at, cap - at, shape == 3 && i % 10 == 0 ? "<p class=r>x</p>" : "<p>x</p>");
+    if (shape == 2)
+        at += (size_t)snprintf(html + at, cap - at, "</div>");
+    return html;
+}
+
+static double schedule_us(int32_t n, int32_t shape)
+{
+    char *html = schedule_page(n, shape);
+    probe_page(html, false);
+    os64_free(html);
+    relayout(true);
+    for (int32_t i = 0; i < 50; i++)
+        pictures_schedule();
+    double us = INFINITY;
+    for (int32_t round = 0; round < 3; round++) {
+        double began = hover_seconds();
+        for (int32_t i = 0; i < 400; i++)
+            pictures_schedule();
+        double took = (hover_seconds() - began) * 1e6 / 400;
+        us = took < us ? took : us;
+    }
+    probe_drop();
+    return us;
+}
+
+/* AN ANIMATION BEGUN AFTER THE PAGE WAS LAID OUT comes due, and through a
+ * box drawn outside its element: a class gives #far an animation, #far's
+ * own box is far below the view and its positioned #kid is in it, so only
+ * the stacked boxes under an animation (libflow's due_stacked, made with
+ * the layout the class's change asks for) can find it. The record names
+ * it, due or not. */
+static void schedule_late_animation_cases(void)
+{
+    probe_page("<!doctype html><style>body{margin:0}@keyframes op{to{opacity:.2}}"
+               ".on{animation:op 1s linear infinite}#far{margin-top:3000px;height:10px}"
+               "#kid{position:absolute;left:0;top:0;width:50px;height:50px;background:red}</style>"
+               "<div id=far><div id=kid></div></div>", false);
+    relayout(true);
+    check(motion_next() == YONDER_NEVER && tick_next() == YONDER_NEVER, "late animation: at rest, nothing is due");
+    g.page.model_version = g.page.rendered_version = os64_html_version(g.page.way.doc);
+    os64_html_set_attr(g.page.way.doc, probe_id("far"), "class", "on", 2);
+    script_rebuild();
+    motion_painted();
+    if (tick_next() == YONDER_NEVER)
+        printf("  late animation: owed %d, motion %llu, tick %llu, rebuild said %s\n", (int)page_rebuild_owed(&g.page),
+               (unsigned long long)motion_next(), (unsigned long long)tick_next(), s_change_said);
+    check(tick_next() != YONDER_NEVER,
+          "late animation: begun on an element out of view, it is due through its positioned child in view");
+    g.page.diag = diag_new_claimed("http://x.test/", 1);
+    diag_motion(&g.page);
+    char text[4096];
+    yonder_diag_render(g.page.diag, text, sizeof(text));
+    check(has(text, "\nanimated 1: div#far.on (op)"), "late animation: the record names it");
+    if (!has(text, "\nanimated 1: div#far.on (op)"))
+        printf("%s\n", text);
+    yonder_diag_free(g.page.diag);
+    g.page.diag = NULL;
+    probe_drop();
+}
+
+/* WHAT AN ANIMATION IS, ON THE RECORD (diag_motion_what): beside each
+ * `animated N` line, each of its animations by kind and name, the longhand
+ * it sets and that longhand at its first and last keyframe, its timing and
+ * play state, and the element's clock; then the element's inline style and
+ * its computed margin-top and transform, for a page that places an element
+ * by one and moves it by the other. */
+static void motion_what_cases(void)
+{
+    probe_page("<!doctype html><style>body{margin:0}"
+               "@keyframes roll{from{transform:translateY(0)}to{transform:translateY(-20px)}}"
+               ".c{animation:roll 500ms ease-out 100ms 2 alternate forwards;width:10px;height:40px}</style>"
+               "<div class=c id=c style=\"margin-top:-20px\"></div>", false);
+    relayout(true);
+    g.page.diag = diag_new_claimed("http://x.test/", 1);
+    diag_motion(&g.page);
+    char text[4096];
+    yonder_diag_render(g.page.diag, text, sizeof(text));
+    check(has(text, "\nanimated 1.1: the CSS animation roll of transform, matrix(1, 0, 0, 1, 0, 0) to "
+                    "matrix(1, 0, 0, 1, 0, -20), 2 keyframes, 500 ms, delay 100 ms, fill forwards, 2 iterations, "
+                    "alternate, running; its style at "),
+          "motion what: the animation by name, its longhand's first and last keyframe and its timing");
+    check(has(text, "\nanimated 1 style: inline style \"margin-top:-20px\", margin-top -20px, transform none\n"),
+          "motion what: the element's inline style, margin-top and transform before its delay");
+    if (!has(text, "\nanimated 1 style: inline style"))
+        printf("%s\n", text);
+    yonder_diag_free(g.page.diag);
+    g.page.diag = NULL;
+    probe_drop();
+}
+
+static void schedule_cost_cases(void)
+{
+    static const char *const kShapes[] = {"plain", "an animation in view", "and a hidden animated element holding the rest",
+                                          "and every tenth element positioned"};
+    bool was_run = s_animations;
+    s_animations = true;
+    now_ms = 100;
+    for (int32_t shape = 0; shape < 4; shape++) {
+        double small = schedule_us(200, shape), big = schedule_us(20000, shape);
+        char what[160];
+        snprintf(what, sizeof(what), "schedule: a call costs no more on a page 100 times the size (%s)", kShapes[shape]);
+        check(big <= small * 3 + 20, what);
+        if (getenv("YONDER_SCHEDULE_ONLY") != NULL || big > small * 3 + 20)
+            printf("  schedule: %s: %.1f us a call at 200 elements, %.1f at 20000\n", kShapes[shape], small, big);
+    }
+    schedule_late_animation_cases();
+    motion_what_cases();
+    s_animations = was_run;
+}
+
+/* WHO HOLDS THE DETACHED (os64_html_holders, os64_dom_wrappers): a page
+ * whose script makes or touches nodes, removes them and lets them go, then
+ * a rebuild and a whole layout so every reader of the change log has
+ * passed the removal. */
+static void holders_page(const char *script, os64_html_holders_t *h, os64_dom_wrappers_t *w,
+                         os64_html_census_t *c)
+{
+    char html[1024];
+    snprintf(html, sizeof(html), "<!doctype html><div id=box></div><script>const box=document.getElementById('box');"
+                                 "%s</script>", script);
+    probe_page(html, true);
+    for (int t = 0; t < 4; t++)
+        script_turn();
+    relayout(true);
+    script_rebuild();
+    g.page.model_version = g.page.rendered_version = 0;
+    relayout(true);
+    const os64_html_node_t *nodes[256];
+    size_t n = yonder_scripts_wrappers(g.page.scripts, nodes, 256, w);
+    os64_html_holders(g.page.way.doc, nodes, n < 256 ? n : 256, h);
+    os64_html_census(g.page.way.doc, c);
+}
+
+/* A whole engine collection on the page's runtime, as the engine would run
+ * one when its heap grows. */
+static void holders_collect(void)
+{
+    os64_js_outcome_t out;
+    JSContext *ctx = os64_js_context(teardown_fixture_runtime, OS64_JS_ABI_ID, &out);
+    check(ctx != NULL, "holders: the page's runtime is at hand for a collection");
+    if (ctx != NULL)
+        JS_RunGC(JS_GetRuntime(ctx));
+}
+
+static void node_holders_cases(void)
+{
+    os64_html_holders_t h;
+    os64_dom_wrappers_t w;
+    os64_html_census_t c;
+    holders_page("for(let i=0;i<100;i++){const d=document.createElement('div');d.textContent='x';box.appendChild(d);}"
+                 "box.replaceChildren();",
+                 &h, &w, &c);
+    check(c.nodes.held == 200 && h.marked.units == 100 && h.marked.nodes == 200 && h.marked.elements == 100 &&
+              h.log_only.units == 0 && h.other.units == 0 && w.elsewhere == 100 && w.elsewhere_only_ours == 100 &&
+              w.connected >= 1,
+          "holders: nodes a script made, removed and let go are held by their wrappers, which only the registry holds");
+    if (h.marked.nodes != 200 || w.elsewhere_only_ours != 100)
+        printf("  held %lu: wrapped %lu units %lu nodes, log %lu, other %lu; wrappers %lu in %lu elsewhere %lu ours %lu\n",
+               (unsigned long)c.nodes.held, (unsigned long)h.marked.units, (unsigned long)h.marked.nodes,
+               (unsigned long)h.log_only.nodes, (unsigned long)h.other.nodes, (unsigned long)w.wrappers,
+               (unsigned long)w.connected, (unsigned long)w.elsewhere, (unsigned long)w.elsewhere_only_ours);
+    probe_drop();
+    holders_page("box.innerHTML='<div>x</div>'.repeat(100);box.innerHTML='';", &h, &w, &c);
+    check(c.nodes.held == 0 && c.nodes.pinned == 201 && w.elsewhere == 0,
+          "holders: nodes no script touched wait to be collected once removed");
+    probe_drop();
+    holders_page("box.innerHTML='<div>x</div>'.repeat(100);for(const k of box.children)k.id='t';box.innerHTML='';",
+                 &h, &w, &c);
+    check(c.nodes.held == 200 && h.marked.units == 100 && h.marked.nodes == 200 && w.elsewhere == 100 &&
+              w.elsewhere_only_ours == 100,
+          "holders: a child a script touched once is held by its wrapper after it is removed, its text with it");
+    probe_drop();
+    holders_page("for(let i=0;i<10;i++){const d=document.createElement('div');box.appendChild(d);}"
+                 "window.kept=box.firstChild;box.replaceChildren();",
+                 &h, &w, &c);
+    check(h.marked.units == 10 && w.elsewhere == 10 && w.elsewhere_only_ours == 9,
+          "holders: a wrapper the script still reaches is not one only the registry holds");
+    probe_drop();
+    holders_page("box.innerHTML='<script>1<\\/script>'.repeat(50);box.innerHTML='';", &h, &w, &c);
+    check(c.nodes.held == 0 && h.other.units == 0,
+          "holders: scripts parsed started and removed are not held by their mark");
+    probe_drop();
+    /* A collection made for one call is the script's: once dropped and
+     * collected it waits, and the next one made frees it. One the script
+     * keeps stays live and follows the tree. */
+    holders_page("for(let i=0;i<200;i++)document.getElementsByTagName('p');"
+                 "window.list=box.getElementsByTagName('i');"
+                 "setTimeout(()=>{box.appendChild(document.createElement('i'));"
+                 "box.dataset.r=String(list.length)+' '+String(document.getElementsByTagName('b').length);},100);",
+                 &h, &w, &c);
+    holders_collect();
+    yonder_scripts_wrappers(g.page.scripts, NULL, 0, &w);
+    /* The engine may have collected, and a later call or safe point swept,
+     * some or all of the 200 already: what is left is dead, and the kept one
+     * is not. */
+    check(w.collections_script == 1 && w.collections_dead <= 200,
+          "holders: the dropped collections die with their objects, the one kept does not");
+    now_ms += 200;
+    script_turn();
+    yonder_scripts_wrappers(g.page.scripts, NULL, 0, &w);
+    const os64_html_attr_t *r = os64_html_attr(probe_id("box"), "data-r");
+    /* The timer's own collection was dropped as it returned: at most it is
+     * dead now. */
+    check(r != NULL && r->value != NULL && strcmp(r->value, "1 0") == 0 && w.collections_dead <= 1 &&
+              w.collections_script == 1,
+          "holders: the next collection made frees the dead, and the kept one is live");
+    if (r == NULL || r->value == NULL || strcmp(r->value, "1 0") != 0 || w.collections_dead > 1)
+        printf("  data-r %s, collections %lu, the script's %lu, dead %lu\n",
+               r != NULL && r->value != NULL ? r->value : "(none)", (unsigned long)w.collections,
+               (unsigned long)w.collections_script, (unsigned long)w.collections_dead);
+    probe_drop();
+}
+
+/* WHAT A WRAPPER'S LIFETIME MUST KEEP: identity and what the page hung on
+ * a node survive while any node of its tree is reachable, across tasks — a
+ * removed subtree's child, its root found again from the child, a listener,
+ * an observer's record, a collection. Each case writes its answer to
+ * #box's data-r. */
+static const char *wrapper_case(const char *script)
+{
+    char html[2048];
+    snprintf(html, sizeof(html), "<!doctype html><div id=box></div><script>const box=document.getElementById('box');"
+                                 "%s</script>", script);
+    probe_page(html, true);
+    for (int t = 0; t < 8; t++) {
+        now_ms += 20;
+        script_turn();
+    }
+    const os64_html_attr_t *r = os64_html_attr(probe_id("box"), "data-r");
+    return r != NULL && r->value != NULL ? r->value : "(none)";
+}
+
+static void wrapper_lifetime_cases(void)
+{
+    /* Ranges and shadow trees are each a switch of the host's; these cases
+     * want both. */
+    bool had_ranges = s_ranges, had_shadow = s_shadow_dom;
+    s_ranges = s_shadow_dom = true;
+    static const struct { const char *what, *script, *expect; } kCases[] = {
+        {"wrapper: an expando on a child of a removed subtree is read after the subtree is put back",
+         "{const t=document.createElement('div');t.innerHTML='<span></span>';box.appendChild(t);"
+         "t.firstChild.foo=42;window.keep=t;box.removeChild(t);}"
+         "setTimeout(()=>{box.appendChild(keep);box.dataset.r=String(keep.firstChild.foo);},0);",
+         "42"},
+        {"wrapper: with only the child held, the removed root keeps its expando and identity",
+         "{const t=document.createElement('div');t.innerHTML='<span></span>';box.appendChild(t);"
+         "t.bar='root';window.child=t.firstChild;window.was=t;box.removeChild(t);window.was=null;}"
+         "setTimeout(()=>{const r=child.parentNode;box.appendChild(r);box.dataset.r=r.bar;},0);",
+         "root"},
+        {"wrapper: a listener on a removed node fires after it is put back",
+         "{const n=document.createElement('p');box.appendChild(n);"
+         "n.addEventListener('ping',()=>{box.dataset.r='fired';});window.keep=n;box.removeChild(n);}"
+         "setTimeout(()=>{box.appendChild(keep);keep.dispatchEvent(new Event('ping'));},0);",
+         "fired"},
+        {"wrapper: an observer's record keeps a removed target and what was hung on it",
+         "{const n=document.createElement('i');box.appendChild(n);n.tag='kept';"
+         "new MutationObserver(rs=>{box.dataset.r=rs[0].removedNodes[0].tag;}).observe(box,{childList:true});"
+         "setTimeout(()=>box.removeChild(box.firstChild),0);}",
+         "kept"},
+        {"wrapper: a node is the same object across a round trip through a collection",
+         "{const n=document.createElement('b');box.appendChild(n);window.a=box.children[0];a.mark=1;"
+         "box.removeChild(n);}"
+         "setTimeout(()=>{box.appendChild(a);const b=box.children[0];"
+         "box.dataset.r=String(a===b&&b.mark===1);},0);",
+         "true"},
+        /* A view only its element's record holds at a safe point: an
+         * expando keeps nothing alive, so what the record reports for it
+         * is its whole count. */
+        {"wrapper: a kept collection only its element holds keeps what was hung on it",
+         "{box.childNodes.tag='c';box.children.tag='e';}"
+         "setTimeout(()=>{box.dataset.r=box.childNodes.tag+box.children.tag;},0);",
+         "ce"},
+        /* The brief's further cases (BRIEF_WRAPPER_LIFETIME § 8). */
+        {"wrapper: a listener whose closure holds a node of its own tree fires once the tree is put back",
+         "{const t=document.createElement('div');t.innerHTML='<span></span>';const s=t.firstChild;"
+         "t.addEventListener('x',()=>{box.dataset.r=String(s.parentNode===t);});box.appendChild(t);"
+         "window.keep=t;box.removeChild(t);}"
+         "setTimeout(()=>{box.appendChild(keep);keep.dispatchEvent(new Event('x'));},0);",
+         "true"},
+        {"wrapper: an expando pointing at another node of the same tree",
+         "{const t=document.createElement('div');t.innerHTML='<a></a><b></b>';t.firstChild.peer=t.lastChild;"
+         "t.lastChild.v=7;window.keep=t.firstChild;}"
+         "setTimeout(()=>{box.dataset.r=String(keep.peer.v)+' '+String(keep.peer===keep.parentNode.lastChild);},0);",
+         "7 true"},
+        {"wrapper: a view held alone keeps its element and the element's tree",
+         "{const w=document.createElement('div');w.innerHTML='<p></p>';window.s=w.firstChild.style;window.w=w;}"
+         "setTimeout(()=>{s.color='red';box.dataset.r=String(w.firstChild.style===s&&"
+         "/red/.test(w.firstChild.getAttribute('style')));},0);",
+         "true"},
+        {"wrapper: a canvas removed and held by its context alone keeps its pixels when put back",
+         "{const c=document.createElement('canvas');c.width=2;c.height=2;box.appendChild(c);"
+         "window.ctx=c.getContext('2d');ctx.fillStyle='#ff0000';ctx.fillRect(0,0,2,2);box.removeChild(c);}"
+         "setTimeout(()=>{box.appendChild(ctx.canvas);const d=ctx.getImageData(0,0,1,1).data;"
+         "box.dataset.r=String(ctx.canvas.getContext('2d')===ctx)+' '+d[0];},0);",
+         "true 255"},
+        {"wrapper: a custom element removed before its reactions finish keeps its state",
+         "class X extends HTMLElement{connectedCallback(){this.seen=(this.seen||0)+1;}"
+         "disconnectedCallback(){box.dataset.r='d'+String(this.seen);}}customElements.define('x-y',X);"
+         "{const e=document.createElement('x-y');box.appendChild(e);box.removeChild(e);}",
+         "d1"},
+        {"wrapper: a Range into a removed tree keeps its boundary's identity",
+         "{const t=document.createElement('div');t.innerHTML='<i>ab</i>';box.appendChild(t);box.removeChild(t);"
+         "window.r=document.createRange();r.selectNodeContents(t.firstChild);t.firstChild.tag='k';}"
+         "setTimeout(()=>{try{box.dataset.r=r.startContainer.tag+' '+r.toString();}catch(x){box.dataset.r='E:'+x.message;}},0);",
+         "k ab"},
+        {"wrapper: an observer's record for a tree removed and dropped keeps what was hung on its nodes",
+         "{const t=document.createElement('div');t.innerHTML='<u></u>';box.appendChild(t);"
+         "new MutationObserver(rs=>{window.rec=rs[0];}).observe(t,{childList:true,subtree:true});"
+         "t.firstChild.tag='q';t.removeChild(t.firstChild);box.removeChild(t);}"
+         "setTimeout(()=>{box.dataset.r=rec.removedNodes[0].tag+' '+String(rec.target.parentNode);},0);",
+         "q null"},
+        {"wrapper: a template's contents keep what was hung on them",
+         "{const t=document.createElement('template');t.innerHTML='<b></b>';t.content.firstChild.m=3;"
+         "window.c=t.content.firstChild;}"
+         "setTimeout(()=>{box.dataset.r=String(c.m)+' '+String(c.parentNode.firstChild===c);},0);",
+         "3 true"},
+        {"wrapper: a shadow root reached from its node and back through its host",
+         "try{const h=document.createElement('div');const sr=h.attachShadow({mode:'open'});sr.innerHTML='<i></i>';"
+         "sr.firstChild.n=4;window.si=sr.firstChild;}catch(x){box.dataset.r='E0:'+x.message;}"
+         "setTimeout(()=>{if(!box.dataset.r)try{box.dataset.r=String(si.getRootNode().host.shadowRoot.firstChild.n);}"
+         "catch(x){box.dataset.r='E1:'+x.message;}},0);",
+         "4"},
+        {"wrapper: a detached node of a created document reaches its document",
+         "{const d=document.implementation.createDocument(null,'r');window.e=d.createElement('q');}"
+         "setTimeout(()=>{box.dataset.r=e.ownerDocument.documentElement.nodeName+' '+"
+         "e.ownerDocument.contentType;},0);",
+         "r application/xml"},
+    };
+    for (size_t i = 0; i < sizeof(kCases) / sizeof(kCases[0]); i++) {
+        const char *r = wrapper_case(kCases[i].script);
+        bool ok = os64_streq(r, kCases[i].expect);
+        check(ok, kCases[i].what);
+        if (!ok)
+            printf("  got %s\n", r);
+        probe_drop();
+    }
+    s_ranges = had_ranges;
+    s_shadow_dom = had_shadow;
+}
+
+/* WHERE EVERY NODE IS (os64_html_census, flow_census; yonder's `nodes`
+ * lines): a subtree removed while something holds it is detached and held,
+ * and the change log holds a removal until every reader has passed it (the
+ * cascade's among them), so let go by its holder it is held still, until a
+ * script's rebuild has its readers pass it; it then waits to be collected,
+ * and what keeps it past a whole layout is printed beside what is still
+ * held. Then what a layout costs over a hidden
+ * subtree of 200, 2,000 and 20,000 paragraphs, printed: the cascade holds
+ * every one. */
+static void node_census_cases(void)
+{
+    char html[4096];
+    size_t at = (size_t)snprintf(html, sizeof(html), "<!doctype html><div id=box><div id=a>");
+    for (int i = 0; i < 50; i++)
+        at += (size_t)snprintf(html + at, sizeof(html) - at, "<p>x</p>");
+    snprintf(html + at, sizeof(html) - at, "</div></div><div style=display:none><p>h</p></div>");
+    probe_page(html, false);
+    relayout(true);
+    g.page.model_version = g.page.rendered_version = os64_html_version(g.page.way.doc);
+    os64_html_census_t c;
+    flow_census_t f;
+    os64_html_census(g.page.way.doc, &c);
+    flow_census(g.page.tree, &f);
+    check(c.nodes.held == 0 && c.nodes.pinned == 0 && c.nodes.connected == 110 && f.none == 2 && f.under_none == 1 &&
+              f.boxed == 54,
+          "census: a page at rest holds nothing detached; the head and one element hidden, one inside it");
+    os64_html_node_t *a = (os64_html_node_t *)probe_id("a");
+    os64_html_hold(g.page.way.doc, a);
+    check(os64_html_remove(g.page.way.doc, a) == OS64_HTML_OK, "census: the subtree removed");
+    os64_html_census(g.page.way.doc, &c);
+    check(c.nodes.held == 101 && c.elements.held == 51, "census: removed and held, its 101 nodes are held");
+    os64_html_release(g.page.way.doc, a);
+    os64_html_census(g.page.way.doc, &c);
+    check(c.nodes.held == 101 && os64_html_changes_bytes(g.page.way.doc) > 0,
+          "census: let go, the change log holds the removal until its readers pass it");
+    {
+        // The removed subtree's root has an id, which the page model's
+        // index holds until its next rebuild: something besides the log.
+        os64_html_holders_t h;
+        os64_html_holders(g.page.way.doc, NULL, 0, &h);
+        check(h.other.units == 1 && h.other.nodes == 101 && h.log_only.units == 0 && h.marked.units == 0 &&
+                  h.log_entries == 1 && h.readers > 0 && h.oldest_lag == 1,
+              "holders: a removal the page model also holds is something else's, and the log says how far its "
+              "readers lag");
+        // A paragraph with no id, removed from the hidden div: the log's.
+        os64_html_node_t *hp = (os64_html_node_t *)probe_id("box")->next->first_child;
+        check(hp != NULL && os64_html_remove(g.page.way.doc, hp) == OS64_HTML_OK, "holders: a paragraph removed");
+        os64_html_holders(g.page.way.doc, NULL, 0, &h);
+        check(h.log_only.units == 1 && h.log_only.nodes == 2 && h.log_only.elements == 1 && h.log_entries == 2 &&
+                  h.oldest_lag == 2,
+              "holders: a removal only the change log keeps is the log's");
+        os64_html_holders(g.page.way.doc, (const os64_html_node_t *[]){hp->first_child}, 1, &h);
+        check(h.marked.units == 1 && h.marked.nodes == 2 && h.log_only.units == 0,
+              "holders: a unit holding a marked node is the mark's, wherever in it the node is");
+    }
+    size_t live = g.page.way.doc->node_count;
+    script_rebuild();
+    os64_html_census(g.page.way.doc, &c);
+    check(c.nodes.held == 0 && c.nodes.pinned == 103,
+          "census: a script's rebuild has its readers pass it, and it waits to be collected (and the paragraph)");
+    flow_tree_t *was = g.page.tree;
+    g.page.model_version = g.page.rendered_version = 0;
+    relayout(true);
+    os64_html_census(g.page.way.doc, &c);
+    // Who keeps the pin past a whole layout is the holders' question
+    // (the cascade renews its own at each update): printed, not judged.
+    printf("  census: after a whole layout, held %lu, waiting to be collected %lu, live %lu (was %lu), tree %s, retired %lu bytes\n",
+           (unsigned long)c.nodes.held, (unsigned long)c.nodes.pinned, (unsigned long)g.page.way.doc->node_count,
+           (unsigned long)live, g.page.tree == was ? "the same" : "new",
+           (unsigned long)os64_html_retired_bytes(g.page.way.doc));
+    probe_drop();
+    node_holders_cases();
+    wrapper_lifetime_cases();
+    // What a layout costs over a hidden subtree of n paragraphs, a class
+    // turned on the body before each.
+    for (int32_t n = 200; n <= 20000; n *= 10) {
+        size_t cap = (size_t)n * 10 + 256, k = 0;
+        char *big = os64_malloc(cap);
+        k += (size_t)snprintf(big + k, cap - k, "<!doctype html><style>.on p{color:red}</style><p>shown</p><div style=display:none>");
+        for (int32_t i = 0; i < n; i++)
+            k += (size_t)snprintf(big + k, cap - k, "<p>x</p>");
+        snprintf(big + k, cap - k, "</div>");
+        probe_page(big, false);
+        os64_free(big);
+        relayout(true);
+        double began = hover_seconds();
+        for (int i = 0; i < 10; i++) {
+            os64_html_set_attr(g.page.way.doc, g.page.way.doc->body, "class", i % 2 ? "on" : "off", i % 2 ? 2 : 3);
+            relayout(true);
+        }
+        printf("  census: a layout over a hidden subtree of %d paragraphs, %.2f ms\n", (int)n,
+               (hover_seconds() - began) * 1000 / 10);
+        probe_drop();
+    }
+}
+
+/* THE LOOP'S FAIRNESS (task_order.h, ordinary_task): a video playing
+ * while every turn takes 300 ms keeps a media event always ready, since
+ * each turn is past timeupdate's 250 ms. A timer must still run, the old
+ * going ahead of the young; and the media events must still come. (That
+ * they coalesce is libdom's case, dom_media_clocked_cases.) */
+static void fairness_cases(void)
+{
+    fake_media_on = true;
+    fake_media_began = now_ms;
+    probe_page("<!doctype html><video id=v src=clip.mp4 autoplay muted loop></video><p id=out>-</p><script>"
+               "let ticks=0,updates=0;const say=()=>document.getElementById('out').textContent=ticks+' '+updates;"
+               "document.getElementById('v').ontimeupdate=()=>{updates++;say()};"
+               "setInterval(()=>{ticks++;say()},250);</script>", true);
+    for (int i = 0; i < 80; i++) {
+        now_ms += 300;
+        script_turn();
+        players_ask_run();
+        media_turn();
+    }
+    const os64_html_node_t *p = probe_id("out");
+    const char *text = p && p->first_child ? p->first_child->text : "";
+    unsigned ticks = 0, updates = 0;
+    sscanf(text, "%u %u", &ticks, &updates);
+    check(ticks >= 20, "fairness: a timer runs while a media event is always ready");
+    check(updates >= 20, "fairness: and the media events still come");
+    if (ticks < 20 || updates < 20) printf("  ticks %u, timeupdates %u in 80 turns of 300 ms\n", ticks, updates);
+    probe_drop();
+    fake_media_on = false;
+}
+
 int main(void)
 {
     os64_text_options_t options={.memory={.alloc=probe_alloc,.free=probe_free},
@@ -12972,6 +13888,42 @@ int main(void)
         printf("yonder restyle: %u checks, %u failures\n",checks,failures);
         return failures ? 1 : 0;
     }
+    if(getenv("YONDER_COVER_ONLY")) {
+        cover_cases();
+        plane_cases();
+        glass_cases();
+        os64_text_font_release(probe_font);
+        check(os64_text_destroy(probe_text)==OS64_FONT_OK,"cover: text released");
+        check(live==0,"cover: heap empty");
+        printf("yonder cover: %u checks, %u failures\n",checks,failures);
+        return failures ? 1 : 0;
+    }
+    if(getenv("YONDER_SCHEDULE_ONLY")) {
+        schedule_cost_cases();
+        printf("yonder schedule: %u checks, %u failures\n",checks,failures);
+        return failures ? 1 : 0;
+    }
+    if(getenv("YONDER_CENSUS_ONLY")) {
+        node_census_cases();
+        printf("yonder census: %u checks, %u failures\n",checks,failures);
+        return failures ? 1 : 0;
+    }
+    if(getenv("YONDER_FAIRNESS_ONLY")) {
+        fairness_cases();
+        os64_text_font_release(probe_font);
+        check(os64_text_destroy(probe_text)==OS64_FONT_OK,"fairness: text released");
+        check(live==0,"fairness: heap empty");
+        printf("yonder fairness: %u checks, %u failures\n",checks,failures);
+        return failures ? 1 : 0;
+    }
+    if(getenv("YONDER_DAMAGE_ONLY")) {
+        damage_cases();
+        os64_text_font_release(probe_font);
+        check(os64_text_destroy(probe_text)==OS64_FONT_OK,"damage: text released");
+        check(live==0,"damage: heap empty");
+        printf("yonder damage: %u checks, %u failures\n",checks,failures);
+        return failures ? 1 : 0;
+    }
     if(getenv("YONDER_PROFILE_ONLY")) {
         layout_profile_cases();
         os64_text_font_release(probe_font);
@@ -12988,13 +13940,21 @@ int main(void)
     inserted_frame_cases();
     stand_in_paint_cases();
     canvas_window_cases();
+    schedule_cost_cases();
+    node_census_cases();
+    fairness_cases();
+    media_failure_cases();
     layout_profile_cases();
+    damage_cases();
     graft_browser_cases();graft_base_cases();
     restyle_browser_cases();
     restyle_fallback_cases();
     svg_gradient_window_cases();
     svg_radial_window_cases();
     svg_partial_window_cases();
+    cover_cases();
+    plane_cases();
+    glass_cases();
     custom_census_cases();
     custom_element_parse_case();
     svg_cache_window_cases();
@@ -13070,6 +14030,7 @@ int main(void)
     title_fit_cases();
     os64_text_font_release(probe_font);
     check(os64_text_destroy(probe_text)==OS64_FONT_OK,"all layout text released");
+    yonder_canvas_keeps_free(g.canvas_keeps); g.canvas_keeps=NULL;
     check(live==0,"native and engine heap is empty");
 #ifdef OS64_JS_BYTECODE_ROUND_TRIP
     /* The round trip's build: every classic script went through its blob. */

@@ -9,13 +9,9 @@
 #include "filesystem/filesystem.h"
 #include "serial_logging.h"   // printd — the MAP_SHARED_LIBRARY refusal below
 #include "smp_core.h"
+#include "counted_lock.h"
 
 extern uintptr_t kKernelPML4;
-
-static inline bool vma_contains(const vma_t* vma, uintptr_t addr)
-{
-    return vma != NULL && addr >= vma->start && addr < vma->end;
-}
 
 // Structure to pass parameters across the CR3 boundary
 typedef struct {
@@ -212,51 +208,148 @@ vma_t* vma_create(uintptr_t start,
     // fault path zero-fills the remainder (see elf_map_segment).
     vma->file_size = end - start;
     vma->cow = false;
-    vma->listItem = NULL;
+    vma->node = (maplist_node_t){0};
 
     return vma;
 }
 
-/// @brief Add a VMA to a task's memory map list
-/// @param task A task_t struct pointer
-/// @param vma A vma_t struct pointer
-void vma_add(task_t* task, vma_t* vma)
+// THE TASK'S LIST OF MAPPINGS (vma.h's doors, memory/maplist.h's core).
+// Each door takes task->mapLock around the core's calls and nothing else;
+// a free the core asks for happens after the lock is released.
+
+static inline vma_t *vma_of(maplist_node_t *n)
 {
-    if (!task || !vma) {
-        return;
-    }
-
-    if (task->mmaps == NULL) {
-        task->mmaps = kmalloc(sizeof(dlist_t));
-        if (!task->mmaps) {
-            return;
-        }
-        dlist_init(task->mmaps);
-    }
-
-    vma->listItem = dlist_add(task->mmaps, vma);
+    return n == NULL ? NULL : (vma_t *)((char *)n - __builtin_offsetof(vma_t, node));
 }
 
-/// @brief Find a specific memory map for a given task based on address
-/// @param task A task_t struct pointer
-/// @param addr An address within the memory map to find
-/// @return 
-vma_t* vma_lookup(task_t* task, uintptr_t addr)
+static inline void vma_facts_copy(const vma_t *v, vma_facts_t *out)
 {
-    if (!task || !task->mmaps) {
+    *out = (vma_facts_t){ .start = v->start, .end = v->end, .prot = v->prot, .flags = v->flags,
+                          .cow = v->cow, .file = v->file, .file_offset = v->file_offset };
+}
+
+void vma_add(task_t* task, vma_t* vma)
+{
+    if (!task || !vma)
+        return;
+    uint64_t f = counted_lock_acquire(&task->mapLock);
+    maplist_link(&task->mmaps, &vma->node, vma->start, vma->end);
+    counted_lock_release(&task->mapLock, f);
+}
+
+vma_t* vma_lookup_hold(task_t* task, uintptr_t addr)
+{
+    if (!task)
         return NULL;
-    }
+    uint64_t f = counted_lock_acquire(&task->mapLock);
+    maplist_node_t *n = maplist_find_hold(&task->mmaps, addr);
+    task->mapLock.hold_tag = task->mmaps.last_steps;
+    counted_lock_release(&task->mapLock, f);
+    return vma_of(n);
+}
 
-    dlist_node_t* node = task->mmaps->head;
-    while (node) {
-        vma_t* current = (vma_t*)node->data;
-        if (vma_contains(current, addr)) {
-            return current;
-        }
-        node = node->next;
-    }
+void vma_release(task_t* task, vma_t* vma)
+{
+    uint64_t f = counted_lock_acquire(&task->mapLock);
+    bool last = maplist_release(&vma->node);
+    counted_lock_release(&task->mapLock, f);
+    if (last)
+        vma_destroy(vma);
+}
 
-    return NULL;
+bool vma_is_listed(task_t* task, vma_t* vma)
+{
+    uint64_t f = counted_lock_acquire(&task->mapLock);
+    bool listed = vma->node.listed;
+    counted_lock_release(&task->mapLock, f);
+    return listed;
+}
+
+bool vma_lookup_facts(task_t* task, uintptr_t addr, vma_facts_t *out)
+{
+    if (!task)
+        return false;
+    uint64_t f = counted_lock_acquire(&task->mapLock);
+    maplist_node_t *n = maplist_find(&task->mmaps, addr);
+    if (n != NULL)
+        vma_facts_copy(vma_of(n), out);
+    task->mapLock.hold_tag = task->mmaps.last_steps;
+    counted_lock_release(&task->mapLock, f);
+    return n != NULL;
+}
+
+vma_t* vma_lookup_anon_start_hold(task_t* task, uintptr_t start)
+{
+    if (!task)
+        return NULL;
+    uint64_t f = counted_lock_acquire(&task->mapLock);
+    maplist_node_t *n = maplist_find_start(&task->mmaps, start);
+    if (n != NULL && (vma_of(n)->flags & MAP_ANONYMOUS))
+        maplist_hold(n);
+    else
+        n = NULL;
+    task->mapLock.hold_tag = task->mmaps.last_steps;
+    counted_lock_release(&task->mapLock, f);
+    return vma_of(n);
+}
+
+bool vma_delist(task_t* task, vma_t* vma)
+{
+    uint64_t f = counted_lock_acquire(&task->mapLock);
+    bool was = vma->node.listed;
+    bool unheld = maplist_unlink(&task->mmaps, &vma->node);
+    counted_lock_release(&task->mapLock, f);
+    if (unheld)
+        vma_destroy(vma);
+    return was;
+}
+
+vma_t* vma_take_all(task_t* task, uint64_t *held)
+{
+    uint64_t f = counted_lock_acquire(&task->mapLock);
+    maplist_node_t *chain = maplist_take_all(&task->mmaps, held);
+    counted_lock_release(&task->mapLock, f);
+    return vma_of(chain);
+}
+
+vma_t* vma_chain_next(vma_t* vma)
+{
+    return vma_of(vma->node.next);
+}
+
+void vma_read_counts(task_t* task, vma_counts_t *out)
+{
+    uint64_t pf = counted_lock_acquire(&task->pageLock);
+    out->page_lock = task->pageLock.stats;
+    counted_lock_window_restart(&task->pageLock);
+    counted_lock_release(&task->pageLock, pf);
+    uint64_t f = counted_lock_acquire(&task->mapLock);
+    out->listed = task->mmaps.count;
+    maplist_read_walks(&task->mmaps, &out->walks, &out->walks_since);
+    out->table_answers = __atomic_load_n(&task->tableAnswers, __ATOMIC_RELAXED);
+    out->table_answers_since = out->table_answers - task->tableAnswersRead;
+    task->tableAnswersRead = out->table_answers;
+    out->lock = task->mapLock.stats;
+    counted_lock_window_restart(&task->mapLock);
+    counted_lock_release(&task->mapLock, f);
+}
+
+void vma_note_table_answers(task_t* task, uint64_t pages)
+{
+    __atomic_add_fetch(&task->tableAnswers, pages, __ATOMIC_RELAXED);
+}
+
+uint32_t vma_copy_all_facts(task_t* task, vma_facts_t *out, uint32_t cap, uint32_t *listed)
+{
+    uint32_t n = 0;
+    uint64_t f = counted_lock_acquire(&task->mapLock);
+    for (maplist_node_t *m = task->mmaps.head; m != NULL && n < cap; m = m->next)
+        vma_facts_copy(vma_of(m), &out[n++]);
+    if (listed != NULL)
+        *listed = task->mmaps.count;
+    task->mapLock.hold_tag = n;   // nodes walked, one a row copied
+    counted_lock_release(&task->mapLock, f);
+    return n;
 }
 
 /// @brief Free a vma_t

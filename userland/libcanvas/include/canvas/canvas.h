@@ -52,6 +52,9 @@ typedef struct {
     const uint32_t *pixels; /* Borrowed premultiplied 0xAARRGGBB, sRGB. */
     uint32_t width, height;
     size_t stride, capacity;
+    /* Changes at every reset and every draw that changes a pixel, to a
+     * value no canvas has had before: equal revisions are equal pixels. */
+    uint64_t revision;
 } canvas_bitmap_t;
 /* Byte-addressed, straight-alpha RGBA8 in sRGB. The descriptor borrows
  * caller storage; padding is not image data. */

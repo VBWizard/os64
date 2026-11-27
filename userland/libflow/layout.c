@@ -37,6 +37,10 @@ typedef struct {
     struct GraftProbe *graft;
     FReuseMatch *reuse;
     flow_reuse_stats_t *reuse_stats;
+    // Inside a role counter root's block layout (block_at).
+    bool role_timing;
+    // The last intrinsic measure's number (FBox.intrinsic_seq).
+    uint32_t measure_seq;
     // The initial containing block's height, the viewport's (CSS 2.1 §
     // 10.1), or -1 with no window height known: what the root's
     // percentage height resolves against.
@@ -5710,7 +5714,28 @@ static void block(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw
 static void block_contents(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw,
                             Cursor *cur, Replaced rep, int64_t forced_w, int64_t mt, int64_t mb);
 
+static void block_place(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw, Cursor *cur);
+// A box's block layout. With the layout profiled, the time spent inside
+// the role counter's roots is taken here (flow_reuse_stats_t.role_us),
+// every pass summed. A root its table places (a row, a group) passes no
+// block layout of its own, and takes no time here.
 static void block_at(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw, Cursor *cur)
+{
+    const FReusePair *rp = l->reuse && l->reuse->clock && !l->role_timing ? f_reuse_pair(l->reuse, b) : NULL;
+    flow_role_t role;
+    if (!rp || !f_reuse_role_root(l->reuse, rp, &role)) {
+        block_place(l, styles, b, cbx, cbw, cur);
+        return;
+    }
+    l->role_timing = true;
+    int64_t began = l->reuse->clock(l->reuse->clock_ctx);
+    block_place(l, styles, b, cbx, cbw, cur);
+    int64_t ended = l->reuse->clock(l->reuse->clock_ctx);
+    l->role_timing = false;
+    if (began < 0 || ended < began) l->reuse_stats->role_clock_errors++;
+    else l->reuse_stats->role_us[role] += (uint64_t)(ended - began);
+}
+static void block_place(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw, Cursor *cur)
 {
     if (b->kind == FB_TABLE) {
         table(l, styles, b, cbx, cbw, cur);
@@ -6424,25 +6449,121 @@ static Intr ifc_intrinsic(L *l, FBox *ifc)
     return r;
 }
 
+// A COPY OF THE SOURCE'S WIDTHS (RELAYOUT_GRAFT.md § Intrinsic widths have
+// a separate memo). A box's widths are kept at its first asking, so what its
+// measure finds depends on its subtree and the environment, which the match
+// and the snapshot certify; on the heights each box's measure reads
+// (intrinsic_heights_same), which placement seeds and which may come from
+// outside the subtree; and on which boxes under it were measured already
+// and with what. The source's numbers say which boxes a measure of the root
+// measured with it: those numbered inside its own (FBox.intrinsic_seq to
+// intrinsic_end). Its widths stand for a fresh measure when the subtree is
+// equal and each box the source measured with it or before it either is
+// measured here already with the same widths, or, measured with it, is not
+// measured here yet, finds the heights it was measured under and is no table
+// or part of one (those are measured fresh, 5c's cut). A fresh measure
+// reads a box measured already and does not go under it, and goes under
+// none it does not measure: neither does the walk. The phase that copies
+// takes the same boxes the one that checks passed.
+// The heights a box's measure reads: the definite height its line's
+// percentages are of (definite_height: its own, def_h or else ratio_h, or
+// for an anonymous box the named one its walk reaches), and a block-level
+// picture's containing block's (box_cb_h: its percentage limits, carried
+// through its ratio, replaced_own).
+static int64_t intrinsic_cbh(const FBox *b)
+{
+    return b->kind == FB_REPLACED ? box_cb_h(b) : -1;
+}
+static bool intrinsic_heights_same(const L *l, const FBox *now, const FBox *was)
+{
+    return was->intrinsic_def == definite_height(l, now) && was->intrinsic_cbh == intrinsic_cbh(now);
+}
+static bool intrinsic_same(const FBox *a, const FBox *b)
+{
+    return a->intrinsic_min == b->intrinsic_min && a->intrinsic_max == b->intrinsic_max &&
+           a->content_min == b->content_min && a->content_max == b->content_max;
+}
+static bool intrinsic_walk(L *l, FBox *d, const FBox *root, uint32_t base, bool copy,
+                           flow_intrinsic_refusal_t *why)
+{
+    FReusePair *p = f_reuse_pair(l->reuse, d);
+    const FBox *od = p ? p->old : NULL;
+    if (od == NULL || !od->intrinsic_known || od->intrinsic_seq > root->intrinsic_end)
+        return true;
+    bool before = od->intrinsic_seq < root->intrinsic_seq;
+    if (before || d->intrinsic_known) {
+        if (!d->intrinsic_known || !intrinsic_same(d, od)) {
+            *why = before ? FLOW_INTRINSIC_ORDER : FLOW_INTRINSIC_KNOWN;
+            return false;
+        }
+        return true;
+    }
+    if (copy) {
+        d->intrinsic_min = od->intrinsic_min; d->intrinsic_max = od->intrinsic_max;
+        d->content_min = od->content_min; d->content_max = od->content_max;
+        d->intrinsic_def = od->intrinsic_def; d->intrinsic_cbh = od->intrinsic_cbh;
+        d->intrinsic_seq = base + (od->intrinsic_seq - root->intrinsic_seq);
+        d->intrinsic_end = base + (od->intrinsic_end - root->intrinsic_seq);
+        d->intrinsic_known = true;
+        l->reuse_stats->intrinsic_hits++;
+    } else if (d->kind != FB_BLOCK && d->kind != FB_REPLACED) {
+        *why = FLOW_INTRINSIC_TABLE;
+        return false;
+    } else if (!intrinsic_heights_same(l, d, od)) {
+        *why = FLOW_INTRINSIC_HEIGHT;
+        return false;
+    }
+    for (FBox *c = d->first; c != NULL; c = c->next)
+        if (!intrinsic_walk(l, c, root, base, copy, why))
+            return false;
+    for (FItem *it = d->items; it != NULL; it = it->next)
+        if (it->content != NULL && !intrinsic_walk(l, it->content, root, base, copy, why))
+            return false;
+    return true;
+}
+static bool intrinsic_copy(L *l, FBox *b)
+{
+    FReusePair *pair = f_reuse_pair(l->reuse, b);
+    const FBox *old = pair && pair->equal ? pair->old : NULL;
+    if (old == NULL || !old->intrinsic_known)
+        return false;
+    flow_intrinsic_refusal_t why;
+    if (!intrinsic_walk(l, b, old, 0, false, &why)) {
+        l->reuse_stats->intrinsic_refused[why]++;
+        return false;
+    }
+    uint32_t base = l->measure_seq + 1;
+    intrinsic_walk(l, b, old, base, true, &why);
+    l->measure_seq = base + (old->intrinsic_end - old->intrinsic_seq);
+    l->reuse_stats->intrinsic_roots++;
+    if (l->reuse->clock) {
+        // Its own first role, which the pair's refusing roles no longer
+        // carry for a container, a positioned or a transformed box; else
+        // the first of those, FLOW_ROLES for none.
+        int r = b->parent && (b->parent->flex || b->parent->grid) ? FLOW_ROLE_ITEM
+                : b->flex                                          ? FLOW_ROLE_FLEX
+                : b->grid                                          ? FLOW_ROLE_GRID
+                : b->out_of_flow                                   ? FLOW_ROLE_OUT_OF_FLOW
+                : b->positioned                                    ? FLOW_ROLE_POSITIONED
+                : b->transformed                                   ? FLOW_ROLE_TRANSFORMED
+                                                                   : -1;
+        if (r < 0)
+            for (r = 0; r < FLOW_ROLES && !(pair->roles & (1u << r));) r++;
+        l->reuse_stats->intrinsic_role_roots[r]++;
+    }
+    return true;
+}
+
 // A box's border-box min-content and max-content widths (percentages of a
 // containing block that is not known yet count as nothing, as CSS says).
 static Intr intrinsic(L *l, FBox *b)
 {
-    if (b->intrinsic_known)
+    if (b->intrinsic_known || intrinsic_copy(l, b))
         return (Intr){b->intrinsic_min, b->intrinsic_max};
-    FReusePair *pair = f_reuse_pair(l->reuse, b);
-    if (pair && pair->equal && pair->ordinary && pair->old->intrinsic_known &&
-        pair->old->intrinsic_def == (b->def_known ? b->def_h : -2)) {
-        b->intrinsic_min = pair->old->intrinsic_min; b->intrinsic_max = pair->old->intrinsic_max;
-        b->content_min = pair->old->content_min; b->content_max = pair->old->content_max;
-        b->intrinsic_def = pair->old->intrinsic_def;
-        b->intrinsic_known = true;
-        l->reuse_stats->intrinsic_hits++;
-        return (Intr){b->intrinsic_min, b->intrinsic_max};
-    }
     Intr r = {0, 0};
     const flow_style_t *s = b->style;
     b->intrinsic_computed++;
+    b->intrinsic_seq = ++l->measure_seq;
     if (b->kind == FB_TABLE) {
         r = table_intrinsic(l, b);
         b->content_min = r.min;
@@ -6559,7 +6680,9 @@ static Intr intrinsic(L *l, FBox *b)
     b->intrinsic_known = true;
     b->intrinsic_min = r.min;
     b->intrinsic_max = r.max;
-    b->intrinsic_def = b->def_known ? b->def_h : -2;
+    b->intrinsic_def = definite_height(l, b);
+    b->intrinsic_cbh = intrinsic_cbh(b);
+    b->intrinsic_end = l->measure_seq;
     return r;
 }
 
@@ -7931,14 +8054,27 @@ static const FBox *clip_parent(const FBox *b)
 // it contains included: they reach where they are drawn, which flow.c
 // works out from their frames — all but the root's, which moves the whole
 // page.
-static void page_extent(const FBox *b, int64_t *width, int64_t *height)
+// `ox`, `oy`: what the boxes round `b` moved since the layout, which a
+// moved box adds its own move to (f_layout_extent); a layout's own walk
+// has none.
+typedef struct {
+    const FMoved *(*moved)(void *ctx, const os64_html_node_t *node);
+    void *ctx;
+} ExtentMoves;
+static void page_extent_at(const FBox *b, int64_t *width, int64_t *height, int64_t ox, int64_t oy,
+                           const ExtentMoves *moves)
 {
     if (!b->placed ||
         (b->out_of_flow && b->style->position == FLOW_POSITION_FIXED && (b->pos == NULL || b->pos->cb == NULL)) ||
         (b->transformed && b->parent != NULL))
         return;
+    const FMoved *m = moves != NULL && b->positioned ? moves->moved(moves->ctx, b->node) : NULL;
+    if (m != NULL) {
+        ox += m->dx;
+        oy += m->dy;
+    }
     if (b->positioned) {
-        int64_t r = right_edge(b), bottom = bottom_edge(b);
+        int64_t r = right_edge(b) + ox, bottom = bottom_edge(b) + oy;
         for (const FBox *c = clip_parent(b); c != NULL; c = clip_parent(c)) {
             r = legacy_far_edge(c,true,r);
             bottom = legacy_far_edge(c,false,bottom);
@@ -7953,9 +8089,24 @@ static void page_extent(const FBox *b, int64_t *width, int64_t *height)
     for (const FLine *ln = b->lines; ln != NULL; ln = ln->next)
         for (const FFrag *fr = ln->frags; fr != NULL; fr = fr->next)
             if (fr->kind == FF_ATOMIC && fr->item->content != NULL)
-                page_extent(fr->item->content, width, height);
+                page_extent_at(fr->item->content, width, height, ox, oy, moves);
     for (const FBox *c = b->first; c != NULL; c = c->next)
-        page_extent(c, width, height);
+        page_extent_at(c, width, height, ox, oy, moves);
+}
+
+static void page_extent(const FBox *b, int64_t *width, int64_t *height)
+{
+    page_extent_at(b, width, height, 0, 0, NULL);
+}
+
+void f_layout_extent(FLayout *layout, const FMoved *(*moved)(void *ctx, const os64_html_node_t *node), void *ctx)
+{
+    if (layout == NULL || layout->boxes == NULL || layout->boxes->root == NULL)
+        return;
+    ExtentMoves moves = {moved, ctx};
+    layout->width = layout->flow_width;
+    layout->height = layout->flow_height;
+    page_extent_at(layout->boxes->root, &layout->width, &layout->height, 0, 0, &moves);
 }
 
 FLayout *f_layout(FBoxes *boxes, const os64_html_document_t *doc, const os64_page_t *model,
@@ -8009,6 +8160,8 @@ FLayout *f_layout_reusing(FBoxes *boxes, const os64_html_document_t *doc, const 
             absolutes(&l, boxes->styles, boxes->icb_first, (Rect){0, 0, w, vh}, boxes->root);
         }
         out->width = max64(w, right_edge(boxes->root));
+        out->flow_width = out->width;
+        out->flow_height = out->height;
         page_extent(boxes->root, &out->width, &out->height);
     }
     return out;

@@ -5,11 +5,12 @@ Usage, from the repository root:
     python3 tools/os64serve.py userland/bin userland/bin/tests=tests userland/bin/pages=pages userland/bin/fonts=fonts kernel/bin=kernelbin etc frames=frames assets/icons/default=icons
 
 Options:
-    [PATH|PATH=LOT ...] [--port 6464] [--bind 0.0.0.0]
+    [PATH|PATH=LOT ...] [--porter-repo PATH] [--port 6464] [--bind 0.0.0.0]
 
 Directories are searched in order, first usable file wins, without recursion.
 LOT labels describe the source; the client's os64get.conf chooses destinations.
-With no directory arguments the server offers its current directory.
+With no directory or repository arguments the server offers its current directory.
+--porter-repo also serves immutable Porter targets. See PORTER_PUBLISHING.md.
 The current os64get client uses port 6464 with no override.
 
 See OS64GET.md for the installer workflow, configuration, replacement backups,
@@ -20,10 +21,13 @@ transfer integrity, not the identity of the source.
 
 import argparse
 import os
+from pathlib import Path
 import socket
 import stat
 import sys
 import zlib
+
+from porter_store import serve_porter
 
 CHUNK = 65536
 
@@ -98,7 +102,7 @@ def read_served_file_multi(directories, name):
     return None
 
 
-def serve_one(conn, addr, directories):
+def serve_one(conn, addr, directories, porter_repo=None):
     conn.settimeout(30)
     try:
         # Read the request line one byte at a time. A stream has no message
@@ -117,6 +121,8 @@ def serve_one(conn, addr, directories):
                 return
 
         line = request.decode("utf-8", "replace").strip()
+        if serve_porter(porter_repo, line, conn.recv, conn.sendall):
+            return
 
         # LIST - "what have you got?" (2026-08-22). The day libos64 became a
         # shared object the payload became 66 files, and one invocation per
@@ -203,8 +209,8 @@ def serve_one(conn, addr, directories):
 
     except socket.timeout:
         print(f"  {addr[0]}: timed out")
-    except (ConnectionResetError, BrokenPipeError):
-        print(f"  {addr[0]}: connection reset")
+    except OSError as exc:
+        print(f"  {addr[0]}: connection failed: {exc}")
     finally:
         conn.close()
 
@@ -244,6 +250,8 @@ def main():
     ap.add_argument("--port", type=int, default=6464)
     ap.add_argument("--bind", default="0.0.0.0",
                     help="address to listen on (default: everything)")
+    ap.add_argument("--porter-repo", type=Path,
+                    help="published Porter repository, including a Windows UNC path")
     args = ap.parse_args()
 
     # NO DIRECTORY NAMED MEANS THE CURRENT ONE, and that has to announce
@@ -252,9 +260,9 @@ def main():
     # multi-line command pasted into cmd.exe runs its first line alone — and
     # the result is a valet quietly offering your home directory to anything
     # that dials in. An `os64get -a` against that installs it. Loud, then.
-    defaulted = not args.directories
+    defaulted = not args.directories and args.porter_repo is None
     try:
-        directories = [split_lot(d) for d in (args.directories or ["."])]
+        directories = [split_lot(d) for d in (["."] if defaulted else args.directories)]
     except ValueError as exc:
         print(f"os64serve: {exc}", file=sys.stderr)
         return 2
@@ -268,6 +276,14 @@ def main():
         if not os.path.isdir(directory):
             print(f"os64serve: {directory} is not a directory", file=sys.stderr)
             return 2
+    porter_repo = args.porter_repo
+    if porter_repo is not None:
+        porter_repo = porter_repo.expanduser().absolute()
+        for kind in ("publications", "manifests", "objects"):
+            if not (porter_repo / kind).is_dir():
+                print(f"os64serve: missing Porter repository directory: {porter_repo / kind}",
+                      file=sys.stderr)
+                return 2
 
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     # A second os64serve on the same port must refuse to start: two of them
@@ -286,7 +302,9 @@ def main():
     s.bind((args.bind, args.port))
     s.listen(4)
 
-    print(f"os64serve: serving on {args.bind}:{args.port}, first hit wins:")
+    print(f"os64serve: serving on {args.bind}:{s.getsockname()[1]}", flush=True)
+    if porter_repo is not None:
+        print(f"           {porter_repo}   [Porter repository]")
     for directory, lot in directories:
         print(f"           {directory}" + (f"   [lot {lot}]" if lot else ""))
 
@@ -338,7 +356,7 @@ def main():
                 continue
             conn.settimeout(None)     # an accepted socket inherits the listener's
                                       # timeout; serve_one sets the one it wants
-            serve_one(conn, addr, directories)
+            serve_one(conn, addr, directories, porter_repo)
     except KeyboardInterrupt:
         print("\nos64serve: stopped.")
     finally:

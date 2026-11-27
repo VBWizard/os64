@@ -30,10 +30,15 @@ uint64_t gui_compositor_affinity(void);
 // call takes the flag that says the compositor is halted).
 void gui_frame_nudge(void);
 
-// A frame request arrived (gui_frame_request, under kGuiLock): the
-// compositor counts it among its work until its next pass has seen the
-// waiters, so a stopped compositor starts its clock, and nudges it.
+// A window's frame request arrived (gui_frame_request, under kGuiLock): it
+// is counted in /sys/gui's frame requests, and the compositor counts it
+// among its work until its next pass has seen the waiters, so a stopped
+// compositor starts its clock, and nudges it.
 void gui_frame_request_arrived(void);
+// A plane's wait that may be shown arrived (plane.c, under kGuiLock): the
+// same start and nudge, uncounted (a plane's frames are counted on its own
+// /sys/gui line).
+void gui_frame_wait_arrived(void);
 
 // The compositor's pass epoch, under kGuiLock: it moves on at each pass's
 // count of waiters, and a request is stamped with it, so a frame answers

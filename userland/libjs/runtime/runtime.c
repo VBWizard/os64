@@ -1307,6 +1307,7 @@ static os64_js_status_t create_with_teardown(const os64_js_config_t *config,
         JS_SetMemoryLimit(runtime->engine, runtime->allocator.allocation_limit);
         JS_SetMaxStackSize(runtime->engine, limits->stack_bytes);
         JS_SetRuntimeOpaque(runtime->engine, runtime);
+        JS_SetCollectorClock(runtime->engine, os64_js_ledger_now);
     }
     bool ready = runtime->engine != NULL && realm_initialize(realm);
     if (!ready || runtime->allocator.failures != 0) {
@@ -3444,6 +3445,19 @@ JS_PUBLIC size_t os64_js_heap_peak(const os64_js_runtime_t *runtime)
 JS_PUBLIC size_t os64_js_heap_bytes(const os64_js_runtime_t *runtime)
 {
     return runtime != NULL ? runtime->allocator.charged_bytes : 0;
+}
+
+JS_PUBLIC void os64_js_collector(const os64_js_runtime_t *runtime, os64_js_collector_t *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    if (runtime == NULL || runtime->engine == NULL)
+        return;
+    JSCollectorCounts c;
+    JS_GetCollectorCounts(runtime->engine, &c);
+    *out = (os64_js_collector_t){c.runs, c.runs_by_allocation, c.walked, c.freed, c.walked_most,
+                                 c.bytes_before, c.bytes_after, c.threshold, c.ticks, c.ticks_most,
+                                 c.limit == UINT64_MAX ? 0 : c.limit, c.runs_by_limit,
+                                 runtime->allocator.refused_by_limit};
 }
 
 /* The public kinds are the ledger's, one for one. */

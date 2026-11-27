@@ -28,6 +28,21 @@ void yonder_draw_picture(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, os
 bool yonder_draw_surface(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, os64_gui_rect_t box,
                           bool smooth, const draw2d_surface_t *source);
 
+// yonder_draw_surface's smoothed draw in its two halves, for a caller that
+// keeps the first (canvas_keep.h): the picture smoothed to a box `bw` x
+// `bh`, its pixels from `part` (in the box's own coordinates, inside it)
+// written to `out` (`pitch` pixels a row) as they are before they are laid,
+// in the source's alpha convention; false, writing nothing, for a source
+// yonder_draw_surface refuses or one with no pixels, an empty box, or a
+// part not inside the box. Then
+// `n` such pixels laid onto
+// `dst` by their alpha, as that draw lays them: the two together write
+// what yonder_draw_surface writes, pixel for pixel, wherever the part's
+// edges fall.
+bool yonder_scale_part(uint32_t *out, uint32_t pitch, os64_gui_rect_t part, int32_t bw, int32_t bh,
+                       const draw2d_surface_t *source);
+void yonder_lay_scaled(uint32_t *dst, const uint32_t *px, int32_t n, bool premultiplied);
+
 // A picture TILED across `area`: each copy scaled to `tile`'s size, laid
 // from `tile` in every direction — or, on an axis that does not repeat,
 // the one copy at `tile` — blended the same way, only where `area` meets

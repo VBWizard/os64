@@ -19,6 +19,7 @@
 #include "log.h"
 #include "os64/klog.h"     // os64_logent_t — klog_read's out-struct (abi)
 #include "thread_join.h"   // the object behind HANDLE_THREAD
+#include "thread_reap.h"   // THREAD_REAP_BACKLOG — the creator's wait
 #include "console.h"
 #include "gui/gui_client.h"   // the GUI client API rows 16-21 dispatch into
 #include "strings/strlen.h"   // the dir canonical-path copy measures with it
@@ -208,6 +209,13 @@ static uint64_t syscall_gui_window_set_pinned(uint64_t a0,uint64_t a1,uint64_t a
     // Keep raw arg1 intact: values outside 0/1 must be refused, not narrowed.
     return (uint64_t)gui_window_set_pinned((int64_t)a0,a1);
 }
+static uint64_t syscall_gui_window_set_full_screen(uint64_t a0,uint64_t a1,uint64_t a2,
+    uint64_t a3,uint64_t a4,uint64_t a5)
+{
+    (void)a2;(void)a3;(void)a4;(void)a5;
+    // Raw arg1, as set_pinned: a value other than 0 or 1 is refused there.
+    return (uint64_t)gui_window_set_full_screen((int64_t)a0,a1);
+}
 static uint64_t syscall_gui_window_set_content_size(uint64_t a0,uint64_t a1,uint64_t a2,
     uint64_t a3,uint64_t a4,uint64_t a5)
 {
@@ -240,6 +248,13 @@ static uint64_t syscall_gui_event_ring(uint64_t arg0, uint64_t arg1, uint64_t ar
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_gui_frame_request(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 static uint64_t syscall_gui_frame_take(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+static uint64_t syscall_gui_plane_create(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+static uint64_t syscall_gui_plane_surface(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+static uint64_t syscall_gui_plane_publish(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+static uint64_t syscall_gui_plane_destroy(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+static uint64_t syscall_gui_window_publish_edits(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+static uint64_t syscall_gui_plane_frame_wait(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+static uint64_t syscall_gui_plane_poke(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 
 // NOTE: syscall.S marshals the syscall registers straight into
 // _syscall_dispatch()'s C arguments — there is deliberately no C-level entry
@@ -287,13 +302,17 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_MEMORY,    "memory",    syscall_memory,    false, 0x01),  // arg0 = os64_memory_t out ptr
 	SYSCALL_DEFINE(SYSCALL_PRINTAT,   "printat",   syscall_printat,   false, 0x04),  // arg0 = x cell, arg1 = y cell, arg2 = string
 	SYSCALL_DEFINE(SYSCALL_TIME,      "time",      syscall_time,      false, 0x01),  // arg0 = os64_time_t out ptr
-	SYSCALL_DEFINE(SYSCALL_SETENV,    "setenv",    syscall_setenv,    false, 0x01),  // arg0 = key; arg1 = value OR NULL (mask excludes it: NULL means unset)
+	SYSCALL_DEFINE(SYSCALL_SETENV,    "setenv",    syscall_setenv,    false, 0x01),  // arg0 = key; arg1 = value OR NULL, which means unset (the handler's guarded copy vets it, so the mask leaves it out)
 	SYSCALL_DEFINE(SYSCALL_KLOG_READ, "klog_read", syscall_klog_read, false, 0x01),  // arg0 = os64_logent_t[] out, arg1 = max entries
 	SYSCALL_DEFINE(SYSCALL_SYNC,      "sync",      syscall_sync,      false, 0x00),  // arg0 = handle (an int, not a pointer)
 	// arg0/arg2 are CODE addresses in the caller's own text, not buffers —
 	// they are not in the pointer mask because user_range_accessible checks
-	// data reachability, and thread_join_create validates the stack mapping
-	// it actually writes to. The handler bounds both by USER_CANONICAL_MAX.
+	// data reachability, and the only thing written for them is the exit
+	// stub, through the new stack's own frames (thread_join_create). The
+	// handler bounds both by USER_CANONICAL_MAX. arg3, the name, is a
+	// buffer the mask leaves out: the handler copies it through the guarded
+	// string reads, which vet every page it touches, ceiling included, so
+	// the mask's check would only repeat the first part of theirs.
 	SYSCALL_DEFINE(SYSCALL_THREAD,      "thread",      syscall_thread,      false, 0x00),
 	SYSCALL_DEFINE(SYSCALL_THREAD_EXIT, "thread_exit", syscall_thread_exit, false, 0x00),
 	SYSCALL_DEFINE(SYSCALL_MKDIR,       "mkdir",       syscall_mkdir,       false, 0x01),  // arg0 = path
@@ -333,6 +352,7 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_GUI_EVENT_WAIT,         "gui_event_wait",         syscall_gui_event_wait,         false, 0x00),  // arg1 = input_event_t out OR NULL (nullable: NULL = wait, don't take — handler validates); BLOCKS (like read)
     SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_SET_CONTENT_SIZE,"gui_window_set_content_size",syscall_gui_window_set_content_size,false,0),
     SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_SET_PINNED,"gui_window_set_pinned",syscall_gui_window_set_pinned,false,0),
+    SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_SET_FULL_SCREEN,"gui_window_set_full_screen",syscall_gui_window_set_full_screen,false,0),
     SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_FOCUS,"gui_window_focus",syscall_gui_window_focus,false,0),
     SYSCALL_DEFINE(SYSCALL_GUI_EVENT_WAIT_ANY,"gui_event_wait_any",syscall_gui_event_wait_any,false,0),
     SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_GET_CONTENT_RECT,"gui_window_get_content_rect",syscall_gui_window_get_content_rect,false,0),
@@ -341,6 +361,13 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_GUI_EVENT_RING,         "gui_event_ring",         syscall_gui_event_ring,         false, 0x00),  // scalar window handle and mask
 	SYSCALL_DEFINE(SYSCALL_GUI_FRAME_REQUEST,      "gui_frame_request",      syscall_gui_frame_request,      false, 0x00),  // scalar handle and flags; never blocks (the answer is an event), resolves no path
 	SYSCALL_DEFINE(SYSCALL_GUI_FRAME_TAKE,         "gui_frame_take",         syscall_gui_frame_take,         false, 0x02),  // arg1 = input_event_t out; never blocks, resolves no path
+	SYSCALL_DEFINE(SYSCALL_GUI_PLANE_CREATE,       "gui_plane_create",       syscall_gui_plane_create,       false, 0x00),  // scalars: handle, width, height
+	SYSCALL_DEFINE(SYSCALL_GUI_PLANE_SURFACE,      "gui_plane_surface",      syscall_gui_plane_surface,      false, 0x04),  // arg2 = os64_gui_plane_surface_t out
+	SYSCALL_DEFINE(SYSCALL_GUI_PLANE_PUBLISH,      "gui_plane_publish",      syscall_gui_plane_publish,      false, 0x00),  // scalars: handle, plane, width, height
+	SYSCALL_DEFINE(SYSCALL_GUI_PLANE_DESTROY,      "gui_plane_destroy",      syscall_gui_plane_destroy,      false, 0x00),  // scalars: handle, plane
+	SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_PUBLISH_EDITS, "gui_window_publish_edits", syscall_gui_window_publish_edits, false, 0x00),  // arg1 damage OR NULL, arg2 edits (NULL when none): both copied by the handler
+	SYSCALL_DEFINE(SYSCALL_GUI_PLANE_FRAME_WAIT,   "gui_plane_frame_wait",   syscall_gui_plane_frame_wait,   false, 0x08),  // arg3 = os64_gui_plane_frame_t out; blocks, resolves no path
+	SYSCALL_DEFINE(SYSCALL_GUI_PLANE_POKE,         "gui_plane_poke",         syscall_gui_plane_poke,         false, 0x00),  // scalars: handle, plane
 	// arg1 is a CODE address the kernel will one day jump to, not a buffer it
 	// reads — so it stays OUT of the pointer mask (which validates readable
 	// user memory) and the handler range-checks it itself.
@@ -737,15 +764,34 @@ void restore_user_cr3(void)
 //     task's own when it is clear) and comes back "present".
 //   - First virtual page → reject: the pager cannot resolve the NULL guard,
 //     even if a VMA covers it.
-//   - Other VMA-covered pages → legal: a not-present page is demand paging waiting
-//     to happen.  For copy-OUT the VMA must also be writable — a store to a
-//     read-only page would be a ring-0 protection violation, another panic
-//     door.  (CoW pages pass correctly: their VMA says PROT_WRITE and the
-//     write fault resolves through the CoW branch.)
-//   - No VMA but present in the task's tables → legal: covers kernel-created
-//     eager mappings; the PTE's own W bit answers the writability question.
+//   - A page ring 3 could reach right now → legal, on the page table's word
+//     alone (paging_user_page_reachable: present and USER down the whole
+//     walk, and WRITE for copy-OUT). This comes first because it is cheap
+//     and it is the common case: most buffers are pages already there, many
+//     on a thread's stack, which no mapping covers, so asking the list of
+//     mappings first walked all of it to find nothing. It also covers the
+//     kernel's own eager pages for the task (stacks, argv, env).
+//   - A page PRESENT without USER → reject, whatever covers it: that is a
+//     supervisor page in the task's half, a thread's kernel stack, and the
+//     kernel must never copy to or from one on a program's say-so.
+//   - Otherwise a VMA covering it → legal: a not-present page is demand
+//     paging waiting to happen. For copy-OUT the VMA must also be writable —
+//     a store to a read-only page would be a ring-0 protection violation,
+//     another panic door. (CoW pages pass correctly: their VMA says
+//     PROT_WRITE and the write fault resolves through the CoW branch.) Each
+//     such page is looked up on its own: where mappings overlap (an ELF
+//     image's segments sharing a page) the next page may be another
+//     mapping's, and a lookup of the mapping just found is a step or two,
+//     since it was just moved to the head.
 //   - Neither → wild pointer; reject, so the syscall fails with
 //     SYSCALL_RESULT_BAD_USER_DATA instead of the kernel faulting.
+// WHAT IT DOES NOT PROMISE: what it reads is true AT THE CHECK and not
+// after: the page table's entries, read with no lock, and the mapping's
+// facts, copied under the task's mapLock. A sibling's unmap between the
+// check and the copy, or a sibling's exit whose stack held the buffer, is
+// the program's own race, but its cost is the kernel's: the copy faults in
+// ring 0 on a page no longer there, and that panics (DEBTS, "A copy can
+// outlive the check that allowed it").
 static bool user_range_accessible(const void *user_ptr, size_t length, bool for_write)
 {
 	uintptr_t addr = (uintptr_t)user_ptr;
@@ -764,24 +810,31 @@ static bool user_range_accessible(const void *user_ptr, size_t length, bool for_
 
 	uintptr_t end = addr + length;   // <= USER_CANONICAL_MAX: no overflow, nothing above the ceiling
 
+	uint64_t by_table = 0;
+	bool ok = true;
 	for (uintptr_t page = addr & ~(uintptr_t)(PAGE_SIZE - 1); page < end; page += PAGE_SIZE)
 	{
-		vma_t *vma = vma_lookup(task, page);
-		if (vma != NULL)
+		if (paging_user_page_reachable((pt_entry_t *)task->pml4v, page, for_write))
 		{
-			if (for_write && !(vma->prot & PROT_WRITE))
-				return false;
+			by_table++;
 			continue;
 		}
-
-		uintptr_t pte = paging_walk_paging_table_keep_flags((pt_entry_t *)task->pml4v, page, true);
-		if (pte == 0xbadbadba || !(pte & PAGE_PRESENT))
-			return false;
-		if (for_write && !(pte & PAGE_WRITE))
-			return false;
+		uintptr_t leaf = paging_walk_paging_table_keep_flags((pt_entry_t *)task->pml4v, page, true);
+		if (leaf != 0xbadbadba && (leaf & PAGE_PRESENT) && !(leaf & PAGE_USER))
+		{
+			ok = false;
+			break;
+		}
+		vma_facts_t facts;
+		if (!vma_lookup_facts(task, page, &facts) || (for_write && !(facts.prot & PROT_WRITE)))
+		{
+			ok = false;
+			break;
+		}
 	}
-
-	return true;
+	if (by_table != 0)
+		vma_note_table_answers(task, by_table);
+	return ok;
 }
 
 bool validate_and_copy_user_data(const void* user_ptr, size_t length, void* kernel_buffer)
@@ -2091,9 +2144,9 @@ static uint64_t syscall_read_pinned(task_t *task, const handle_t *h,
 			// table handle_close_all had already swept, and a conn that is
 			// no longer the listener's and never closed by anyone stays
 			// listed with its buffers and its port forever (Codex #101
-			// rd6). A reservation is what teardown cancels, and a commit
-			// that lands after teardown passed the slot closes the handle
-			// itself. A full table is also discovered before the handshake
+			// rd6). A reservation is its owner's alone (teardown's sweep
+			// passes it by), and a commit that lands after teardown began
+			// closes the handle itself. A full table is also discovered before the handshake
 			// is spent, which the alloc-after could not do.
 			int ch = handle_reserve(task);
 			if (ch < 0)
@@ -2121,9 +2174,9 @@ static uint64_t syscall_read_pinned(task_t *task, const handle_t *h,
 			                      .peer_port = conn->peer_port, ._reserved = 0 };
 			if (!handle_commit_reserved(task, ch, HANDLE_NET_TCP, conn))
 			{
-				// Teardown cancelled the reservation first: the task is
-				// dying, and this conn has no owner but us. Hang it up
-				// cleanly (the peer gets a FIN) rather than strand it.
+				// Not this call's reservation any more (handle.h: commit):
+				// this conn has no owner but us. Hang it up cleanly (the
+				// peer gets a FIN) rather than strand it.
 				tcp_conn_release(conn);
 				return SYSCALL_RESULT_INVALID;
 			}
@@ -2634,8 +2687,9 @@ static uint64_t syscall_pty_create_common(uint32_t cols, uint32_t rows, uint8_t 
 	pty_master_hold(slave);
 	if (!handle_commit_reserved(task, mh, HANDLE_PTY_MASTER, slave))
 	{
-		// Teardown cancelled the slot first: release the master's ownership
-		// and then our hold, which permits the never-seated slave's burial.
+		// Not this call's reservation any more (handle.h: commit): release
+		// the master's ownership and then our hold, which permits the
+		// never-seated slave's burial.
 		pty_master_close(slave);
 		pty_master_unhold(slave);
 		return SYSCALL_RESULT_INVALID;
@@ -3030,7 +3084,7 @@ static uint64_t syscall_net_announce(uint64_t arg0, uint64_t arg1, uint64_t arg2
 	}
 	if (!handle_commit_reserved(task, h, HANDLE_NET_LISTENER, l))
 	{
-		tcp_listener_close(l);   // teardown cancelled the slot first: the task is dying
+		tcp_listener_close(l);   // not this call's reservation any more (handle.h: commit)
 		return SYSCALL_RESULT_INVALID;
 	}
 	printd(DEBUG_NET, "net_announce: task %s <- tcp!%s!%u = handle %d\n",
@@ -3510,8 +3564,12 @@ static uint64_t syscall_map(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	// resource this kernel owns, and never-reuse means a stale pointer into
 	// an unmapped region ALWAYS faults instead of aliasing a new region.
 	// (A use-after-unmap tripwire for free — same philosophy as the HHDM.)
-	uintptr_t base = task->heapEnd;
-	if (base + rounded >= TASK_HEAP_END || base + rounded < base)
+	// The range and the permanently-unmapped guard page past it come from
+	// the task's one door: running off the end of a region faults instead of
+	// silently scribbling on the next one, and a sibling mapping (or making
+	// a window) at the same moment gets a range of its own.
+	uintptr_t base;
+	if (!task_va_reserve(task, rounded, &base))
 		return SYSCALL_RESULT_INVALID;   // out of heap VA (a 47-bit feat)
 
 	vma_t *vma = vma_create(base, base + rounded, PROT_READ | PROT_WRITE,
@@ -3519,11 +3577,6 @@ static uint64_t syscall_map(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	if (vma == NULL)
 		return SYSCALL_RESULT_INVALID;
 	vma_add(task, vma);
-
-	// Advance past the region PLUS one permanently-unmapped guard page:
-	// running off the end of a region faults instead of silently scribbling
-	// on the next one. malloc overruns announce themselves here.
-	task->heapEnd = base + rounded + PAGE_SIZE;
 
 	printd(DEBUG_SYSCALL, "map: task %s: %lu bytes at 0x%016lx\n",
 	       task->exename, rounded, base);
@@ -3544,27 +3597,28 @@ static uint64_t syscall_unmap(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 
 	core_local_storage_t *cls = get_core_local_storage();
 	task_t *task = cls ? cls->task : NULL;
-	if (task == NULL || task->mmaps == NULL)
+	if (task == NULL || base < TASK_HEAP_START)
 		return SYSCALL_RESULT_INVALID;
 
 	// Find the region by EXACT base — and only accept regions map() made
 	// (anonymous, heap-range). Without this gate, userland could unmap its
 	// own code segment and the next instruction fetch becomes a kernel
-	// panic; a bad handle should hurt the caller, not the kernel.
-	dlist_node_t *node = task->mmaps->head;
-	vma_t *vma = NULL;
-	while (node != NULL)
-	{
-		vma_t *v = (vma_t *)node->data;
-		if (v != NULL && v->start == base)
-		{
-			vma = v;
-			break;
-		}
-		node = node->next;
-	}
-	if (vma == NULL || !(vma->flags & MAP_ANONYMOUS) || base < TASK_HEAP_START)
+	// panic; a bad handle should hurt the caller, not the kernel. Held, so
+	// a sibling's unmap of the same base cannot free it under this one.
+	vma_t *vma = vma_lookup_anon_start_hold(task, base);
+	if (vma == NULL)
 		return SYSCALL_RESULT_INVALID;
+
+	// DELISTED FIRST (MAPPING_LIST.md): from here no fault can find it, and
+	// one already holding it rechecks `listed` under the page lock before it
+	// installs anything (page_publish_lock, simple_exceptions.c). Two unmaps
+	// of one base can both get this far; the one that did not delist it
+	// gives its hold back and is refused.
+	if (!vma_delist(task, vma))
+	{
+		vma_release(task, vma);
+		return SYSCALL_RESULT_INVALID;
+	}
 
 	// Give back every page that was actually faulted in. paging_unmap_page
 	// invlpg's locally; pages never touched have no PTE and nothing to free.
@@ -3592,25 +3646,34 @@ static uint64_t syscall_unmap(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	// signalled on resumes on a dead page and takes a clean ring-3
 	// segfault. That is this function's own stated doctrine — a bad handle
 	// should hurt the caller, not the kernel.
+	//
+	// AND EACH PAGE'S WALK AND REMOVAL UNDER THE TASK'S PAGE LOCK, inside
+	// signalLock (the order task.h gives), so a fault's publish lands wholly
+	// before the walk (and the page is freed here) or wholly after it (and
+	// finds the mapping delisted). The frame is freed after the page lock is
+	// released, still under signalLock.
 	for (uintptr_t va = vma->start; va < vma->end; va += PAGE_SIZE)
 	{
 		uint64_t uf = spinlock_acquire_irqsave(&task->signalLock);
+		uint64_t pf = counted_lock_acquire(&task->pageLock);
 		uintptr_t phys = paging_walk_paging_table((pt_entry_t *)task->pml4v, va);
-		if (phys != 0 && phys != 0xbadbadba)
-		{
+		bool present = phys != 0 && phys != 0xbadbadba;
+		if (present)
 			paging_unmap_page((pt_entry_t *)task->pml4v, va);
-			// The allocator choke point: also HHDM-unmaps + TLB-shoots the
-			// kernel alias, per the lazy-HHDM rules.
+		counted_lock_release(&task->pageLock, pf);
+		// The allocator choke point: also HHDM-unmaps + TLB-shoots the
+		// kernel alias, per the lazy-HHDM rules.
+		if (present)
 			free_memory(phys);
-		}
 		spinlock_release_irqrestore(&task->signalLock, uf);
 	}
 
 	printd(DEBUG_SYSCALL, "unmap: task %s: region 0x%016lx-0x%016lx released\n",
 	       task->exename, vma->start, vma->end);
 
-	dlist_remove(task->mmaps, node);
-	vma_destroy(vma);
+	// This call's hold given back: whichever of it and a fault's hold is
+	// the last frees the mapping.
+	vma_release(task, vma);
 	return 0;
 }
 
@@ -5230,17 +5293,18 @@ static uint64_t syscall_klog_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	return ok ? (uint64_t)got : SYSCALL_RESULT_BAD_USER_DATA;
 }
 
-// thread(entry, arg, exit_stub) — os64's first ring-3 threads.
+// thread(entry, arg, exit_stub, name) — os64's first ring-3 threads.
 //
 // Everything the new thread needs already existed: createThread gives it
 // its own guarded user and kernel stacks at unique task-local addresses,
 // and the scheduler has always scheduled THREADS. All that was missing
 // was a way to ask. See os64/syscall_numbers.h for the API argument and
-// thread_join.h for why the handle points at a join object.
+// thread_join.h for why the handle points at a join object. `name` (arg3)
+// is os64/thread_name.h's, NULL for unnamed.
 static uint64_t syscall_thread(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5)
 {
-	(void)arg3; (void)arg4; (void)arg5;
+	(void)arg4; (void)arg5;
 
 	core_local_storage_t *cls = get_core_local_storage();
 	task_t *task = cls ? cls->task : NULL;
@@ -5270,19 +5334,96 @@ static uint64_t syscall_thread(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		return SYSCALL_RESULT_BAD_USER_DATA;
 	}
 
-	thread_join_t *j = thread_join_create(task, arg0, arg1, arg2);
-	if (j == NULL)
-		return SYSCALL_RESULT_INVALID;
+	// THE NAME FIRST, so a refusal leaves nothing behind: no park, no
+	// handle, no thread. It is copied once into the kernel and checked
+	// there, so what is checked is what the thread keeps whatever ring 3
+	// does to its buffer meanwhile. The length scan only tells "too long"
+	// (INVALID, a rule) from "cannot be read" (BAD_USER_DATA); the copy
+	// checks its own terminator, because the buffer may change between them.
+	char name[OS64_THREAD_NAME_MAX];
+	name[0] = '\0';
+	if (arg3 != 0)
+	{
+		size_t len = 0;
+		int scan = user_string_length((const char *)arg3, sizeof(name), &len);
+		if (scan == 0)
+		{
+			printd(DEBUG_THREAD, "syscall_thread: %s passed a name with no end within %u bytes — refused\n",
+			       task->exename, (unsigned)sizeof(name));
+			return SYSCALL_RESULT_INVALID;
+		}
+		if (scan < 0 || !copy_user_string((const char *)arg3, name, sizeof(name)))
+		{
+			printd(DEBUG_THREAD, "syscall_thread: %s passed a name it cannot read — refused\n", task->exename);
+			return SYSCALL_RESULT_BAD_USER_DATA;
+		}
+		if (!os64_thread_name_valid(name))
+		{
+			printd(DEBUG_THREAD, "syscall_thread: %s passed a name with a byte outside printable ASCII — refused\n",
+			       task->exename);
+			return SYSCALL_RESULT_INVALID;
+		}
+	}
 
-	int h = handle_alloc(task, HANDLE_THREAD, j);
+	// THE REAP'S BACKLOG (THREAD_STACKS.md § The reap). Each ended thread
+	// keeps its stacks until kworker releases them; a task that ends threads
+	// faster than that would hold an ever larger pile. So while more than
+	// THREAD_REAP_BACKLOG of this task's threads wait, it parks a tick at a
+	// time instead of making another, for THREAD_REAP_PARK_MOST_US at most:
+	// a thread's creation never hangs on a daemon, so past that it proceeds.
+	// It waits for kworker rather than releasing them itself: the release
+	// waits for every CPU to flush, and a syscall runs with interrupts off,
+	// where that wait could deadlock (tlb_shootdown_wait). A signal ends the
+	// wait as it ends a sleep.
+	thread_t *self = cls->currentThread;
+	uint64_t parked_since = 0;
+	bool proceeded = false;
+	while (__atomic_load_n(&task->reaps.pending, __ATOMIC_RELAXED) > THREAD_REAP_BACKLOG)
+	{
+		if (parked_since == 0)
+			parked_since = micros_now();
+		else if (micros_now() - parked_since >= THREAD_REAP_PARK_MOST_US)
+		{
+			proceeded = true;
+			break;
+		}
+		if (signal_park_must_end(self))
+		{
+			thread_reap_note_park(micros_now() - parked_since, false);
+			if (current_thread_will_catch())
+				return (uint64_t)(int64_t)OS64_INTERRUPTED;
+			raise_terminating_signal_and_die(task, self);
+			__builtin_unreachable();
+		}
+		signal_raise(SIGSLEEP, kTicksSinceStart + 1, self);
+	}
+	if (parked_since != 0)
+		thread_reap_note_park(micros_now() - parked_since, proceeded);
+
+	// THE HANDLE BEFORE THE THREAD: thread_join_create submits the thread to
+	// the scheduler, so a handle asked for afterwards could be refused with
+	// the thread already running, and a caller told "no thread" would have
+	// one. Reserved first, a refusal creates nothing; a create that fails
+	// gives the reservation back; an error from this call means no thread.
+	int h = handle_reserve(task);
 	if (h < 0)
 	{
-		// Out of handle slots. The thread is ALREADY RUNNING — it was
-		// submitted to the scheduler inside thread_join_create — so this
-		// drops the handle's reference and lets it run detached rather
-		// than pretending it never started.
-		printd(DEBUG_THREAD, "syscall_thread: %s out of handles; thread 0x%08lx runs detached\n",
-		       task->exename, j->threadID);
+		printd(DEBUG_THREAD, "syscall_thread: %s out of handles; no thread made\n", task->exename);
+		return SYSCALL_RESULT_INVALID;
+	}
+	thread_join_t *j = thread_join_create(task, arg0, arg1, arg2, name[0] ? name : NULL);
+	if (j == NULL)
+	{
+		(void)handle_cancel_reserved(task, h);
+		return SYSCALL_RESULT_INVALID;
+	}
+	if (!handle_commit_reserved(task, h, HANDLE_THREAD, j))
+	{
+		// Cannot happen: commit refuses only a slot that is not this call's
+		// reservation (handle.h), and nothing but this call writes it — a
+		// close never writes a reserved slot, and teardown's sweep passes
+		// it by. Were it ever to, the thread already runs: detached, with
+		// no handle to answer for it.
 		thread_join_close(j);
 		return SYSCALL_RESULT_INVALID;
 	}
@@ -5307,6 +5448,14 @@ static uint64_t syscall_thread_exit(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	printd(DEBUG_THREAD, "syscall_thread_exit: thread 0x%08lx of %s exiting with %ld\n",
 	       self->threadID, task->exename, (int64_t)arg0);
 
+	// The planes this thread created leave with it (os64/gui.h § Planes).
+	// Here, first: syscall context, no spinlock held, the thread still
+	// RUNNING and wakeable, so kGuiLock is taken as any GUI call takes it.
+	// A thread's entry returning reaches this call through libos64's exit
+	// stub; a thread ending any other way ends its task, whose death takes
+	// every plane (gui_task_destroy_windows).
+	gui_thread_planes_exit(self);
+
 	// Publish the answer and drop the thread's reference BEFORE leaving the
 	// run queue: after the state change below this thread never executes
 	// another instruction, so anything left undone stays undone forever.
@@ -5320,6 +5469,10 @@ static uint64_t syscall_thread_exit(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	// The thread that is currently executing must still BE in the running
 	// queue when the scheduler takes over — that is how it finds itself.
 	self->retVal = (uint64_t)arg0;
+	// Its stacks are released while its task lives: the pass that files it
+	// hands it to the reap (thread_reap.h). Set before `exited`, which is
+	// what sends it there.
+	self->reapOnExit = true;
 	self->exited = true;
 
 	// Off the run queue and never coming back: hand the core to someone
@@ -6056,6 +6209,105 @@ static uint64_t syscall_gui_frame_take(uint64_t arg0, uint64_t arg1, uint64_t ar
 	if (rc == 1 && !copy_to_user_buffer((void *)arg1, &ev, sizeof(ev)))
 		return (uint64_t)GUI_ERR_BAD_ARGS;
 	return (uint64_t)rc;
+}
+
+// A window's planes (gui/plane.h, os64/gui.h § Planes). Every size is
+// checked against 32 bits here, so a high word of garbage is refused rather
+// than narrowed into a size nobody asked for.
+static uint64_t syscall_gui_plane_create(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg3; (void)arg4; (void)arg5;
+	if (arg1 > UINT32_MAX || arg2 > UINT32_MAX)
+		return (uint64_t)GUI_ERR_BAD_ARGS;
+	return (uint64_t)gui_plane_create((int64_t)arg0, (uint32_t)arg1, (uint32_t)arg2);
+}
+
+static uint64_t syscall_gui_plane_surface(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg3; (void)arg4; (void)arg5;
+	if (arg1 > UINT32_MAX)
+		return (uint64_t)OS64_GUI_ERR_NO_PLANE;
+	os64_gui_plane_surface_t out;
+	int64_t rc = gui_plane_surface((int64_t)arg0, (uint32_t)arg1, &out);
+	if (rc != 0)
+		return (uint64_t)rc;
+	if (!copy_to_user_buffer((void *)arg2, &out, sizeof(out)))
+		return (uint64_t)GUI_ERR_BAD_ARGS;
+	return 0;
+}
+
+static uint64_t syscall_gui_plane_publish(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg4; (void)arg5;
+	if (arg1 > UINT32_MAX)
+		return (uint64_t)OS64_GUI_ERR_NO_PLANE;
+	if (arg2 > UINT32_MAX || arg3 > UINT32_MAX)
+		return (uint64_t)GUI_ERR_BAD_ARGS;
+	return (uint64_t)gui_plane_publish((int64_t)arg0, (uint32_t)arg1, (uint32_t)arg2, (uint32_t)arg3);
+}
+
+static uint64_t syscall_gui_plane_destroy(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg2; (void)arg3; (void)arg4; (void)arg5;
+	if (arg1 > UINT32_MAX)
+		return (uint64_t)OS64_GUI_ERR_NO_PLANE;
+	return (uint64_t)gui_plane_destroy((int64_t)arg0, (uint32_t)arg1);
+}
+
+// A plane's frame wait: the answer is filled in a kernel copy and copied
+// out only when the wait ended with one (0); an interrupted wait copies
+// nothing.
+static uint64_t syscall_gui_plane_frame_wait(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg4; (void)arg5;
+	if (arg1 > UINT32_MAX)
+		return (uint64_t)OS64_GUI_ERR_NO_PLANE;
+	if (arg2 > UINT32_MAX)
+		return (uint64_t)GUI_ERR_BAD_ARGS;
+	os64_gui_plane_frame_t out;
+	int64_t rc = gui_plane_frame_wait((int64_t)arg0, (uint32_t)arg1, (uint32_t)arg2, &out);
+	if (rc != 0)
+		return (uint64_t)rc;
+	if (!copy_to_user_buffer((void *)arg3, &out, sizeof(out)))
+		return (uint64_t)GUI_ERR_BAD_ARGS;
+	return 0;
+}
+
+static uint64_t syscall_gui_plane_poke(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg2; (void)arg3; (void)arg4; (void)arg5;
+	if (arg1 > UINT32_MAX)
+		return (uint64_t)OS64_GUI_ERR_NO_PLANE;
+	return (uint64_t)gui_plane_poke((int64_t)arg0, (uint32_t)arg1);
+}
+
+// The damage is nullable (the publish precedent) and the edits are absent
+// when there are none, so neither is in the dispatcher's pointer mask: both
+// are copied into kernel memory here, BEFORE any lock, and the copies are
+// all the GUI ever reads.
+static uint64_t syscall_gui_window_publish_edits(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg4; (void)arg5;
+	if (arg3 > OS64_GUI_PLANE_EDITS_MAX)
+		return (uint64_t)GUI_ERR_BAD_ARGS;
+	rect_t local;
+	const rect_t *damage = NULL;
+	if (arg1 != 0) {
+		if (!copy_user_buffer((const void *)arg1, &local, sizeof(local)))
+			return (uint64_t)GUI_ERR_BAD_ARGS;
+		damage = &local;
+	}
+	os64_gui_plane_edit_t edits[OS64_GUI_PLANE_EDITS_MAX];
+	if (arg3 > 0 && !copy_user_buffer((const void *)arg2, edits, (size_t)arg3 * sizeof(edits[0])))
+		return (uint64_t)GUI_ERR_BAD_ARGS;
+	return (uint64_t)gui_window_publish_edits((int64_t)arg0, damage, arg3 > 0 ? edits : NULL, (uint32_t)arg3);
 }
 
 static uint64_t syscall_gui_event_wait(uint64_t arg0, uint64_t arg1, uint64_t arg2,

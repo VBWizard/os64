@@ -20,8 +20,9 @@ $(LIBJS_GENERATED)/.prepared: $(wildcard libjs/upstream/* libjs/patches/*.patch)
 	python3 ../tools/js_prepare.py "$(LIBJS_GENERATED)"
 	@touch $@
 
+# Use a checkout-relative source path so __FILE__ in diagnostics is stable.
 $(LIBJS_CORE_OBJS): $(OBJ)/js/%.o: $(LIBJS_GENERATED)/.prepared libjs/core.mk
-	$(CC) $(LIBJS_FLAGS) $(LIBJS_UPSTREAM_WARNINGS) -c $(LIBJS_GENERATED)/$*.c -o $@
+	$(CC) $(LIBJS_FLAGS) $(LIBJS_UPSTREAM_WARNINGS) -c $(patsubst $(CURDIR)/%,%,$(LIBJS_GENERATED)/$*.c) -o $@
 
 $(OBJ)/js/port/%.o: libjs/port/%.c $(LIBJS_GENERATED)/.prepared libjs/core.mk
 	@mkdir -p "$(@D)"

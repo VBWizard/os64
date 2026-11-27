@@ -1,0 +1,18 @@
+<!doctype html><html><head><title>warp part edge</title><style>
+body{margin:0;background:#fff;font:16px sans-serif}
+#c{display:inline-block;margin:40px;padding:4px 12px;background:#ddd;transform:scale(1.2)}
+#bar{position:absolute;left:70px;top:30px;width:3px;height:50px;background:rgba(255,0,0,.3)}
+</style></head><body>
+<span id=c>All</span><div id=bar></div>
+<script>
+// The see-through bar's colour flips, so each repaint is a part three
+// pixels wide cutting through the scaled box: the box's pixels under it
+// are laid by a warp whose rows start at the bar, and a whole paint's
+// rows start at the box's left edge.
+let n = 0;
+setInterval(() => {
+  n++;
+  document.getElementById('bar').style.backgroundColor = n % 2 ? 'rgba(0,0,255,.3)' : 'rgba(255,0,0,.3)';
+}, 250);
+</script>
+</body></html>

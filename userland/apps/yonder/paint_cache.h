@@ -2,10 +2,12 @@
 #define YONDER_PAINT_CACHE_H
 
 // The paint cache's store (YONDER_PERF.md § perf-2), private to the
-// painter: entries of bytes, found by a key the painter makes, kept most
+// painter and the kept canvas pictures (canvas_keep.c), which draw inside
+// its paints: entries of bytes, found by a key its user makes, kept most
 // recently used first, the least recently used let go to stay within the
 // budget — never one the last two paints used. What a key means and what
-// the bytes are is the painter's.
+// the bytes are is its user's, and every key begins with a tag naming its
+// kind (a canvas's "CK"), so two kinds never meet under one key.
 
 #include "paint.h"
 
@@ -32,6 +34,15 @@ void *paint_cache_make(yonder_paint_cache_t *c, const uint8_t *key, uint32_t kle
 // An entry this paint found or made and cannot use after all: no paint's,
 // and the first to be let go.
 void paint_cache_release(yonder_paint_cache_t *c, void *bytes);
+// Whether an entry is held under `key`, asking only: nothing is counted,
+// stamped or moved.
+bool paint_cache_holds(const yonder_paint_cache_t *c, const uint8_t *key, uint32_t klen, uint64_t hash);
+// The entry under `key`, if there is one, let go now — found by nothing
+// after, its bytes freed, counted neither as found nor as let go for room
+// — for bytes that are wrong (a fill that failed) or can never be wanted
+// again; true when there was one. A pointer to it held from a find or a
+// make is dead after it.
+bool paint_cache_forget(yonder_paint_cache_t *c, const uint8_t *key, uint32_t klen, uint64_t hash);
 // A picture worked out without the cache: its blocks did not fit, or found
 // no memory.
 void paint_cache_refused(yonder_paint_cache_t *c, bool memory);

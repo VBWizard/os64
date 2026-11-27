@@ -11,6 +11,7 @@ static void changed(void *opaque, const os64_html_change_t *record)
     d_custom_changed(dom, record);
     for (DMutationConsumer *c = dom->mutation_consumers; c; c = c->next)
         c->changed(dom, record);
+    d_ranges_follow(dom);
 }
 void d_mutation_register(os64_dom_t *dom, DMutationConsumer *consumer,
                          void (*callback)(os64_dom_t *, const os64_html_change_t *))

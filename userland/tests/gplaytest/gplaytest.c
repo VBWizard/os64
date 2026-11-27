@@ -19,12 +19,21 @@
 //      picture by the clock and drains its sound, and the end comes;
 //   8. the file with no sound covered: the end comes on the clock alone;
 //   9. a file that opens but is not media (a page) is refused with
-//      exit 2: the player fails its probe and stays gplay's until closed.
+//      exit 2: the player fails its probe and stays gplay's until closed;
+//  10. the file with both again with --no-plane: the window paints every
+//      picture, as with a plane refused;
+//  11. the file with no sound covered with --no-plane: the end comes on the
+//      clock alone with no thread of gplay's picking.
 //
-// Steps 2, 7 and 8 are the player's promise that a caller who never asks
-// for a frame does not stop it (os64/media_player.h § A picture nobody asks
-// for): with no frame call there is no other thread of the caller's to
-// keep the queues moving.
+// Every --check run but steps 10 and 11 also has gplay judge that its plane
+// was on to the end (VIDEO_PLANE.md § 6), so steps 1 to 8 prove the plane's
+// path and steps 10 and 11 the window's.
+//
+// Step 11 is the player's promise that a caller who never asks for a frame
+// does not stop it (os64/media_player.h § A picture nobody asks for): with
+// no frame call and no plane there is no other thread to keep the queues
+// moving. Steps 2, 7 and 8 are covered windows on a plane, where the show
+// thread's waits end by their patience and it picks all the same.
 //
 // Timing is no result here: under QEMU's emulation the pictures fall behind
 // and are dropped, skipped and resynced, which is the late policy working.
@@ -132,7 +141,11 @@ static int steps(void)
         return r;
     if ((r = expect(8, (char *[]){"/bin/gplay", "--check", "--cover", PICTURE_ONLY, 0}, 0)) != 0)
         return r;
-    return expect(9, (char *[]){"/bin/gplay", "--check", "/tests/pages/audio.html", 0}, 2);
+    if ((r = expect(9, (char *[]){"/bin/gplay", "--check", "/tests/pages/audio.html", 0}, 2)) != 0)
+        return r;
+    if ((r = expect(10, (char *[]){"/bin/gplay", "--check", "--no-plane", AV, 0}, 0)) != 0)
+        return r;
+    return expect(11, (char *[]){"/bin/gplay", "--check", "--cover", "--no-plane", PICTURE_ONLY, 0}, 0);
 }
 
 int main(void)

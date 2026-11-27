@@ -47,7 +47,7 @@ static void thread_join_unref(thread_join_t* j)
 }
 
 thread_join_t* thread_join_create(void* taskv, uint64_t entry, uint64_t arg,
-                                  uint64_t exit_stub)
+                                  uint64_t exit_stub, const char* name)
 {
 	task_t* task = (task_t*)taskv;
 
@@ -55,17 +55,16 @@ thread_join_t* thread_join_create(void* taskv, uint64_t entry, uint64_t arg,
 	if (j == NULL)
 		return NULL;
 
-	// A ring-3 thread: createThread already gives it its own user stack AND
-	// its own kernel stack, each with guard pages, each at a unique VA from
-	// the task's virtual-address counter (task_reserve_task_virt). That last
-	// part is why this feature needed no address-space work — whoever wrote
-	// task_alloc_guarded_stack solved the multi-thread case years before
-	// there were multiple threads.
+	// A ring-3 thread: createThread gives it its own user stack AND its own
+	// kernel stack, each with guard pages, each a range of the task's heap
+	// range that is never handed out twice (task.c § Stacks). It may refuse,
+	// with nothing taken, when the memory is not there.
 	// A spawned thread gets the default stack; only a program's main thread
 	// takes the size it declares (SCRIPT_STACK.md § 8).
-	thread_t* t = createThread(task, false, 0);
+	thread_t* t = createThread(task, false, 0, true);
 	if (t == NULL)
 	{
+		printd(DEBUG_THREAD, "thread_join_create: no memory for another thread of %s; none made\n", task->exename);
 		kfree(j);
 		return NULL;
 	}
@@ -77,6 +76,8 @@ thread_join_t* thread_join_create(void* taskv, uint64_t entry, uint64_t arg,
 	// it tried to `ret` into the kernel's half of the map.)
 	t->regs.RIP = entry;
 	t->regs.RDI = arg;
+	// Before the splice below, which is where a reader can first find it.
+	thread_name_init(t, name);
 
 	// AFFINITY, and the trap in it: "run anywhere" is THREAD_NO_AFFINITY,
 	// which is 0xFFFFFFFFFFFFFFFF — NOT zero. createThread doesn't set the
@@ -95,27 +96,15 @@ thread_join_t* thread_join_create(void* taskv, uint64_t entry, uint64_t arg,
 
 	// Write the return address into the new thread's user stack. The stack
 	// lives at a task-local lower-half VA that the kernel's own page tables
-	// do not map, so it is reached the documented way: resolve through the
-	// TASK's tables, then write through the HHDM alias (valid while
-	// allocated). See CLAUDE.md § Writing to Task Memory.
-	//
-	// t->regs.RSP is createThread's: the top of the user stack the kernel
-	// just allocated for this thread (the `thread` syscall's arg becomes RDI
-	// and is never dereferenced). It is still resolved through
-	// paging_resolve_user_writable rather than a bare walk, as a guard: a
-	// plain walk accepts ANY present page, and the kernel writing `exit_stub`
-	// through a pointer that ever came to name the kernel's half or a
-	// read-only shared page would be the ring-3 -> ring-0 write Codex found
-	// in signal delivery. The guard demands lower-half + USER + WRITABLE.
-	uintptr_t phys_rsp = paging_resolve_user_writable((pt_entry_t*)task->pml4v, t->regs.RSP);
-	if (phys_rsp == 0)
-	{
-		printd(DEBUG_THREAD, "thread_join_create: new thread's stack VA 0x%016lx is not a writable user page in %s — refusing\n",
-		       t->regs.RSP, task->exename);
-		kfree(j);
-		return NULL;   // the thread_t leaks; thread teardown is a standing debt
-	}
-	*(uintptr_t*)(phys_rsp | kHHDMOffset) = (uintptr_t)exit_stub;
+	// do not map, so it is written through the HHDM alias of its frames
+	// (valid while allocated; CLAUDE.md § Writing to Task Memory). No table
+	// is walked: t->regs.RSP is createThread's, inside the stack it just
+	// made, and the stack's frames are the one run at t->esp3BaseP, so the
+	// offset into the stack is the offset into the run. The address the
+	// kernel writes through is therefore the kernel's own allocation, never
+	// one ring 3 named (the `thread` syscall's arg becomes RDI and is never
+	// dereferenced).
+	*(uintptr_t*)((t->esp3BaseP + (t->regs.RSP - t->esp3BaseV)) | kHHDMOffset) = (uintptr_t)exit_stub;
 
 	j->threadID = t->threadID;
 	j->exited = false;
@@ -133,10 +122,17 @@ thread_join_t* thread_join_create(void* taskv, uint64_t entry, uint64_t arg,
 	// scheduler_change_thread_queue takes the queue lock itself (the
 	// _locked variant is for callers already inside it — see the queue-lock
 	// discipline note at the top of scheduler.c). The taskNext splice is
-	// done first and is safe unlocked: this thread is not reachable by any
-	// walker until the queue insert publishes it.
-	t->taskNext = task->threads->taskNext;
-	task->threads->taskNext = t;
+	// done first, by CAS: two threads of the task making threads at once
+	// both splice after the head, and a plain read-then-store would lose
+	// one, leaving a thread no walk of the task finds (not signalled at the
+	// task's death, never buried). A walker sees the chain before or after
+	// the splice, both whole; the new thread's own link is written before
+	// the CAS publishes it.
+	thread_t *head = task->threads;
+	thread_t *after = __atomic_load_n(&head->taskNext, __ATOMIC_ACQUIRE);
+	do
+		t->taskNext = after;
+	while (!__atomic_compare_exchange_n(&head->taskNext, &after, t, true, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE));
 	scheduler_change_thread_queue(t, THREAD_STATE_RUNNABLE);
 
 	printd(DEBUG_THREAD, "thread_join_create: task %s (id %lu) started thread 0x%08lx at RIP=0x%016lx "

@@ -29,6 +29,7 @@
 //                                "acpi", "block", "cache", "conf", "gui", "log", "mounts",
 //                                "openfiles", "random", "shlib", "clipboard", "appearance", "decorations", "mouse", "usb", "audio",
 //                                "mediakeys"
+//   /sys/boot-kernel             the exact ELF handed to this boot by Limine
 //   /sys/acpi                    everything the firmware's ACPI tables
 //                                said, used or not: every table, the
 //                                FADT's power-management facts, the MADT's
@@ -67,6 +68,11 @@
 //   /sys/memory/ledger           the small-object ledger: rows against its
 //                                wall, entries, borrowed chunks, policy
 //                                counters, common free holes, its lock
+//   /sys/memory/reap             ended threads' stacks waiting for kworker,
+//                                what it gave back, how long thread makers
+//                                waited for it (thread_reap.h)
+//   /sys/memory/shootdown        the waited invalidation's rounds, the late
+//                                ones and the longest wait (smp_core.h)
 //   /sys/random                  the entropy pool: which instructions the
 //                                CPU advertises and which passed the boot
 //                                variation check, what seeded the pool,
@@ -195,6 +201,8 @@
 #include "doorbell.h"                   // /sys/net/knet — every bell in the registry
 #include "driver/net/ipv4.h"            // kNetIPv4Address/Gateway/Netmask
 #include "gui/glass.h"                 // glass_view_count — /sys/gui's viewer count
+#include "gui/plane.h"                 // gui_planes_status — /sys/gui's planes
+#include "gui/window.h"                // gui_full_screen_status — /sys/gui's full screen
 #include "driver/net/loopback.h"        // kNetLoopback — lo's queue in /sys/net/knet
 #include "driver/net/net_wire.h"        // NET_IPV4_OCTETS — the a.b.c.d splitter
 #include "driver/net/dhcp.h"            // kDhcpStats — the lease, and how it was got
@@ -217,6 +225,7 @@
 #include "console_font.h"   // /sys/console/font — the VTs' face, and its door
 #include "shared_object.h"  // /sys/shlib — the loaded-shared-object registry
 #include "allocator.h"      // /sys/memory — the frame table and the ledger
+#include "thread_reap.h"    // /sys/memory/reap
 #include "accounting.h"
 
 extern volatile uint64_t kTicksSinceStart;   // /sys/log stamps the sink heartbeat against it
@@ -245,6 +254,9 @@ typedef struct
 	uint32_t bar[6];                           // as enumeration read them
 	uint8_t  bars;                             // six for a device, two for a bridge
 } sys_pci_view_t;
+
+extern uint64_t kKernelFileAddress;
+extern uint64_t kKernelFileSize;
 
 static int sys_pci_total(void)
 {
@@ -400,6 +412,7 @@ typedef enum
 	SYS_NODE_BTSCAN,     // /bluetooth/scan — status, write "scan" to request
 	SYS_NODE_BTCONNECTION, // /bluetooth/connection — LE HID peer sessions
 	SYS_NODE_BTDEVICES,  // /bluetooth/devices — most recent scan results
+	SYS_NODE_BOOTKERNEL, // /boot-kernel — retained ELF of the running kernel
 	SYS_NODE_MOUNTSFILE, // /mounts — the mount table, one line per live mount (df's data)
 	SYS_NODE_BLOCKFILE,  // /block — devices and partitions, named and located (lsblk's data)
 	SYS_NODE_OPENFILESFILE, // /openfiles — the open-file registry (lsof's deep half)
@@ -419,6 +432,8 @@ typedef enum
 	SYS_NODE_MEMDIR,     // /memory — the physical allocator (FRAMES.md)
 	SYS_NODE_MEMFRAMES,  // /memory/frames — the frame table and its lock
 	SYS_NODE_MEMLEDGER,  // /memory/ledger — the small-object ledger and its lock
+	SYS_NODE_MEMREAP,    // /memory/reap — ended threads' stacks (thread_reap.h)
+	SYS_NODE_MEMSHOOTDOWN, // /memory/shootdown — the waited invalidation (smp_core.h)
 } sys_node_type_t;
 
 #define SYS_NAME_MAX 32
@@ -585,6 +600,14 @@ static void sys_parse_path(const char *path, sys_path_t *out)
 		return;
 	}
 
+	if (strcmp(comp, "boot-kernel") == 0)
+	{
+		if (synth_next_component(path, &pos, comp, sizeof(comp)))
+			return;
+		out->type = SYS_NODE_BOOTKERNEL;
+		return;
+	}
+
 	if (strcmp(comp, "mounts") == 0)
 	{
 		if (synth_next_component(path, &pos, comp, sizeof(comp)))
@@ -645,11 +668,14 @@ static void sys_parse_path(const char *path, sys_path_t *out)
 			out->type = SYS_NODE_MEMDIR;
 			return;
 		}
-		bool is_frames = strcmp(comp, "frames") == 0;
-		if ((!is_frames && strcmp(comp, "ledger") != 0) ||
-		    synth_next_component(path, &pos, comp, sizeof(comp)))
+		sys_node_type_t type = strcmp(comp, "frames") == 0    ? SYS_NODE_MEMFRAMES
+		                     : strcmp(comp, "ledger") == 0    ? SYS_NODE_MEMLEDGER
+		                     : strcmp(comp, "reap") == 0      ? SYS_NODE_MEMREAP
+		                     : strcmp(comp, "shootdown") == 0 ? SYS_NODE_MEMSHOOTDOWN
+		                                                      : SYS_NODE_MEMDIR;
+		if (type == SYS_NODE_MEMDIR || synth_next_component(path, &pos, comp, sizeof(comp)))
 			return;
-		out->type = is_frames ? SYS_NODE_MEMFRAMES : SYS_NODE_MEMLEDGER;
+		out->type = type;
 		return;
 	}
 
@@ -1203,6 +1229,45 @@ static void sys_gen_memory_frames(synth_text_t *t)
 	sys_gen_memory_lock(t, "frame", &s.frame_lock);
 }
 
+// /sys/memory/reap — ended threads' stacks waiting for kworker, and what the
+// reap has given back (thread_reap.h). The window starts again at each read.
+static void sys_gen_memory_reap(synth_text_t *t)
+{
+	thread_reap_counts_t c;
+	thread_reap_read(&c);
+	synth_text_addf(t, "pending: %u now, %u most, %u most since last read\n", c.queued, c.queued_most,
+	                c.window_queued_most);
+	synth_text_addf(t, "handed: %lu, %lu since last read\n", c.handed, c.window_handed);
+	synth_text_addf(t, "released: %lu by kworker, %lu by burial, %lu since last read\n", c.by_kworker,
+	                c.by_burial, c.window_released);
+	synth_text_addf(t, "kworker rounds: %lu (one waited invalidation each, for every stack it released)\n", c.rounds);
+	synth_text_addf(t, "given back: %lu bytes of stack, %lu I/O scratch blocks\n", c.frame_bytes, c.scratches);
+	synth_text_addf(t, "thread makers parked for the backlog (over %u): %lu, %lu proceeded after %u ms, longest %lu us\n",
+	                THREAD_REAP_BACKLOG, c.creator_parks, c.creator_proceeded, THREAD_REAP_PARK_MOST_US / 1000,
+	                c.creator_park_most_us);
+	synth_text_addf(t, "refused: %lu (a node handed or claimed in the wrong state)\n", c.refused);
+}
+
+// /sys/memory/shootdown — the waited invalidation's rounds (smp_core.h).
+static void sys_gen_memory_shootdown(synth_text_t *t)
+{
+	shootdown_counts_t c;
+	tlb_shootdown_read(&c);
+	synth_text_addf(t, "rounds: %lu, %lu since last read\n", c.rounds, c.window_rounds);
+	synth_text_addf(t, "late (over %u ms): %lu, %lu since last read\n", SHOOTDOWN_LATE_US / 1000, c.late,
+	                c.window_late);
+	// The CPU that answered the longest round last: a CPU long with
+	// interrupts off holds a round, in a syscall (which runs with them off)
+	// or in a scheduler pass, whose interrupt also keeps the flush's out
+	// until its end of interrupt (same priority class). The thread and task
+	// are what that CPU was running when the flush got in.
+	synth_text_addf(t, "longest wait: %lu us (CPU %u answered last, from thread %lu of task %lu), "
+	                "%lu us since last read (CPU %u, thread %lu of task %lu)\n",
+	                c.wait_most_us, c.wait_most_cpu, c.wait_most_thread, c.wait_most_task,
+	                c.window_wait_most_us, c.window_wait_most_cpu, c.window_wait_most_thread,
+	                c.window_wait_most_task);
+}
+
 static void sys_gen_memory_ledger(synth_text_t *t)
 {
 	allocator_stats_t s;
@@ -1752,6 +1817,66 @@ static void sys_gen_gui_frame_clock(synth_text_t *t, const gui_composite_count_t
 	synth_text_addf(t, "frame clock beam reads failed: %lu\n", beam_read_failures());
 }
 
+// A window's planes (gui/plane.h, VIDEO_PLANE.md § 3.9): the machine's
+// pairs of stores, the refusals by reason, then one line a plane. `composed`
+// is what the compositor drew of it: picture pixels copied, content pixels
+// in an overlay read and put over it (`blended`, whatever their top byte),
+// content read as opaque where the picture did not reach, and the time all
+// of that took, so a reader can price each kind. Then its frames: whether
+// it is shown now (the frame wait's test) and its creator parked, frames
+// asked for and answered, and waits ended by a poke, the patience or a
+// caught signal.
+// Full screen (GUI_WINDOW_FULL_SCREEN): the window over every band now and
+// for how long, how many windows are full screen, the edges since boot by
+// whom (its program, the person's Ctrl+Alt+F, or the window destroyed while
+// full screen), and the black edges' ends: how many, how many by a partial
+// publish that filled the content black first, and that fill's longest hold
+// of kGuiLock, which is what an edge costs the lock.
+static void sys_gen_gui_full_screen(synth_text_t *t)
+{
+	wm_full_screen_status_t s;
+	gui_full_screen_status(&s);
+	if (s.front_id != 0)
+		synth_text_addf(t, "full screen: window %u (task %lu) in front for %lu ms",
+		                s.front_id, s.front_owner,
+		                (kTicksSinceStart - s.front_since_tick) * 1000 / TICKS_PER_SECOND);
+	else
+		synth_text_addf(t, "full screen: none in front");
+	synth_text_addf(t, "; %u full screen now; entered %lu (%lu by chord), left %lu (%lu by chord), "
+	                "destroyed while full screen %lu; black edges ended %lu, %lu by a partial publish "
+	                "(fill longest %lu us)\n",
+	                s.full_screen_now, s.entered, s.entered_by_chord, s.left, s.left_by_chord, s.gone,
+	                s.blank_ends, s.blank_fills, s.blank_fill_worst_us);
+}
+
+static void sys_gen_gui_planes(synth_text_t *t)
+{
+	enum { ROWS = 8 };
+	static const char *const kStates[] = {"free", "created", "hidden", "placed"};
+	gui_plane_status_t rows[ROWS];
+	uint64_t refused[GUI_PLANE_REFUSALS], pairs, kept, bytes;
+	uint32_t n = gui_planes_status(rows, ROWS, refused, &pairs, &kept, &bytes);
+	synth_text_addf(t, "planes: %u, pairs of stores %lu (%lu kept), %lu bytes; refused:", n, pairs, kept, bytes);
+	for (unsigned i = 0; i < GUI_PLANE_REFUSALS; i++)
+		synth_text_addf(t, "%s %s %lu", i ? "," : "", gui_plane_refusal_name((gui_plane_refusal_t)i), refused[i]);
+	synth_text_addf(t, "\n");
+	for (uint32_t i = 0; i < n && i < ROWS; i++) {
+		const gui_plane_status_t *r = &rows[i];
+		synth_text_addf(t, "plane %u of window %u: %s, class %ux%u, picture %ux%u, origin %d,%d %dx%d, "
+		                "clip %d,%d %dx%d, overlays %u (%lu pixels), publishes %lu, composed %lu copied "
+		                "%lu blended %lu opaque in %lu ns; %s, %s; frames %lu asked, %lu answered; waits ended "
+		                "by a poke %lu, the patience %lu, a signal %lu\n",
+		                r->name, r->window, r->state < 4 ? kStates[r->state] : "?", r->cap_w, r->cap_h,
+		                r->pic_w, r->pic_h, r->origin.x, r->origin.y, r->origin.w, r->origin.h, r->clip.x,
+		                r->clip.y, r->clip.w, r->clip.h, r->noverlays, r->overlay_area, r->publishes,
+		                r->composed.copied, r->composed.blended, r->composed.opaque, r->compose_ns,
+		                r->shown ? "shown" : "not shown", r->waiting ? "waiting" : "not waiting", r->frames_asked,
+		                r->frames_answered, r->waits_poked, r->waits_patience, r->waits_interrupted);
+	}
+	if (n > ROWS)
+		synth_text_addf(t, "plane lines past the first %u left out: %u\n", ROWS, n - ROWS);
+}
+
 static void sys_gen_gui(synth_text_t *t)
 {
 	synth_text_addf(t, "running: %s\n", kEnableGUI ? "yes" : "no");
@@ -1844,6 +1969,8 @@ static void sys_gen_gui(synth_text_t *t)
 	                comp.glass_buckets[0], comp.glass_buckets[1], comp.glass_buckets[2],
 	                comp.glass_buckets[3], comp.glass_buckets[4], comp.glass_buckets[5],
 	                comp.glass_buckets[6]);
+	sys_gen_gui_full_screen(t);
+	sys_gen_gui_planes(t);
 	sys_gen_gui_frame_clock_state(t, &comp);
 	sys_gen_gui_frame_clock(t, &comp);
 }
@@ -2480,6 +2607,7 @@ typedef enum
 	SYS_HANDLE_GUI_WRITE,         // /sys/gui opened "w" — each line sets the frame clock's dial
 	SYS_HANDLE_APPEARANCE_WRITE,
 	SYS_HANDLE_DECORATIONS_WRITE,
+	SYS_HANDLE_BOOTKERNEL,     // immutable ELF kept alive by the boot mapping
 	SYS_HANDLE_CLIPREAD,       // /sys/clipboard opened "r" — holds a ref
 	SYS_HANDLE_CLIPWRITE,      // /sys/clipboard opened "w" — holds a pending
 	SYS_HANDLE_FONTWRITE,      // /sys/console/font opened "w" — holds an image
@@ -2540,6 +2668,21 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	if (mode[0] == 'w' && !is_probe && !is_clip && !is_appearance && !is_font && !is_decoration && !is_bt && !is_mouse
 	    && !is_mediakeys && !is_gui)
 		return -1;
+
+	if (sp.type == SYS_NODE_BOOTKERNEL)
+	{
+		if (!kKernelFileAddress || !kKernelFileSize)
+			return -1;
+		synth_text_t empty = {0};
+		sys_file_handle_t *h = synth_snapshot_publish(vfs_file, &empty, path, vfs_fs,
+		                                               sizeof(*h), FILETYPE_SYSFILE);
+		if (!h)
+			return -1;
+		h->kind = SYS_HANDLE_BOOTKERNEL;
+		h->snap.data = (char *)kKernelFileAddress;
+		h->snap.size = kKernelFileSize;
+		return 0;
+	}
 
 	// /sys/gui written: the frame clock's lines (gui_frame_clock_command:
 	// the reservation's dial, and the stall tripwire's proof). Read, it is
@@ -2746,7 +2889,8 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	         && sp.type != SYS_NODE_MOUNTSFILE && sp.type != SYS_NODE_BLOCKFILE
 	         && sp.type != SYS_NODE_OPENFILESFILE && sp.type != SYS_NODE_RANDOMFILE
 	         && sp.type != SYS_NODE_ACPIFILE
-	         && sp.type != SYS_NODE_MEMFRAMES && sp.type != SYS_NODE_MEMLEDGER)
+	         && sp.type != SYS_NODE_MEMFRAMES && sp.type != SYS_NODE_MEMLEDGER
+	         && sp.type != SYS_NODE_MEMREAP && sp.type != SYS_NODE_MEMSHOOTDOWN)
 		return -1;   // directories go through dops; everything else is not a file
 
 	synth_text_t text;
@@ -2775,6 +2919,10 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 		sys_gen_memory_frames(&text);
 	else if (sp.type == SYS_NODE_MEMLEDGER)
 		sys_gen_memory_ledger(&text);
+	else if (sp.type == SYS_NODE_MEMREAP)
+		sys_gen_memory_reap(&text);
+	else if (sp.type == SYS_NODE_MEMSHOOTDOWN)
+		sys_gen_memory_shootdown(&text);
 	else if (sp.type == SYS_NODE_CONFFILE)
 		sys_gen_conf(&text);
 	else if (sp.type == SYS_NODE_MOUNTSFILE)
@@ -2999,6 +3147,8 @@ static int sys_close(vfs_file_t *vfs_file)
 			clipboard_seal(h->pending);
 			h->pending = NULL;
 		}
+		else if (h->kind == SYS_HANDLE_BOOTKERNEL)
+			h->snap.data = NULL; // the boot mapping owns these bytes
 		else if (h->kind == SYS_HANDLE_CLIPREAD)
 		{
 			// Disown the borrowed bytes BEFORE the generic close sees them,
@@ -3077,7 +3227,7 @@ static int sys_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 			// a listing that drops a name reads exactly like a name that
 			// does not exist.)
 			static const char *kSysRootDirs[] = { "bluetooth", "bus", "console", "cpu", "memory", "net" };
-			static const char *kSysRootFiles[] = { "acpi", "block", "cache", "conf", "gui", "log", "mounts", "openfiles", "random", "shlib", "clipboard", "appearance", "decorations", "mouse", "usb", "audio", "mediakeys" };
+			static const char *kSysRootFiles[] = { "acpi", "block", "boot-kernel", "cache", "conf", "gui", "log", "mounts", "openfiles", "random", "shlib", "clipboard", "appearance", "decorations", "mouse", "usb", "audio", "mediakeys" };
 			const int kDirCount  = (int)(sizeof(kSysRootDirs) / sizeof(kSysRootDirs[0]));
 			const int kFileCount = (int)(sizeof(kSysRootFiles) / sizeof(kSysRootFiles[0]));
 			if (h->index < kDirCount)
@@ -3156,7 +3306,7 @@ static int sys_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 
 		case SYS_NODE_MEMDIR:
 		{
-			static const char *kSysMemoryFiles[] = { "frames", "ledger" };
+			static const char *kSysMemoryFiles[] = { "frames", "ledger", "reap", "shootdown" };
 			if (h->index >= (int)(sizeof(kSysMemoryFiles) / sizeof(kSysMemoryFiles[0])))
 				return 0;
 			strncpy(entry->name, kSysMemoryFiles[h->index], OS64_DIRENT_NAME_MAX);
@@ -3329,6 +3479,11 @@ static int sys_stat(const char *path, os64_dirent_t *entry, vfs_filesystem_t *vf
 			strncpy(entry->name, "acpi", OS64_DIRENT_NAME_MAX);
 			return 0;
 
+		case SYS_NODE_BOOTKERNEL:
+			strncpy(entry->name, "boot-kernel", OS64_DIRENT_NAME_MAX);
+			entry->size = kKernelFileSize;
+			return 0;
+
 		case SYS_NODE_MOUNTSFILE:
 			strncpy(entry->name, "mounts", OS64_DIRENT_NAME_MAX);
 			return 0;
@@ -3410,6 +3565,14 @@ static int sys_stat(const char *path, os64_dirent_t *entry, vfs_filesystem_t *vf
 
 		case SYS_NODE_MEMLEDGER:
 			strncpy(entry->name, "ledger", OS64_DIRENT_NAME_MAX);
+			return 0;
+
+		case SYS_NODE_MEMREAP:
+			strncpy(entry->name, "reap", OS64_DIRENT_NAME_MAX);
+			return 0;
+
+		case SYS_NODE_MEMSHOOTDOWN:
+			strncpy(entry->name, "shootdown", OS64_DIRENT_NAME_MAX);
 			return 0;
 
 		case SYS_NODE_NETIP:

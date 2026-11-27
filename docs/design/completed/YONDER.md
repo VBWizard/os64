@@ -75,8 +75,8 @@ window; Save as default also writes `scripts = on` or `off` to `yonder.conf`.
 Only `on` enables scripting at startup. Changing the mode cancels queued
 scripts and in-flight navigation, destroys the current runtime, and reloads
 the shown page with the chosen `noscript` parsing policy. A POST reply keeps
-the existing resend confirmation. The status line begins **SCRIPTS ON** while
-the setting is enabled. Beside it, **Script time limit** (a slider, 1 to 60
+the existing resend confirmation. With diagnostics on, the status line begins
+**SCRIPTS ON** while the setting is enabled. Beside it, **Script time limit** (a slider, 1 to 60
 seconds, 5 by default, `script_seconds` in `yonder.conf`) is how long one
 script task may run before the page is stopped and goes on without script;
 Apply reaches every page's next task. Scripts run in the order HTML gives
@@ -896,8 +896,9 @@ of the same shape cycles through its seven frames in the guest.
 
 **Sixteen handles were not enough.** The ticker's pipe and thread took
 yonder to fourteen of the kernel's sixteen before its first fetch, and the
-page failed with "out of handles or ports"; the table is 64 now
-(`OS64_TASK_HANDLES`, `abi/include/os64/file.h`).
+page failed with "out of handles or ports"; the table was made 64
+(`OS64_TASK_HANDLES`, `abi/include/os64/file.h`), and it has since grown in
+blocks past that (`kernel/include/handle_blocks.h`).
 
 ## Booked, with their triggers
 

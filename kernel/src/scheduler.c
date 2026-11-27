@@ -16,6 +16,7 @@
 #include "doorbell.h"
 #include "accounting.h"
 #include "micros.h"
+#include "thread_reap.h"   // thread_reap_hand_locked — an ended thread's stacks
 
 volatile uint64_t mp_isrSavedRAX[MAX_CPUS],mp_isrSavedRBX[MAX_CPUS],mp_isrSavedRCX[MAX_CPUS],mp_isrSavedRDX[MAX_CPUS],mp_isrSavedRSI[MAX_CPUS],
                   mp_isrSavedRDI[MAX_CPUS],mp_isrSavedRBP[MAX_CPUS],mp_isrSavedCR0[MAX_CPUS],mp_isrSavedCR3[MAX_CPUS],mp_isrSavedCR4[MAX_CPUS],
@@ -1545,6 +1546,12 @@ void scheduler_run_new_thread()
             threadToStopNewQueue=THREAD_STATE_RUNNABLE;
         scheduler_store_thread(cls, threadToStop);              //we're taking it off the cpu so save the registers
         scheduler_change_thread_queue_locked(threadToStop, threadToStopNewQueue);   //scheduler_do holds the queue lock
+        // An ended thread's stacks go to the reap now (thread_reap.h): this
+        // pass runs on the CPU's scheduler stack (scheduler.S, before
+        // scheduler_do), and nothing after the store above reads the
+        // thread's own stacks, so kworker may release them at once.
+        if (threadToStopNewQueue == THREAD_STATE_ZOMBIE)
+            thread_reap_hand_locked(threadToStop);
 	}
 	printd(DEBUG_SCHEDULER | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,"*Finding thread to run\n");
     // Doorbell service point B: AFTER the outgoing thread was requeued. A

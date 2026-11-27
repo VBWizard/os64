@@ -48,7 +48,10 @@ typedef struct {
 // life as a script's request borrows them; and a blob: address's entry,
 // taken by the caller (BLOB_URLS.md) and borrowed for the call: the
 // session holds its own, and NULL is none. `picture`: the element is a
-// <video>, whose player decodes the picture too.
+// <video>, whose player decodes the picture too. `element` ("video 2") and
+// `named` (the address as the page's record shows it) are what a failure
+// is recorded by (yonder_media_failure_take), copied; NULL takes the
+// element's kind and the address.
 typedef struct {
     const char *url;
     const char *page_url;
@@ -58,6 +61,8 @@ typedef struct {
     const way_identity_t *identity;
     struct os64_dom_blob *blob;
     bool picture;
+    const char *element;
+    const char *named;
 } yonder_media_request_t;
 
 // Once, before the first open; and once as yonder leaves, after the pages
@@ -72,8 +77,9 @@ void yonder_media_stop(void);
 // any thread may read it.
 const char *yonder_media_sounds(void);
 
-// NULL when it cannot begin (no memory, no thread): the element's network
-// error. Window thread, as are all of these.
+// NULL when it cannot begin (no memory, no thread, or the program's sound
+// output could not be made): the element's network error. Window thread,
+// as are all of these.
 yonder_media_t *yonder_media_open(const yonder_media_request_t *request);
 // The session ends: its threads are told to stop and the window frees it
 // once they have (yonder_media_reap). The pointer is dead on return.
@@ -83,6 +89,13 @@ void yonder_media_pause(yonder_media_t *m);
 void yonder_media_seek(yonder_media_t *m, double seconds, uint64_t generation);
 void yonder_media_settings(yonder_media_t *m, double gain, bool muted, bool loop);
 void yonder_media_facts(yonder_media_t *m, os64_dom_media_facts_t *out);
+// Once a session has failed (its facts' `error`), its FAILED media line
+// once, into `out`: its address, then media_bytes.h's words for what it
+// failed with — `code` the MediaError the page was handed, which libdom
+// decides (dom/media.h's `failed`), 0 for the session's own — and what was
+// heard of the fetch and from libmedia. False before it has failed, and
+// after the line was taken.
+bool yonder_media_failure_take(yonder_media_t *m, int code, char *out, size_t cap);
 // A <video>'s picture to show at `blank` (wall microseconds, the blank a
 // publish now is seen at), `period` the display's: its player's
 // (os64_media_player_frame, whose rule the pixels keep). False with `out`
@@ -103,6 +116,23 @@ bool yonder_media_report(uint32_t i, char *out, size_t cap);
 // A time for the record: seconds to the millisecond, "unknown" for NaN,
 // "no end" for infinity (libos64's printf has no floating point).
 size_t yonder_media_seconds(double s, char *out, size_t cap);
+// A <video>'s player given a plane of `win` (os64/media_player.h § A
+// plane), from a thread of its own: the ask waits for the plane to be made,
+// the window does not. Asked once, or again once the last ask's thread is
+// done (for a plane that ended; the player refuses any other). The verdict
+// is the player's facts' `plane_state`, read at the window's next turn.
+// False when not asked (an <audio>, no player yet, an ask still running,
+// closed) or when its thread may not have started.
+bool yonder_media_plane_ask(yonder_media_t *m, int64_t win);
+// os64_media_player_plane_want, for a <video> with a player.
+void yonder_media_plane_want(yonder_media_t *m, bool want);
+// os64_media_player_plane_gap_take, for a <video> with a player; 0 without.
+int64_t yonder_media_plane_gap_take(yonder_media_t *m);
+// The picture its player's pace last picked, pinned until
+// yonder_media_shown_done (os64_media_player_shown). False, `out` empty,
+// with none. Every view goes back before the session's close.
+bool yonder_media_shown(yonder_media_t *m, os64_media_player_view_t *out);
+void yonder_media_shown_done(yonder_media_t *m, os64_media_player_view_t *view);
 // canPlayType's answer (0, 1 or 2; dom/media.h), libmedia's.
 int yonder_media_can_play(const char *type);
 // The window's turn: frees the closed sessions whose threads have ended.

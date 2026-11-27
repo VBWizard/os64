@@ -444,6 +444,7 @@ JSValue d_style(os64_dom_t *dom, JSContext *ctx, JSValueConst self)
     if (entry == NULL) return JS_EXCEPTION;
     entry->target = node;
     os64_html_hold(dom->document,node);
+    d_view_keep(owner,entry);
     JS_SetOpaque(object,entry);
     more->style = entry;
     return JS_DupValue(ctx,object);

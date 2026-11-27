@@ -1,6 +1,6 @@
 // thread.c — os64's ring-3 threading, such as it is.
 //
-// os64_thread(fn, arg) starts a second line of execution inside this same
+// os64_thread(fn, arg) (or os64_thread_named, which names it) starts a second line of execution inside this same
 // program — same address space, same heap, same open handles — and hands
 // back a HANDLE. Read the handle to wait for the thread and collect its
 // return value; close it to stop caring. There is deliberately no
@@ -20,12 +20,17 @@
 // Defined in start/launch.S — the address a thread function returns to.
 extern void os64_thread_trampoline(void);
 
-int64_t os64_thread(int64_t (*fn)(void *), void *arg)
+int64_t os64_thread_named(int64_t (*fn)(void *), void *arg, const char *name)
 {
     if (fn == 0)
         return -1;
-    return (int64_t)os64_syscall3(SYSCALL_THREAD, (uint64_t)fn, (uint64_t)arg,
-                                  (uint64_t)&os64_thread_trampoline);
+    return (int64_t)os64_syscall4(SYSCALL_THREAD, (uint64_t)fn, (uint64_t)arg,
+                                  (uint64_t)&os64_thread_trampoline, (uint64_t)name);
+}
+
+int64_t os64_thread(int64_t (*fn)(void *), void *arg)
+{
+    return os64_thread_named(fn, arg, 0);
 }
 
 // os64_thread_or_nothing's note between the starter and the stub. The stub

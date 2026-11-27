@@ -28,6 +28,7 @@ header=r'''
 #define GUI_WINDOW_DESKTOP OS64_GUI_WINDOW_DESKTOP
 #define GUI_WINDOW_HAS_SETTINGS OS64_GUI_WINDOW_HAS_SETTINGS
 #define GUI_WINDOW_MAXIMIZED OS64_GUI_WINDOW_MAXIMIZED
+#define GUI_WINDOW_FULL_SCREEN OS64_GUI_WINDOW_FULL_SCREEN
 #define GUI_WINDOW_POPUP (1u<<24)
 #define GUI_LOCK_WINDOW 1
 #define INPUT_EVENT_WINDOW_CLOSE OS64_GUI_EVENT_WINDOW_CLOSE
@@ -74,10 +75,16 @@ int main(void)
     assert(gui_window_set_pinned(1,2)==GUI_ERR_BAD_ARGS);
     assert(gui_window_set_pinned(2,0)==GUI_ERR_INVALID_HANDLE);
     owned=false;assert(gui_window_set_pinned(1,0)==GUI_ERR_NOT_OWNER);owned=true;
+    // Full screen: the pin changes and is told, but the window is not
+    // relinked, since its band does not follow the pin until it leaves.
+    window.flags=GUI_WINDOW_FULL_SCREEN;unsigned m=mutations,n=notifications;
+    assert(!gui_window_set_pinned(1,1));assert(window.flags==(GUI_WINDOW_FULL_SCREEN|GUI_WINDOW_PINNED));
+    assert(mutations==m && notifications==n+1 && !locked);
+    before=notifications;
     window.flags=GUI_WINDOW_DESKTOP;assert(gui_window_set_pinned(1,1)==GUI_ERR_BAD_ARGS);
     window.flags=GUI_WINDOW_POPUP|GUI_WINDOW_PINNED;assert(gui_window_set_pinned(1,0)==GUI_ERR_BAD_ARGS);
     assert(window.flags==(GUI_WINDOW_POPUP|GUI_WINDOW_PINNED));assert(notifications==before && !locked);
-    puts("window pin: raw arguments, ownership, ordinary-window policy, shared WM mutation and hints PASS");
+    puts("window pin: raw arguments, ownership, ordinary-window policy, shared WM mutation, full screen and hints PASS");
 }
 '''
 source=header+'\n'+function('kernel/src/gui/window.c','wm_set_pinned')+'\n'+function('kernel/src/gui/window.c','wm_decoration_action')+'\n'+function('kernel/src/gui/gui_client.c','gui_window_set_pinned')+'\n'+function('kernel/src/syscall.c','syscall_gui_window_set_pinned')+'\n'+body

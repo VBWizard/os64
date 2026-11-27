@@ -14,6 +14,10 @@
 #include "console_font.h"   // and a third trade: hanging a new face on the glass
 #include "logging/log.h"
 #include "driver/system/usb/xhci.h"
+#include "scheduler.h"     // scheduler_change_thread_queue_locked — kworker_wake_locked
+#include "thread_reap.h"   // a fourth trade: ended threads' stacks
+
+extern task_t *kKWorkerTask;   // this worker's own task (kernel.c)
 
 #define KWORKER_SLEEP_TICKS (TICKS_PER_SECOND * 2)
 #define KWORKER_REAP_BATCH_SIZE 8
@@ -28,6 +32,11 @@ static bool kworker_run_maintenance(void)
 	bool did_work = false;
 	// Periodic policy and disk work must not keep the worker from sleeping.
 	xhci_bluetooth_maintain();
+	// Ended threads' stacks before burials: a burial finds its threads'
+	// stacks already released, or claims what is still pending itself
+	// (thread_reap_at_burial).
+	if (thread_reap_drain() > 0)
+		did_work = true;
 	int reaped = task_reap_eligible_zombies(KWORKER_REAP_BATCH_SIZE);
 
 	paging_sentinel_check("kworker: after zombie reap");
@@ -86,6 +95,19 @@ static bool kworker_run_maintenance(void)
 #endif
 
 	return did_work;
+}
+
+void kworker_wake_locked(void)
+{
+	if (kKWorkerTask == NULL || kKWorkerTask->threads == NULL)
+		return;
+	thread_t *w = kKWorkerTask->threads;
+	if (w->threadState == THREAD_STATE_ISLEEP)
+	{
+		sigset_del(&w->signals.sigind, SIGSLEEP);
+		w->signals.sigdata[SIGSLEEP] = 0;
+		scheduler_change_thread_queue_locked(w, THREAD_STATE_RUNNABLE);
+	}
 }
 
 bool kworker_thread(bool daemon)

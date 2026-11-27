@@ -1,0 +1,64 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>A slow timeupdate and the page's other tasks</title>
+<!--
+  The loop's fairness (yonder.c ordinary_task, task_order.h). A looping
+  muted video whose `timeupdate` handler holds the thread 300 ms keeps a
+  media event always ready; the page's other tasks must still run, the
+  old ones first: a timer within a turn or two of its time, a lazily
+  loaded picture while the video plays.
+
+  The buttons: "Hold" makes every timeupdate hold the thread 300 ms (it
+  starts on). "Timer" (or any key) sets a 1 s timer and shows how late it
+  fired. "Picture" observes a picture with an IntersectionObserver that
+  gives it its address when it is seen.
+
+  What to look for, with Hold on:
+  - "ticks" counts a 250 ms interval: it keeps rising while the video
+    plays (before the fairness slice it froze until the video paused);
+  - "the 1 s timer fired N ms late": N within a few hundred ms;
+  - the picture appears while the video plays.
+-->
+<style>
+  body { font: 16px sans-serif; margin: 16px; }
+  video { width: 320px; background: #888; }
+  #pic { width: 120px; height: 60px; background: #ddd; display: block; margin-top: 8px; }
+</style>
+<h1>A slow timeupdate and the page's other tasks</h1>
+<video id="v" src="bbb-480p-3s.mp4" autoplay muted loop></video>
+<p><input type="button" id="hold" value="Hold: on">
+   <input type="button" id="timer" value="Timer">
+   <input type="button" id="picture" value="Picture"></p>
+<p id="state">ticks 0, timeupdates 0</p>
+<p id="late">the 1 s timer: not set</p>
+<img id="pic" alt="the lazy picture">
+<script>
+  const v = document.getElementById('v');
+  let holding = true, ticks = 0, updates = 0;
+  const state = document.getElementById('state');
+  const show = () => { state.textContent = 'ticks ' + ticks + ', timeupdates ' + updates; };
+  v.addEventListener('timeupdate', () => {
+    updates++;
+    if (holding) { const end = Date.now() + 300; while (Date.now() < end) {} }
+    show();
+  });
+  setInterval(() => { ticks++; show(); }, 250);
+  document.getElementById('hold').onclick = (e) => {
+    holding = !holding;
+    e.target.value = 'Hold: ' + (holding ? 'on' : 'off');
+  };
+  const late = document.getElementById('late');
+  const arm = () => {
+    const set = Date.now();
+    late.textContent = 'the 1 s timer: waiting';
+    setTimeout(() => { late.textContent = 'the 1 s timer fired ' + (Date.now() - set - 1000) + ' ms late'; }, 1000);
+  };
+  document.getElementById('timer').onclick = arm;
+  document.addEventListener('keydown', arm);
+  document.getElementById('picture').onclick = () => {
+    const pic = document.getElementById('pic');
+    new IntersectionObserver((entries, o) => {
+      if (entries.some(e => e.isIntersecting)) { pic.src = 'banner.png'; o.disconnect(); }
+    }).observe(pic);
+  };
+</script>

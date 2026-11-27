@@ -90,7 +90,28 @@ int main(void)
         assert(gui_event_queue_pop(&q,&out) && out.type==INPUT_EVENT_FRAME && out.frame.number_lo==7);
         input_event_t look=(input_event_t){0};
         assert(gui_event_queue_pop(&q,&look) && look.type==INPUT_EVENT_MOUSE_MOVE);
+
+        // A full-screen change coalesces the same way: a full ring cannot
+        // drop it, two unread are one, it follows a frame answer and comes
+        // before the ring, and it leaves nothing pending behind it.
+        q=(gui_event_queue_t){.head=offset,.tail=offset};
+        for(unsigned i=0;i<GUI_WINDOW_EVENTS_MAX-1;++i)
+            assert(gui_event_queue_push(&q,&move)==1);
+        input_event_t fs={.type=INPUT_EVENT_WINDOW_FULL_SCREEN,.tick=5};
+        assert(gui_event_queue_push(&q,&fs)==1);
+        fs.tick=9;
+        assert(gui_event_queue_push(&q,&fs)==1);
+        assert(gui_event_queue_push(&q,&fr2)==1);
+        assert(!q.lost_pending);
+        assert(gui_event_queue_pop(&q,&out) && out.type==INPUT_EVENT_FRAME);
+        assert(gui_event_queue_pop(&q,&out) && out.type==INPUT_EVENT_WINDOW_FULL_SCREEN && out.tick==9);
+        assert(gui_event_queue_pop(&q,&out) && out.type==INPUT_EVENT_MOUSE_MOVE);
+        q=(gui_event_queue_t){.head=offset,.tail=offset};
+        assert(gui_event_queue_push(&q,&fs)==1 && gui_event_queue_pending(&q));
+        assert(gui_event_queue_pop(&q,&out) && out.type==INPUT_EVENT_WINDOW_FULL_SCREEN);
+        assert(!gui_event_queue_pending(&q) && !gui_event_queue_pop(&q,&out));
     }
-    puts("gui queue: 64 wrap positions; drop/eviction reset, control order, overflow fairness and frame answers passed");
+    puts("gui queue: 64 wrap positions; drop/eviction reset, control order, overflow fairness, frame answers and "
+         "full-screen changes passed");
     return 0;
 }

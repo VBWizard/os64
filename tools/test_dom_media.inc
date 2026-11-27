@@ -75,9 +75,19 @@ static int media_can_play(void *opaque, const char *type)
     return 0;
 }
 
+/* What the host was told of a failure no session saw (`failed`). */
+static char media_failed_told[160];
+static void media_failed(void *opaque, const os64_html_node_t *node, void *session, const char *reference, int code,
+                         const char *why)
+{
+    (void)opaque;
+    snprintf(media_failed_told, sizeof(media_failed_told), "%s|%s|%s|%d|%s", node != NULL ? node->name : "?",
+             session != NULL ? "s" : "-", reference, code, why);
+}
+
 static const os64_dom_media_provider_t media_provider = {
     NULL, media_open, media_close, media_play, media_pause, media_seek, media_settings, media_facts,
-    media_is_activated, media_can_play,
+    media_is_activated, media_can_play, media_failed,
 };
 
 static DomFixture media_fixture(DomFixture *slot)
@@ -321,14 +331,31 @@ static void dom_media_abort_cases(void)
 
     /* A src the host cannot open: error, code 4, and play() refused. */
     media_refuse = true;
+    media_failed_told[0] = '\0';
     media_script(&f, "a.src='c.mp3';R.length=0;", "media: a src that will not open");
     media_turn(&f, "media: it fails");
+    check(strcmp(media_failed_told, "audio|-|https://example.test/dir/c.mp3|4|The sound could not be loaded") == 0,
+          "media: the host is told the open it refused, with the class the page is handed");
     media_script(&f, "const h=heard();assert(h.endsWith('loadstart:0 error:0'),'error: '+h);"
                      "assert(a.error instanceof MediaError&&a.error.code===4&&a.error===a.error&&a.networkState===3);"
                      "a.play().then(()=>R.push('ok'),e=>R.push(e.name));",
                  "media: MEDIA_ERR_SRC_NOT_SUPPORTED");
     media_turn(&f, "media: settle");
     media_script(&f, "assert(R.join()==='NotSupportedError','play refused: '+R.join());", "media: NotSupportedError");
+
+    /* An address that does not resolve never reaches open: the host is
+     * told why, as the page is. */
+    media_refuse = false;
+    media_failed_told[0] = '\0';
+    size_t opened = media_opened;
+    media_script(&f, "a.src='';", "media: an empty address");
+    media_turn(&f, "media: it fails before open");
+    media_script(&f, "assert(a.error&&a.error.code===4&&a.error.message==='The address does not resolve');",
+                 "media: the page is told it does not resolve");
+    check(media_opened == opened && strcmp(media_failed_told, "audio|-||4|The address does not resolve") == 0,
+          "media: and the host is told, with no open made");
+    if (strcmp(media_failed_told, "audio|-||4|The address does not resolve") != 0)
+        printf("  told: %s\n", media_failed_told);
     fixture_free(&f);
 }
 
@@ -396,8 +423,11 @@ static void dom_media_document_cases(void)
                  "media: two failing sources");
     media_turn(&f, "media: the first opens");
     check(media_opened == 5, "media: the first candidate opened");
-    media_sessions[4].facts.error = OS64_DOM_MEDIA_ERR_SRC_NOT_SUPPORTED;
+    media_sessions[4].facts.error = OS64_DOM_MEDIA_ERR_DECODE;
+    media_failed_told[0] = '\0';
     media_turn(&f, "media: the first fails");
+    check(strcmp(media_failed_told, "audio|s|https://example.test/dir/p.mp3|4|") == 0,
+          "media: a session failing before its length is told with its session, as the page's not-supported");
     check(media_opened == 6 && strcmp(media_sessions[5].url, "https://example.test/dir/q.mp3") == 0,
           "media: on to the second");
     media_sessions[5].facts.error = OS64_DOM_MEDIA_ERR_SRC_NOT_SUPPORTED;
@@ -544,7 +574,10 @@ static void dom_media_rule_cases(void)
     media_ready(ls, 2);
     media_turn(&f, "media: playing");
     ls->facts.error = OS64_DOM_MEDIA_ERR_NETWORK;
+    media_failed_told[0] = '\0';
     media_turn(&f, "media: it fails part way");
+    check(strcmp(media_failed_told, "audio|s|https://example.test/dir/lf.mp3|2|") == 0,
+          "media: one failing part way is told with its own class");
     ls->facts.ended = true;
     media_turn(&f, "media: its sound runs out");
     media_script(&f, "assert(l.paused&&!l.seeking&&l.error.code===2,'it stops, no loop');", "media: no loop after failure");
@@ -910,8 +943,52 @@ static void dom_media_session_cases(void)
     fixture_free(&f);
 }
 
+/* The clocked events coalesce: a page slower than the clock hears one
+ * timeupdate and one progress when it gets there, not a backlog, and the
+ * next is queued once that one is delivered. */
+static void dom_media_clocked_cases(void)
+{
+    DomFixture f;
+    media_fixture(&f);
+    if (!fixture_ready(&f)) return;
+    media_script(&f, "globalThis.a=new Audio('song.mp3');hear(a);", "media: clocked: new Audio(src)");
+    media_turn(&f, "media: clocked: the turn opens it");
+    MediaSession *s = &media_sessions[0];
+    s->facts.probed = true;
+    s->facts.duration = 30;
+    s->facts.seekable = true;
+    s->facts.current = s->facts.future = s->facts.enough = true;
+    s->facts.arrived = 1;
+    media_turn(&f, "media: clocked: the probe");
+    media_activated = true;
+    media_script(&f, "a.play();heard();", "media: clocked: play");
+    media_turn(&f, "media: clocked: play's tasks");
+    media_script(&f, "heard();", "media: clocked: start clean");
+    s->facts.sounding = true;
+    /* Three turns, each past both clocks, with nothing delivered. */
+    for (int i = 1; i <= 3; i++) {
+        p2b_advance(400);
+        s->facts.position = 0.4 * i;
+        s->facts.arrived = 1 + i;
+        os64_dom_media_turn(f.binding);
+    }
+    media_turn(&f, "media: clocked: delivered at last");
+    media_script(&f, "const h=heard();assert(h==='progress:4 timeupdate:4','one of each, not three: '+h);"
+                     "assert(Math.abs(a.currentTime-1.2)<1e-9,'the time when it is delivered: '+a.currentTime);",
+                 "media: clocked: a backlog is one of each");
+    /* Delivered, the next is queued at its time. */
+    p2b_advance(400);
+    s->facts.position = 1.6;
+    s->facts.arrived = 5;
+    media_turn(&f, "media: clocked: the next turn");
+    media_script(&f, "const h=heard();assert(h==='progress:4 timeupdate:4','the clock goes on: '+h);",
+                 "media: clocked: the next of each after delivery");
+    fixture_free(&f);
+}
+
 static void dom_media_cases(void)
 {
+    dom_media_clocked_cases();
     dom_media_session_cases();
     dom_media_video_cases();
     dom_media_picture_cases();

@@ -141,6 +141,95 @@ static void snapshot_cases(void)
            !flow_reuse_stats(NULL).nodes_indexed, NULL);
 }
 
+// THE GRAFT'S ROLE COUNTER (flow_reuse_stats_t.role_*, a record kept
+// when the layout is profiled with a clock): the equal subtrees refused
+// only for their role, the outermost of each that no copy takes in,
+// classed by the root's own first role or else the first under it, the
+// boxes in them no copy takes in, the refusing roles they hold, and the
+// placement time inside them. A change in #z keeps its ancestors from
+// being equal; the flex container and the relative box are copied, and
+// the absolute box, whose containing block is the initial one, is left.
+static int64_t role_ticks;
+static int64_t role_clock(void *ctx) { (void)ctx; return role_ticks += 7; }
+static flow_tree_t *role_layout(Sheeted *p, const flow_tree_t *old, const flow_reuse_inputs_t *inputs, bool timed)
+{
+    os64_page_t *model = os64_page_rebuild(p->page);
+    flow_profile_t profile = {0};
+    flow_tree_t *tree = flow_layout_incremental(p->doc, model, 800, &p->env, old, inputs, &profile,
+                                               timed ? role_clock : NULL, NULL);
+    os64_page_free(model);
+    return tree;
+}
+static void role_counter_cases(void)
+{
+    Sheeted p;
+    sheeted_open(&p, "<!doctype html><div id=x style='display:flex'><div><p>a</p></div><div><p>b</p></div></div>"
+                     "<div id=r style='position:relative'><p>r</p></div><div id=y><p>plain</p></div>"
+                     "<div id=ab style='position:absolute'><p>out</p></div>"
+                     "<div id=z><p id=zp>z</p></div>", 800, 600);
+    flow_reuse_inputs_t input = {.resource_owner = p.doc};
+    flow_tree_t *old = snapshot_layout(&p, NULL, &input);
+    flow_tree_t *next = role_layout(&p, old, &input, true);
+    flow_reuse_stats_t s = flow_reuse_stats(next);
+    uint64_t roots = 0;
+    for (int r = 0; r < FLOW_ROLES; r++) roots += s.role_roots[r];
+    // The absolute box's containing block is the initial one: no subtree
+    // holding it may be copied, so the page's root is refused, and what the
+    // candidates under it take in (the flex container with its items, the
+    // relative box, the plain ones, the absolute box's own paragraph) is
+    // not counted in it: the root, the body and the absolute box are left.
+    expect("roles: an untouched page is one root, refused for an absolute box escaping it, less its candidates",
+           roots == 1 && s.role_roots[FLOW_ROLE_OUT_OF_FLOW] == 1 && s.role_boxes[FLOW_ROLE_OUT_OF_FLOW] == 3 &&
+           s.role_inside[FLOW_ROLE_OUT_OF_FLOW] == 1 && s.role_inside[FLOW_ROLE_FLEX] == 0 &&
+           s.role_inside[FLOW_ROLE_ITEM] == 0 && s.refused[FLOW_REUSE_ABSOLUTE_OUTSIDE] > 0, NULL);
+    flow_free(next);
+    os64_html_node_t *zp = (os64_html_node_t *)computed_find(p.doc->document, "zp");
+    os64_html_set_text(p.doc, zp->first_child, "changed", 7);
+    garb_cascade_update(p.cascade);
+    role_ticks = 0;
+    next = role_layout(&p, old, &input, true);
+    s = flow_reuse_stats(next);
+    roots = 0;
+    for (int r = 0; r < FLOW_ROLES; r++) roots += s.role_roots[r];
+    // The flex container and the relative box are candidates of their own
+    // now; the absolute box, no root, is the one left, its paragraph taken
+    // in by a copy of its own.
+    expect("roles: with the page's root changed, the absolute box is the root left, the flex and relative ones copied",
+           roots == 1 && s.role_roots[FLOW_ROLE_OUT_OF_FLOW] == 1 && s.role_boxes[FLOW_ROLE_OUT_OF_FLOW] == 1 &&
+           s.role_roots[FLOW_ROLE_FLEX] == 0 && s.role_roots[FLOW_ROLE_ITEM] == 0, NULL);
+    expect("roles: a profiled layout times the roots", s.role_us[FLOW_ROLE_OUT_OF_FLOW] > 0 &&
+           s.role_us[FLOW_ROLE_ITEM] == 0 && s.role_clock_errors == 0, NULL);
+    flow_free(next);
+    next = role_layout(&p, old, &input, false);
+    s = flow_reuse_stats(next);
+    roots = 0;
+    for (int r = 0; r < FLOW_ROLES; r++) roots += s.role_roots[r] + s.role_us[r];
+    expect("roles: no clock, nothing counted", roots == 0 && s.subtrees_equal > 0, NULL);
+    flow_free(next);
+    flow_free(old);
+    sheeted_close(&p);
+    // An absolute box whose containing block is its parent refuses nothing
+    // above that parent: the parent, the root left once its sibling's text
+    // changed, is refused for the float beside the absolute box and filed
+    // under the float, never under the absolute box.
+    sheeted_open(&p, "<!doctype html><div style='position:relative'><div style='position:absolute'>a</div>"
+                     "<div style='float:left'>f</div><p>x</p></div><p id=zp>tail</p>", 800, 600);
+    input = (flow_reuse_inputs_t){.resource_owner = p.doc};
+    old = snapshot_layout(&p, NULL, &input);
+    zp = (os64_html_node_t *)computed_find(p.doc->document, "zp");
+    os64_html_set_text(p.doc, zp->first_child, "changed", 7);
+    garb_cascade_update(p.cascade);
+    role_ticks = 0;
+    next = role_layout(&p, old, &input, true);
+    s = flow_reuse_stats(next);
+    expect("roles: an absolute box held by its parent is no out-of-flow refusal above it",
+           s.role_roots[FLOW_ROLE_FLOAT] == 1 && s.role_roots[FLOW_ROLE_OUT_OF_FLOW] == 0 &&
+           s.role_inside[FLOW_ROLE_OUT_OF_FLOW] == 0, NULL);
+    flow_free(next);
+    flow_free(old);
+    sheeted_close(&p);
+}
+
 // Fresh pass 2 is the oracle for generated bytes and anonymous structure.
 // These assertions inspect eligibility before any geometry copying is enabled.
 static void correspondence_cases(void)
@@ -195,8 +284,10 @@ static void correspondence_cases(void)
             os64_html_set_attr(p.doc, list, "start", "9", 1); garb_cascade_update(p.cascade);
         }
         next = snapshot_layout(&p, old, &input); s = flow_reuse_stats(next);
-        if (i == 0) expect("match: ordinary descendant of grid item qualifies locally",
-                            s.geometry_candidates == 1 && s.refused[FLOW_REUSE_BOX_ROLE], NULL);
+        // The grid container and what holds it qualify; its item refuses as
+        // a root (G2's), and the item's paragraph qualifies on its own.
+        if (i == 0) expect("match: a grid container qualifies with its item inside, the item alone refuses",
+                            s.geometry_candidates == 4 && s.refused[FLOW_REUSE_BOX_ROLE] == 1, NULL);
         if (i == 1) expect("match: split inline excludes its enclosing subtree",
                             s.refused[FLOW_REUSE_BOX_ROLE] && s.geometry_candidates == 1, NULL);
         if (i == 2) expect("match: animation ancestry refuses matching geometry",

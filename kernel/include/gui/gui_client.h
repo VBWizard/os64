@@ -51,6 +51,9 @@ int64_t gui_window_destroy(int64_t handle);
 // in first); `flags` is GUI_WINDOW_TITLE_UTF8 or 0. os64/gui.h carries the
 // contract.
 int64_t gui_window_set_pinned(int64_t handle,uint64_t pinned);
+// Enter (1) or leave (0) full screen; os64/gui.h carries the contract and
+// wm_set_full_screen the rules.
+int64_t gui_window_set_full_screen(int64_t handle, uint64_t on);
 int64_t gui_window_set_title(int64_t handle, const char *title, uint64_t flags);
 
 // Owner-only content floors; os64/gui.h defines normalization and growth.

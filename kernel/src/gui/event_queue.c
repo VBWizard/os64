@@ -31,6 +31,11 @@ int gui_event_queue_push(gui_event_queue_t *q, const input_event_t *ev)
         q->frame_pending = true;
         return 1;
     }
+    if (ev->type == INPUT_EVENT_WINDOW_FULL_SCREEN) {
+        q->full_screen_tick = ev->tick;
+        q->full_screen_pending = true;
+        return 1;
+    }
     if (ev->type == INPUT_EVENT_POINTER_STATE) {
         q->pointer = *ev;
         q->pointer_pending = true;
@@ -61,6 +66,11 @@ bool gui_event_queue_pop(gui_event_queue_t *q, input_event_t *out)
     if (q->frame_pending) {
         *out = q->frame;
         q->frame_pending = false;
+        return true;
+    }
+    if (q->full_screen_pending) {
+        *out = (input_event_t){.type = INPUT_EVENT_WINDOW_FULL_SCREEN, .tick = q->full_screen_tick};
+        q->full_screen_pending = false;
         return true;
     }
     // Rotate eligible doorbell/placement/ring-loss turns: a member that stays

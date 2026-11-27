@@ -10,7 +10,8 @@ refines [RELAYOUT.md](RELAYOUT.md).*
 
 Steps 1 through 4 are implemented: checked text-run retention, independent
 snapshot history, bounded structural correspondence, refusal diagnostics,
-ordinary-block geometry copying and an intrinsic-width memo. The explicit
+block-subtree geometry copying (with the roles § Roles inside a copy admits)
+and an intrinsic-width memo. The explicit
 `flow_layout_incremental` entry enables reuse; ordinary entries do not register
 snapshot readers. Yonder opts in for displayed and hidden geometry.
 [Hardware acceptance](../../relayout-evidence/5c-p5-acceptance.md) passed on
@@ -42,10 +43,10 @@ reusable placement units:
 
 | Work | Reuse in this cut |
 |---|---|
-| Ordinary in-flow block subtree, including a whole inline formatting context | Graft when the contract below passes |
+| In-flow block subtree, including a whole inline formatting context and the roles § Roles inside a copy admits | Graft when the contract below passes |
 | Intrinsic min/max widths requested by flex, grid or shrink-to-fit | Memoize eligible completed results independently of final placement |
-| Flex/grid placement and stretch/refit | Execute the existing algorithm; no geometry graft across its finalization boundary |
-| Tables, floats, absolute/fixed positioning and positioned inline pieces | Existing layout; no geometry graft of a subtree containing them |
+| Flex/grid placement and stretch/refit | Executed for a container laid out fresh, no item copied across its finalization boundary; a container inside a copy is copied whole (§ Roles inside a copy) |
+| Tables, floats, escaping absolute/fixed boxes and positioned inline pieces | Existing layout; no geometry graft of a subtree containing them |
 | Box construction, public boxes, stacking, clipping, ink and overflow | Rebuild from current inputs |
 
 These exclusions are local: a disqualified ancestor can still visit eligible
@@ -192,12 +193,39 @@ point, and capture its resulting cursor as the signature input. A call that
 settled pending floats or gained nonzero clearance takes the fresh path.
 The qualified replay path therefore has no clearance effect to reproduce.
 Do not place the graft ahead of that prefix. A candidate is an `FB_BLOCK` in
-normal block flow, not a flex/grid item, table part, replaced block, float,
-positioned/transformed box, or the viewport root. Its mapped descendants must
-not contain excluded placement classes, split inline content spanning beyond
-the root, or positioning entries/edges escaping the candidate. A plain inline
-replaced item is eligible only with equal resource inputs and matching fresh
-items; inline-block content takes fresh layout in this cut.
+normal block flow: not a flex/grid item, an out-of-flow box, a float or an
+atom's content, whose placement belongs to something else (G2 is the item's
+door). Its subtree is held to § Roles inside a copy. A plain inline replaced
+item is eligible only with equal resource inputs and matching fresh items.
+
+### Roles inside a copy
+
+**A subtree may hold roles (G1, Fable's ruling of 2026-11-23)**: a flex or
+grid container and its items, positioned, transformed and filtered boxes,
+atoms whose content is equal, and out-of-flow boxes whose containing block is
+inside it; the root itself may be a flex or grid container (never an item),
+positioned, transformed or filtered. Copying the subtree
+copies the final state its last layout left, which is a fresh layout's
+because nothing outside the subtree places anything in it: a container's
+placement of its items, the absolutes a containing block lays out, an atom's
+content are all inside the copy, and run in neither layout's view of it
+again. What each role writes that a copy carries (reuse_graft.inc's staging):
+
+- an item's flex line, grid row and column (baseline readers outside the
+  copy read them through `first_baseline_in`), its forced width, margin and
+  area offset (the next copy reads them, and so will G2's refit);
+- an atom's content box and its subtree, moved with its fragment;
+- an out-of-flow box's placeholder, the copied fragment.
+
+Still refused inside, each named in the record: a float (5c's float proof
+is about the root's surroundings, not floats within), a table or part of
+one, a block-level picture, a block holding a positioned or split inline's
+pieces, missing-image alt text (`role`); an out-of-flow box whose
+containing block is outside the subtree, whose placement a fresh
+`positioned_done` outside makes (`absolute outside`); an atom whose content
+made a float query in its line's space, which the copy's probe cannot
+answer (`atom floats`). The match counts each out-of-flow box against the
+subtrees between it and its containing block (`escapes`, `cb_held`).
 
 A formatting context having encountered a float does not by itself prohibit
 reuse. Require no pending floats at entry or at the replay point, no floats
@@ -354,11 +382,50 @@ recomputation.
 The current width algorithm treats unresolved percentages through its zero-base
 intrinsic rules. Preserve that algorithm's query semantics rather than claiming
 all intrinsic sizes are universally independent of context. A changed resource,
-ratio input, text/font, generated marker or sizing role invalidates the memo.
-Tables and their internal parts use the fresh intrinsic algorithm in this cut;
-eligible ordinary children queried by flex/grid/shrink-to-fit may reuse theirs.
-Final width changes can defeat geometry reuse without defeating a valid
-intrinsic-width result. Flex/grid placement still runs.
+ratio input, text/font or generated marker invalidates the memo. Tables and
+their internal parts use the fresh intrinsic algorithm in this cut. Final width
+changes can defeat geometry reuse without defeating a valid intrinsic-width
+result. Flex/grid placement still runs.
+
+**The memo is copied whatever the subtree's roles (G0, Fable's ruling of
+2026-11-23)**: a flex or grid container, an item, a float, an atom's content.
+The role refusal was for geometry, whose placement a role changes; a box's
+widths are what its measure reads, and placement matters to them only through
+the heights it seeds. What a measure reads, from the code (`intrinsic_copy`,
+layout.c):
+
+- the subtree, its styles and its text: the match's `equal`, which folds an
+  atom's content into the box holding it;
+- the environment (fonts, pictures, the viewport, zoom): the snapshot's,
+  refused for the whole layout when any changed, and quirks documents never
+  reused;
+- the heights each measure reads, which placement seeds and which may come
+  from outside the subtree: the definite height its line's percentages are of
+  (`definite_height`: a box's own, `def_h` or else `ratio_h`, or for an
+  anonymous box the named one its walk reaches), and a block-level picture's
+  containing block's (`box_cb_h`: its percentage limits, carried through its
+  ratio). Kept at the measure (`intrinsic_def`, `intrinsic_cbh`) and compared,
+  per box, at the copy;
+- what was measured already. The memo is kept at a box's first asking, so a
+  measure of the root measures the boxes under it not yet measured, each
+  under the definite height it has at that moment, and reads the others'
+  kept widths. Each measure is numbered in its layout, and a box records the
+  last number measured inside its own (`intrinsic_seq`, `intrinsic_end`): the
+  boxes numbered inside the root's are the ones it measured.
+
+A copy stands for a fresh measure when each box the source measured with the
+root or before it either is measured here already with the same widths, or,
+measured with it, is not measured here yet, finds the heights it was measured
+under and is no table part. A fresh measure reads a box measured already
+without going under it, so the check goes under neither that nor a box it
+does not measure. Then the boxes measured with the root are copied, and
+numbered after this layout's last measure in the source's order, so the next
+layout's copy finds the same windows. Each refusal is counted by name
+(`flow_intrinsic_refusal_t`); `tools/test_libflow_graft.inc`'s random walk
+compares every layout with a fresh one, and
+`tools/test_libflow_intrinsic_mutants.py` breaks each rule a layout can show
+broken (it names the order rules no layout today can, and why they are
+kept).
 
 ## Costs, failure boundaries and diagnostics
 
@@ -419,7 +486,7 @@ Required adversarial cases:
 | Insert an earlier link/control/list item; change `ol start` or `li value` | Fresh model indices and generated markers survive copying |
 | Font arrival, image size/availability, typed form value, canvas resize | Resource/state changes miss even without a relevant HTML delta |
 | Float begins intruding after a sibling shrinks; collapsed negative margins; nonzero Space offset; pending float/marker | The proposed float-query bound rejects influence, using the correct coordinate frame |
-| Flex/grid stretch, table cells, absolute/fixed descendants, split inlines | Excluded geometry is rebuilt; ordinary safe descendants remain testable |
+| Flex/grid items as roots, table cells, escaping absolute/fixed descendants, split inlines | Excluded geometry is rebuilt; safe descendants remain testable |
 | Viewport/zoom/height/appearance/quirks changes; animation | Environment or motion mismatch cannot replay old geometry |
 | Free source first; alternate source/destination destruction; repeated generations | Runs, bytes, styles and maps remain owned without an arena chain |
 | Intrinsic-only hit followed by a different final width; incomplete source with `intrinsic_known` | Width memo does not install old placed height/lines or accept incomplete sources |

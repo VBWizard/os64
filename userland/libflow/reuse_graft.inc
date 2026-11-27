@@ -1,12 +1,20 @@
 // New arena records and retained runs stay private until the subtree copy
 // succeeds. A failed copy consumes budget and follows the normal refusal path.
+// What a container's placement wrote on its items, which a copied container
+// does not run, is staged with them: the forced width and margin a flex or
+// grid item was laid out at, its flex line, its grid row and column and its
+// area's offset (the baseline readers read them, and so will the next
+// copy and G2's refit). An out-of-flow box's placeholder is the copied fragment
+// (`place`).
 typedef struct {
     FBox *box;
     int64_t x, y, w, h, baseline, content_h, clearance, origin_x, origin_y, cb_h, def_h, ratio_h;
     int64_t border[4], padding[4];
-    bool has_baseline, def_known;
+    int64_t flex_w, flex_ml, area_dx;
+    int32_t flex_line, grid_row, grid_col;
+    bool has_baseline, def_known, flex_sized;
     FLine *lines, *last_line;
-    FFrag *marker;
+    FFrag *marker, *place;
     os64_text_run_t *ellipsis;
     FReuseCall call;
 } FGraftBox;
@@ -50,17 +58,21 @@ static FFrag *graft_fragment(L *l, const FStyles *styles, FBox *box,
     return fr;
 }
 
+// `holder`: the staged box whose lines hold an out-of-flow box's placeholder.
 static void graft_box(L *l, const FStyles *styles, FBox *box, FGraftBox *staged,
-                       size_t *count, int64_t dx, int64_t dy)
+                       size_t *count, int64_t dx, int64_t dy, const FGraftBox *holder)
 {
     FReusePair *pair = f_reuse_pair(l->reuse, box);
-    if (!pair || !pair->equal || !pair->ordinary) { fail(l); return; }
+    if (!pair || !pair->equal || !pair->inner) { fail(l); return; }
     const FBox *old = pair->old;
     FGraftBox *s = &staged[(*count)++];
     *s = (FGraftBox){.box = box, .w = old->w, .h = old->h,
         .content_h = old->content_h, .clearance = old->clearance,
         .def_known = old->def_known, .cb_h = old->cb_h, .def_h = old->def_h, .ratio_h = old->ratio_h,
-        .has_baseline = old->has_baseline, .ellipsis = old->ellipsis, .call = *old->reuse_call};
+        .has_baseline = old->has_baseline, .ellipsis = old->ellipsis, .call = *old->reuse_call,
+        .flex_sized = old->flex_sized, .flex_w = old->flex_w, .flex_ml = old->flex_ml,
+        .area_dx = old->area_dx, .flex_line = old->flex_line, .grid_row = old->grid_row,
+        .grid_col = old->grid_col};
     s->call.box = box;
     s->x = graft_add(l, old->x, dx); s->y = graft_add(l, old->y, dy);
     s->baseline = old->has_baseline ? graft_add(l, old->baseline, dy) : old->baseline;
@@ -96,8 +108,15 @@ static void graft_box(L *l, const FStyles *styles, FBox *box, FGraftBox *staged,
     }
     if (old->marker_frag && !l->failed)
         s->marker = graft_fragment(l, styles, box, old->marker_frag, dx, dy);
+    for (const FLine *ln = holder && box->out_of_flow ? holder->lines : NULL; ln && !s->place; ln = ln->next)
+        for (FFrag *fr = ln->frags; fr; fr = fr->next)
+            if (fr->kind == FF_PLACEHOLDER && fr->item && fr->item->absolute == box) { s->place = fr; break; }
     for (FBox *c = box->first; c && !l->failed; c = c->next)
-        graft_box(l, styles, c, staged, count, dx, dy);
+        graft_box(l, styles, c, staged, count, dx, dy, s);
+    // An atom's content: laid out where its fragment stands, so moved as it
+    // is (translate's rule for an atom).
+    for (FItem *it = box->items; it && !l->failed; it = it->next)
+        if (it->content) graft_box(l, styles, it->content, staged, count, dx, dy, s);
 }
 
 static bool graft_try(L *l, const FStyles *styles, FBox *b, int64_t cbx,
@@ -135,7 +154,7 @@ static bool graft_try(L *l, const FStyles *styles, FBox *b, int64_t cbx,
     FGraftBox *staged = os64_calloc(p->subtree_count, sizeof(*staged));
     if (!staged) { l->reuse_stats->refused[FLOW_REUSE_NO_MEMORY]++; fail(l); b->unfinished = true; return false; }
     size_t count = 0;
-    graft_box(l, styles, b, staged, &count, dx, dy);
+    graft_box(l, styles, b, staged, &count, dx, dy, NULL);
     if (!l->failed) {
         for (size_t i = 0; i < count; ++i) {
             FGraftBox *s = &staged[i]; FBox *d = s->box;
@@ -147,6 +166,10 @@ static bool graft_try(L *l, const FStyles *styles, FBox *b, int64_t cbx,
             os64_memcpy(d->border, s->border, sizeof(d->border));
             os64_memcpy(d->padding, s->padding, sizeof(d->padding));
             d->lines = s->lines; d->last_line = s->last_line; d->marker_frag = s->marker;
+            d->flex_sized = s->flex_sized; d->flex_w = s->flex_w; d->flex_ml = s->flex_ml;
+            d->area_dx = s->area_dx; d->flex_line = s->flex_line;
+            d->grid_row = s->grid_row; d->grid_col = s->grid_col;
+            if (s->place) d->place = s->place;
             d->ellipsis = s->ellipsis; *d->reuse_call = s->call;
             d->placed = true; d->unfinished = false; d->laid++;
         }
