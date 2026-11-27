@@ -3126,12 +3126,11 @@ void yonder_paint_set_top(const os64_html_node_t *element)
 
 static bool top_applies(const flow_tree_t *tree)
 {
-    // The root box may be anonymous: the tree's document is that of the
-    // first box down its first children that a node made.
+    // The root box is the root element's (flow_root), so its node says
+    // which document the tree is.
     const flow_box_t *b = s_top_element != NULL ? flow_root(tree) : NULL;
-    while (b != NULL && b->node == NULL)
-        b = b->first;
-    return b != NULL && os64_html_node_document(b->node) == os64_html_node_document(s_top_element);
+    return b != NULL && b->node != NULL &&
+           os64_html_node_document(b->node) == os64_html_node_document(s_top_element);
 }
 
 typedef struct {

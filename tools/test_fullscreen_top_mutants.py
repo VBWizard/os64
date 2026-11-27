@@ -16,8 +16,9 @@ neither.
 The shape is test_cover_mutants.py's: each mutant is applied to the tree's
 copy of its file, the cases are run, and the file is put back from the bytes
 read before the change, checked byte for byte, whatever happens. Run it
-through tools/mutants_parallel.py, never beside another harness that edits
-the same tree; the per-mutant logs are in --logs.
+through tools/mutants_parallel.py with `--with kernel` (yonder's plane
+blend builds the kernel's compositing source), never beside another
+harness that edits the same tree; the per-mutant logs are in --logs.
 """
 import argparse
 import os
@@ -42,21 +43,17 @@ CASES = 'YONDER_COVER_ONLY=1 bash tools/test_yonder_scripts_host.sh'
 mutants = [
     # The paint: the top layer at all, its backdrop, and only its boxes.
     ('the-top-layer-never-applies', PAINT, '    if (top_applies(tree)) {', '    if (0 && top_applies(tree)) {'),
-    ('an-anonymous-root-hides-the-document', PAINT, '    while (b != NULL && b->node == NULL)\n        b = b->first;\n',
-     '    (void)0;\n'),
     ('no-backdrop', PAINT, '        if (!cover_inside)\n            fill(', '        if (0)\n            fill('),
     ('every-box-painted', PAINT, '    if (in_top(t, b))\n        paint_box(t->p, b);', '    paint_box(t->p, b);'),
-    ('the-walk-from-the-root', PAINT, '&v, cover_inside ? cover : t.top, &found);',
-     '&v, cover_inside ? cover : flow_root(tree), &found);'),
     ('a-cover-inside-not-seen', PAINT, '        bool cover_inside = cover != NULL && t.top != NULL && in_top(&t, cover);',
      '        bool cover_inside = false;'),
     # The pointer: kept inside the element.
     ('the-hit-not-kept-inside', FLOW, '        if (top != NULL && !within(b, top))\n            continue;',
-     '        if (0)\n            continue;'),
+     '        if (top != NULL && !within(b, top) && 0)\n            continue;'),
     ('a-widget-outside-not-covered', YONDER, '    if (!fs_layer())\n        return flow_box_covered_at(g.page.tree, b, x, y, scroll);',
      '    if (1)\n        return flow_box_covered_at(g.page.tree, b, x, y, scroll);'),
     ('yonder-hits-the-whole-page', YONDER, '    return top != NULL ? flow_hit_within(g.page.tree, x, y, scroll, top) : NULL;',
-     '    return flow_hit(g.page.tree, x, y, scroll);'),
+     '    return top != NULL ? flow_hit(g.page.tree, x, y, scroll) : NULL;'),
     # The user-agent rules.
     ('no-user-agent-rules', STYLE, '        if (fullscreen(n, root))\n            fullscreen_rules(c, n, &sp);',
      '        if (0)\n            fullscreen_rules(c, n, &sp);'),
@@ -69,6 +66,8 @@ mutants = [
 # - object-fit: contain for the element (style.c): the case's element is a
 #   container, so the rule never meets a replaced element; the video itself
 #   full screen is the player widget's slice.
+# - the walk begun at the root rather than at the element: in_top hands
+#   over the same boxes, so the pixels are the same and only the time is not.
 # - the group verbs' in_top guards (top_open, top_close, top_inside): an
 #   open and its close come for the same box, so a guard broken on one
 #   pairs nothing new; the container case has no group outside the element.
