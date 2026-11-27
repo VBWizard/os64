@@ -757,22 +757,24 @@ void restore_user_cr3(void)
 //     and it is the common case: most buffers are pages already there, many
 //     on a thread's stack, which no mapping covers, so asking the list of
 //     mappings first walked all of it to find nothing. It also covers the
-//     kernel's own eager pages for the task (stacks, argv, env), and it is
-//     what keeps a supervisor page in the lower half, a thread's kernel
-//     stack, from ever passing.
+//     kernel's own eager pages for the task (stacks, argv, env).
+//   - A page PRESENT without USER → reject, whatever covers it: that is a
+//     supervisor page in the task's half, a thread's kernel stack, and the
+//     kernel must never copy to or from one on a program's say-so.
 //   - Otherwise a VMA covering it → legal: a not-present page is demand
 //     paging waiting to happen. For copy-OUT the VMA must also be writable —
 //     a store to a read-only page would be a ring-0 protection violation,
 //     another panic door. (CoW pages pass correctly: their VMA says
 //     PROT_WRITE and the write fault resolves through the CoW branch.) The
 //     VMA's facts hold for the rest of it, so the pages of the range inside
-//     it need no further lookup.
+//     it need no further lookup of the list, only the supervisor check.
 //   - Neither → wild pointer; reject, so the syscall fails with
 //     SYSCALL_RESULT_BAD_USER_DATA instead of the kernel faulting.
-// WHAT IT DOES NOT PROMISE: the mapping's facts are copied under the task's
-// mapLock, so they are true AT THE CHECK and not after. A sibling's unmap
-// between the check and the copy is the program's own race, but its cost is
-// the kernel's: the copy faults in ring 0 on a region no mapping covers, and
+// WHAT IT DOES NOT PROMISE: what it reads is true AT THE CHECK and not
+// after: the page table's entries, read with no lock, and the mapping's
+// facts, copied under the task's mapLock. A sibling's unmap between the
+// check and the copy is the program's own race, but its cost is the
+// kernel's: the copy faults in ring 0 on a region no mapping covers, and
 // that panics (DEBTS, "A copy can outlive the check that allowed it").
 static bool user_range_accessible(const void *user_ptr, size_t length, bool for_write)
 {
@@ -793,7 +795,8 @@ static bool user_range_accessible(const void *user_ptr, size_t length, bool for_
 	uintptr_t end = addr + length;   // <= USER_CANONICAL_MAX: no overflow, nothing above the ceiling
 
 	uint64_t by_table = 0;
-	bool ok = true;
+	bool ok = true, have_facts = false;
+	vma_facts_t facts;
 	for (uintptr_t page = addr & ~(uintptr_t)(PAGE_SIZE - 1); page < end; page += PAGE_SIZE)
 	{
 		if (paging_user_page_reachable((pt_entry_t *)task->pml4v, page, for_write))
@@ -801,13 +804,26 @@ static bool user_range_accessible(const void *user_ptr, size_t length, bool for_
 			by_table++;
 			continue;
 		}
-		vma_facts_t facts;
-		if (!vma_lookup_facts(task, page, &facts) || (for_write && !(facts.prot & PROT_WRITE)))
+		uintptr_t leaf = paging_walk_paging_table_keep_flags((pt_entry_t *)task->pml4v, page, true);
+		if (leaf != 0xbadbadba && (leaf & PAGE_PRESENT) && !(leaf & PAGE_USER))
 		{
 			ok = false;
 			break;
 		}
-		page = facts.end - PAGE_SIZE;   // the loop steps to the mapping's end
+		if (!have_facts || page < facts.start || page >= facts.end)
+		{
+			if (!vma_lookup_facts(task, page, &facts))
+			{
+				ok = false;
+				break;
+			}
+			have_facts = true;
+		}
+		if (for_write && !(facts.prot & PROT_WRITE))
+		{
+			ok = false;
+			break;
+		}
 	}
 	if (by_table != 0)
 		vma_note_table_answers(task, by_table);

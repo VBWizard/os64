@@ -3,10 +3,11 @@
 // asking the page table first and the list of mappings only for a page not
 // there yet.
 //
-//   1. a buffer on this thread's stack, which no mapping covers, is taken,
-//      and the page table answers for it (pages_by_table grows);
-//   2. a fresh megabyte from map(), none of it touched, is taken for a read
-//      into it, and its mapping answers for all of it in one lookup;
+//   1. a buffer on this thread's stack, which no mapping covers, is taken:
+//      only the page table can vouch for it (and pages_by_table grows,
+//      though the fixture's own reads add to that too);
+//   2. two pages at the end of a fresh megabyte from map(), none of it
+//      touched, are taken for a read into them, through the mapping;
 //   3. this thread's KERNEL stack, a supervisor page in the program's own
 //      half of the address space, is refused both ways: read() into it and
 //      write() out of it answer -2 and copy nothing;
@@ -93,7 +94,7 @@ int main(int argc, char **argv)
         FAIL(1);
     }
 
-    // 2. A fresh megabyte, untouched: the mapping answers for all of it.
+    // 2. A fresh megabyte, untouched: its mapping vouches for it.
     uint8_t *fresh = os64_map(1u << 20);
     if (fresh == NULL)
         FAIL(2);

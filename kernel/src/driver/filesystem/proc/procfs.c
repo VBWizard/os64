@@ -954,7 +954,8 @@ static void proc_gen_maps(synth_text_t *t, task_t *task)
 {
 	// The mappings' facts are copied out of the list under its lock, then
 	// formatted with the lock released: nothing is formatted or allocated
-	// under it. At most the walk guard's worth, newest first.
+	// under it. At most the walk guard's worth: past it, the rows are the
+	// mappings most recently found or made (the list's order, maplist.h).
 	vma_facts_t *facts = kmalloc(PROC_MAX_LIST_WALK * sizeof(vma_facts_t));
 	if (facts == NULL)
 	{

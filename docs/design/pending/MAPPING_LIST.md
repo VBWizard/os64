@@ -167,10 +167,13 @@ walked everything, found nothing, and fell back to the page table.
   page not yet reachable, a demand page not faulted or a CoW page asked
   for writing, asks the mapping, and a mapping that answers holds for the
   rest of itself, so a `read()` into a fresh megabyte is one lookup, not
-  256. The check it replaced as the fallback looked at the leaf's present
-  and write bits only, so a supervisor page in the task's lower half, a
-  thread's kernel stack, passed it; now no page without USER down the walk
-  passes. The walk takes no lock: table pages live until the task's
+  256 (the list asked once; each page still gets the supervisor check
+  below). The check it replaced as the fallback looked at the leaf's
+  present and write bits only, so a supervisor page in the task's lower
+  half, a thread's kernel stack, passed it. Now a page present without
+  USER is refused whatever covers it, which matters on this base: a kernel
+  stack can lie inside a program image's mapping once its thread counter
+  climbs that far (THREAD_STACKS.md). The walk takes no lock: table pages live until the task's
   burial (DEBTS, "A task's page-table pages are never freed before its
   burial", which records that a cure freeing tables must give this walk a
   lifetime rule).
@@ -178,9 +181,9 @@ walked everything, found nothing, and fell back to the page table.
   the head (`maplist.c`, O(1), under `mapLock` like every walk). The hot
   mappings are the old ones (the image, the libraries, the first heap
   arena) and linking new regions at the head had put them behind a
-  thousand others. Nothing that reads the whole list depends on its
-  order: `/proc` maps sorts its rows, burial takes all, unmap finds by
-  start. No pointer is stored, so there is no lifetime question; a
+  thousand others. Burial takes all and unmap finds by start; `/proc`
+  maps sorts its rows, and past its walk guard (512 rows) shows the
+  mappings most recently found or made, where it showed the newest. No pointer is stored, so there is no lifetime question; a
   per-thread hint was weighed and set aside, because the misses were the
   cost and a hint does nothing for a miss.
 - **Counts:** `mapping_walks` gains `misses`; `pages_by_table` counts the

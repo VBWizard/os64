@@ -114,7 +114,7 @@ vma_t* vma_lookup_anon_start_hold(task_t* task, uintptr_t start);
 // `vma` delisted: no lookup finds it from now on. True when this call
 // delisted it, false when another already had.
 bool vma_delist(task_t* task, vma_t* vma);
-// Every mapping delisted at once, for burial, as a chain newest first
+// Every mapping delisted at once, for burial, as a chain in the list's order
 // (vma_chain_next walks it); `*held` counts the holds found outstanding.
 vma_t* vma_take_all(task_t* task, uint64_t *held);
 vma_t* vma_chain_next(vma_t* vma);
@@ -134,7 +134,8 @@ void vma_read_counts(task_t* task, vma_counts_t *out);
 // needed (user_range_accessible), for the counts.
 void vma_note_table_answers(task_t* task, uint64_t pages);
 
-// Up to `cap` mappings' facts copied under the lock, newest first; returns
+// Up to `cap` mappings' facts copied under the lock, in the list's order
+// (most recently found or made first); returns
 // how many were copied, and `*listed` (when not NULL) how many are listed.
 uint32_t vma_copy_all_facts(task_t* task, vma_facts_t *out, uint32_t cap, uint32_t *listed);
 

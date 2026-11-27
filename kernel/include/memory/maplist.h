@@ -17,8 +17,8 @@
 // MOVES IT TO THE HEAD: a fresh region is the one about to fault a thousand
 // times, and an old one in use (the image, a library, the first heap arena)
 // would otherwise sit behind every region made since. So the list's order is
-// most recently found or made first; nothing that reads the whole list
-// depends on its order.
+// most recently found or made first, and a reader that copies only part of
+// the list (/proc's maps past its walk guard) gets those.
 
 #include <stdbool.h>
 #include <stddef.h>
