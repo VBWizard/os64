@@ -20,7 +20,11 @@
 //   -n frames  stop after that many frames
 //   -k crc     the CRC the frames must give (hex); a different one exits 4
 //   -x WxH     also convert every frame to XRGB8888 (BGRA in memory, the
-//              window canvas's format) at W x H, the way a player will:
+//              window canvas's format) at W x H with libswscale's own call,
+//              as libmedia's scaler makes it but without that scaler's
+//              cures: at an ODD W this times FFmpeg's slow odd-width path
+//              (media_scale.c, THE ODD WIDTH), four to five times what a
+//              player pays, which converts one narrower; see DEBTS:
 //              sws_scale_frame on a dynamic context (never the legacy
 //              API), threads 1, into a destination avbench owns (64-byte
 //              aligned, more than FFmpeg's routines ask of a buffer, with
@@ -30,11 +34,13 @@
 //              filled in (below). Each frame is converted twice, bilinear
 //              and fast, each by its own scaler and timed apart. FAST is
 //              FFmpeg's fast bilinear only for a frame wider than W x H,
-//              chosen frame by frame: enlarging, libswscale's fast path
-//              writes x86 code of its own into the heap and runs it
-//              (utils.c, ff_init_hscaler_mmxext), which os64, keeping data
-//              memory unexecutable, ends with a no-execute fault. When any
-//              frame enlarged, the "fast" column says fast=bilinear.
+//              chosen frame by frame: to the same width or wider, a
+//              multiple of 32, libswscale's fast path writes x86 code of
+//              its own into the heap and runs it (utils.c,
+//              ff_init_hscaler_mmxext), which os64, keeping data memory
+//              unexecutable, ends with a no-execute fault (media_scale.c,
+//              FAST ONLY WHEN THE WIDTH SHRINKS). When any frame enlarged,
+//              the "fast" column says fast=bilinear.
 //              `natural` is the picture's own size: conversion, no scaling
 //   -e         with -x: the bilinear conversion in FFmpeg's bit-exact mode,
 //              whose pixels do not depend on which routines FFmpeg chose,
@@ -740,7 +746,8 @@ static int bench_all(const char *dir, int runs, const Scale *scale)
 static int usage(void)
 {
     os64_printf("usage: avbench [-c | -s] [-n frames] [-k crc] [-x WxH|natural [-e] [-K crc]] file\n"
-                "       avbench all <directory> [runs] [-x WxH|natural]\n");
+                "       avbench all <directory> [runs] [-x WxH|natural]\n"
+                "  -x times libswscale's own call: at an odd W, FFmpeg's slow path, not a player's\n");
     return 1;
 }
 
