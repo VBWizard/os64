@@ -511,19 +511,22 @@ static void proc_add_counted_lock(synth_text_t *t, const char *key, const counte
 }
 
 // The task's list of mappings: how many, the walks the lookups took (in
-// mappings stepped over), and the waits and holds of its lock and of the
-// task's page lock (which a fault publishes a page under and unmap removes
-// one under), each since the task began and since this file was last read
-// (MAPPING_LIST.md). A long walk is the list lock's hold, which is why both
-// are here.
+// mappings stepped over; a miss steps over all of them), the pages of
+// syscall ranges the page table answered for without a lookup, and the
+// waits and holds of its lock and of the task's page lock (which a fault
+// publishes a page under and unmap removes one under), each since the task
+// began and since this file was last read (MAPPING_LIST.md). A long walk is
+// the list lock's hold, which is why both are here.
 static void proc_add_mapping_counts(synth_text_t *t, task_t *task)
 {
 	vma_counts_t c;
 	vma_read_counts(task, &c);
 	synth_text_addf(t, "mappings\t%u\n", c.listed);
-	synth_text_addf(t, "mapping_walks\t%lu lookups %lu steps longest %lu; since read %lu lookups %lu steps longest %lu\n",
-	                c.walks.lookups, c.walks.steps, c.walks.steps_most,
-	                c.walks_since.lookups, c.walks_since.steps, c.walks_since.steps_most);
+	synth_text_addf(t, "mapping_walks\t%lu lookups %lu misses %lu steps longest %lu; "
+	                "since read %lu lookups %lu misses %lu steps longest %lu\n",
+	                c.walks.lookups, c.walks.misses, c.walks.steps, c.walks.steps_most,
+	                c.walks_since.lookups, c.walks_since.misses, c.walks_since.steps, c.walks_since.steps_most);
+	synth_text_addf(t, "pages_by_table\t%lu; since read %lu\n", c.table_answers, c.table_answers_since);
 	proc_add_counted_lock(t, "mapping_lock", &c.lock);
 	proc_add_counted_lock(t, "page_lock", &c.page_lock);
 }

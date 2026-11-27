@@ -119,15 +119,20 @@ bool vma_delist(task_t* task, vma_t* vma);
 vma_t* vma_take_all(task_t* task, uint64_t *held);
 vma_t* vma_chain_next(vma_t* vma);
 // The list's counts for /proc/<id>/status, each copied under its own lock:
-// how many mappings are listed, the walks, and the waits and holds of the
-// list's lock and the task's page lock, each since the task began and since
-// the last read, which starts the windows again.
+// how many mappings are listed, the walks, the pages the page table answered
+// for without one, and the waits and holds of the list's lock and the task's
+// page lock, each since the task began and since the last read, which starts
+// the windows again.
 typedef struct {
     uint32_t listed;
     maplist_walks_t walks, walks_since;
+    uint64_t table_answers, table_answers_since;
     counted_lock_stats_t lock, page_lock;
 } vma_counts_t;
 void vma_read_counts(task_t* task, vma_counts_t *out);
+// `pages` pages of a syscall's range the page table vouched for, no walk
+// needed (user_range_accessible), for the counts.
+void vma_note_table_answers(task_t* task, uint64_t pages);
 
 // Up to `cap` mappings' facts copied under the lock, newest first; returns
 // how many were copied, and `*listed` (when not NULL) how many are listed.

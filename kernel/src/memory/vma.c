@@ -323,9 +323,17 @@ void vma_read_counts(task_t* task, vma_counts_t *out)
     uint64_t f = counted_lock_acquire(&task->mapLock);
     out->listed = task->mmaps.count;
     maplist_read_walks(&task->mmaps, &out->walks, &out->walks_since);
+    out->table_answers = __atomic_load_n(&task->tableAnswers, __ATOMIC_RELAXED);
+    out->table_answers_since = out->table_answers - task->tableAnswersRead;
+    task->tableAnswersRead = out->table_answers;
     out->lock = task->mapLock.stats;
     counted_lock_window_restart(&task->mapLock);
     counted_lock_release(&task->mapLock, f);
+}
+
+void vma_note_table_answers(task_t* task, uint64_t pages)
+{
+    __atomic_add_fetch(&task->tableAnswers, pages, __ATOMIC_RELAXED);
 }
 
 uint32_t vma_copy_all_facts(task_t* task, vma_facts_t *out, uint32_t cap, uint32_t *listed)

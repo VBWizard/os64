@@ -119,6 +119,7 @@ static const fixture_t kFixtures[] = {
     { "/tests/memory_test",     NULL, 0xF3EE600D,  0,          "the memory syscall's snapshot" },
     { "/tests/threadtest",      NULL, 0x1B2EAD00,  0,          "threads: create, argument, join, shared address space" },
     { "/tests/maprace",         NULL, 0x3A9E0000,  0,          "threads mapping at once each get a range of their own, and the list of mappings holds while they map, fault, read it and unmap" },
+    { "/tests/rangecheck",      NULL, 0x3C4E0000,  0,          "a syscall's buffer: the stack and a fresh mapping taken, a kernel stack, text and the exit window refused" },
     { "/tests/handletest",      NULL, 0x4A7D0000,  0,          "the handle table grows to its ceiling, every number kept; a thread at the ceiling is refused with none made" },
     { "/tests/worktest",        NULL, 0x600C0000,  0x600C0002, "Worker pool: ownership, admission, cancellation, shutdown" },
     { "/tests/doorbelltest",    NULL, 0x600B0000,  0x600B0002, "GUI doorbell: owner, coalescing, overflow, worker wake, libui" },
