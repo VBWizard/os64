@@ -22,7 +22,7 @@ typedef enum {
     P_ONLY_OF_TYPE, P_NTH_CHILD, P_NTH_LAST_CHILD, P_NTH_OF_TYPE, P_NTH_LAST_OF_TYPE, P_EMPTY,
     P_LINK, P_ANY_LINK, P_NEVER, P_USER_ACTION, P_ENABLED, P_DISABLED, P_CHECKED, P_LANG, P_DIR, P_NOT, P_IS,
     P_WHERE, P_HAS, P_REQUIRED, P_OPTIONAL, P_READ_ONLY, P_READ_WRITE, P_DEFINED, P_SCOPE,
-    P_HOST, P_SLOTTED,
+    P_HOST, P_SLOTTED, P_FULLSCREEN,
 } PKind;
 typedef enum { C_NONE, C_DESCENDANT, C_CHILD, C_NEXT, C_SUBSEQUENT } Comb;
 
@@ -343,6 +343,9 @@ static bool pseudo_class_named(const char *s, size_t n, PKind *out)
         {"disabled", P_DISABLED}, {"checked", P_CHECKED}, {"required", P_REQUIRED},
         {"optional", P_OPTIONAL}, {"read-only", P_READ_ONLY}, {"read-write", P_READ_WRITE},
         {"defined", P_DEFINED}, {"scope", P_SCOPE}, {"host", P_HOST},
+        // The Fullscreen API's element, and the prefixed name Chrome and
+        // Safari still answer to (pages written for them use it).
+        {"fullscreen", P_FULLSCREEN}, {"-webkit-full-screen", P_FULLSCREEN},
     };
     for (size_t k = 0; k < sizeof(kNames) / sizeof(kNames[0]); k++)
         if (ascii_ieq(s, n, kNames[k].name)) {
@@ -1194,6 +1197,10 @@ static bool pseudo_matches(const garb_selectors_t *sel, const Simple *s,
     case P_DEFINED:
         return sel->modern_off || el->ce == OS64_HTML_CE_CUSTOM ||
                !(html(el) && os64_html_custom_name(el->name));
+    // The element the Fullscreen API put in the top layer (libdom sets the
+    // state bit; libhtml logs the change, so the cascade restyles it).
+    case P_FULLSCREEN:
+        return (el->state & OS64_HTML_STATE_FULLSCREEN) != 0;
     case P_LANG: return lang_matches(s, el);
     case P_DIR: return dir_matches(s, el);
     case P_NOT: return !match_list(sel, s->list, el, scope);

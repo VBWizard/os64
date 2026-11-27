@@ -21,7 +21,7 @@ static const char *const kinds[D_EVENT_COUNT] = {
     "animationstart", "animationend", "animationiteration", "animationcancel",
     "loadstart", "progress", "suspend", "abort", "emptied", "stalled", "loadedmetadata", "loadeddata", "canplay",
     "canplaythrough", "playing", "waiting", "seeking", "seeked", "ended", "durationchange", "timeupdate", "play",
-    "pause", "ratechange", "volumechange"
+    "pause", "ratechange", "volumechange", "fullscreenchange", "fullscreenerror"
 };
 /* A page's handler attributes are a bit per kind in an
  * os64_dom_handler_mask_t (os64_dom_handler_attributes, attribute_mask). */

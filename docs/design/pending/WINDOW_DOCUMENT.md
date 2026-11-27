@@ -611,9 +611,8 @@ The (d) groups, by their largest Chrome number:
   view transitions, picture-in-picture, and the handler families (pointer,
   drag, clipboard, CSS animation and transition, media).
 
-Fullscreen has a cheap honest form that could come earlier:
-`fullscreenEnabled` false, `fullscreenElement` null and
-`requestFullscreen` rejecting. Whether that beats absence is a ruling.
+Fullscreen is built (VIDEO.md § 9, V8 slice 2), so the cheap honest form
+once weighed here is moot.
 
 The (e) skips, with their reasons in the appendix:
 

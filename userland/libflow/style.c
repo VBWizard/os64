@@ -315,6 +315,44 @@ static void border(const Ctx *c, Spec *sp, flow_border_style_t style, int32_t wi
     }
 }
 
+// THE FULLSCREEN API'S USER-AGENT RULES (Fullscreen § 4.1): the element the
+// API put in the top layer (libhtml's OS64_HTML_STATE_FULLSCREEN, which
+// `:fullscreen` also reads) fills the view.
+//
+//   *|*:not(:root):fullscreen { position:fixed; inset:0; margin:0;
+//     box-sizing:border-box; min-width:0; max-width:none; min-height:0;
+//     max-height:none; width:100%; height:100%; transform:none } — all
+//     !important, so this runs after the page's own sheets and over them;
+//   iframe:fullscreen { border:none; padding:0 } — !important too;
+//   object-fit:contain — the one rule that is not, so it comes with the
+//     chapter's sheet, where an author's sheet can still change it.
+//
+// The element is in the top layer (f_top_layer), whose containing block is
+// the initial one, the view, whatever its ancestors are: a transformed,
+// filtered or clipping ancestor neither sizes, moves nor clips it, nor a
+// fixed box inside it. Not honoured: a CSS animation of these properties
+// still runs over them (the cascade puts important user-agent declarations
+// above animations; animate() comes after this), which no page in hand
+// does to its fullscreen element.
+static void fullscreen_rules(const Ctx *c, const os64_html_node_t *n, Spec *sp)
+{
+    sp->s.position = FLOW_POSITION_FIXED;
+    for (int i = 0; i < 4; i++) {
+        sp->inset[i] = px(c, 0);
+        sp->margin[i] = px(c, 0);
+    }
+    sp->s.box_sizing = FLOW_BORDER_BOX;
+    sp->min_width = sp->min_height = kAuto;   // a minimum's auto is 0
+    sp->max_width = sp->max_height = kAuto;   // a maximum's is none
+    sp->width = sp->height = (Len){L_PCT, 100 * 64, 0};
+    sp->s.transform = NULL;
+    sp->s.ntransform = 0;
+    if (is(n, OS64_HTML_TAG_IFRAME)) {
+        border(c, sp, FLOW_BORDER_NONE, 0);
+        padding_all(sp, px(c, 0));
+    }
+}
+
 static void border_color(Spec *sp, uint32_t rgb)
 {
     for (int i = 0; i < 4; i++) {
@@ -4867,6 +4905,8 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
             sp.s.display = FLOW_DISPLAY_INLINE;
         else
             sheet(c, n, &sp);
+        if (f_top_layer(n))
+            sp.s.object_fit = FLOW_OBJECT_CONTAIN;   // the one fullscreen rule an author may change
         if (is(n->parent, OS64_HTML_TAG_DETAILS) && sp.s.display != FLOW_DISPLAY_NONE) {
             // §15.5.5: the first summary is the disclosure the person
             // presses; the rest of a closed details is not drawn.
@@ -4897,6 +4937,9 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
         // author display declarations must not reveal its raw fallback text.
         if (is(n, OS64_HTML_TAG_NOSCRIPT) && c->env->scripting)
             sp.s.display = FLOW_DISPLAY_NONE;
+        // So have the Fullscreen API's rules (fullscreen_rules).
+        if (f_top_layer(n))
+            fullscreen_rules(c, n, &sp);
         // CSS Display 3 Appendix B: `contents` on a replaced element (a
         // picture, a frame, a canvas, a form control) computes to `none`,
         // so a canvas's fallback is not shown that way either. A button's
@@ -4947,13 +4990,16 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
     out->quotes = own_quotes(c->env->cascade != NULL
                                  ? winner(garb_style_for(c->env->cascade, n), GARB_QUOTES) : NULL,
                              up != NULL ? up->quotes : NULL);
+    // The top layer leaves its ancestors behind: a fixed box inside it is
+    // the viewport's unless something inside it anchors one (f_top_layer).
     out->anchor = f_anchors(&sp.s, root, false) ? n : up != NULL ? up->anchor : NULL;
     out->fixed_anchor = f_anchors(&sp.s, root, true) ? n
-                      : up != NULL ? up->fixed_anchor : NULL;
+                      : up != NULL && !f_top_layer(n) ? up->fixed_anchor : NULL;
     // An opacity an animation moves is the painter's to judge as it paints
-    // (PILE3.md § Animations): none of it is gone for the layout.
+    // (PILE3.md § Animations): none of it is gone for the layout. The top
+    // layer is painted whatever its ancestors' opacity (f_top_layer).
     out->transparent = (sp.s.opacity == 0 && !(sp.s.animating & FLOW_WILL_OPACITY)) ||
-                       (up != NULL && up->transparent);
+                       (up != NULL && up->transparent && !f_top_layer(n));
     out->taken = sp.taken;
     taken_from(up, &sp.taken);
     FStyled *holder = f_map_get(&c->out->map, f_flat_parent(c->doc, n));
