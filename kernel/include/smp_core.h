@@ -107,7 +107,9 @@ void mpAcctSettleAll(void);
 // that changed page tables before the call may free what they named once it
 // returns. It never gives up: a CPU that has not answered after
 // SHOOTDOWN_LATE_US is logged once under DEBUG_EXCEPTIONS and counted, and
-// the wait goes on. /sys/memory/shootdown has the counts.
+// the wait goes on; when such a round settles, a second line names the CPU
+// that answered last and the thread and task its flush interrupted.
+// /sys/memory/shootdown has the counts.
 //
 // THREAD CONTEXT ONLY, WITH INTERRUPTS ON. An answer arrives only by its
 // CPU taking the IPI, so a CPU that waits with interrupts off can deadlock

@@ -23,6 +23,7 @@
 #include "gdt.h"
 #include "tss.h"
 #include "thread.h"
+#include "task.h"      // taskID — the flush handler's note of what it interrupted
 #include "accounting.h"
 #include "idt.h"
 #include "panic.h"
@@ -1254,6 +1255,10 @@ void mpSendInvTLB()
 
 // The waited invalidation's rounds and books (smp_core.h, shootdown.h).
 static shootdown_t s_shootdown;
+// The thread and task each CPU's latest flush interrupted, written by that
+// CPU's handler alone before it says it flushed, read by a waiter after it
+// has seen that: who held a slow round up.
+static volatile uint64_t s_flush_thread[MAX_CPUS], s_flush_task[MAX_CPUS];
 _Static_assert(SHOOTDOWN_MAX_CPUS == MAX_CPUS, "shootdown.h's table is one slot per CPU number");
 
 void tlb_shootdown_wait(void)
@@ -1303,7 +1308,11 @@ void tlb_shootdown_wait(void)
             }
         }
     }
-    shootdown_settled(&s_shootdown, micros_now() - began, last, SHOOTDOWN_LATE_US);
+    uint64_t waited = micros_now() - began;
+    shootdown_last_t who = { last, last != self ? s_flush_thread[last] : 0, last != self ? s_flush_task[last] : 0 };
+    if (shootdown_settled(&s_shootdown, waited, who, SHOOTDOWN_LATE_US))
+        printd(DEBUG_EXCEPTIONS, "tlb_shootdown_wait: round %lu settled after %lu us; CPU %u answered last, "
+               "from thread %lu of task %lu\n", round, waited, who.cpu, who.thread, who.task);
 }
 
 void tlb_shootdown_read(shootdown_counts_t *out)
@@ -1353,11 +1362,20 @@ void mpFreezeOtherCores(void)
 
 // The flush, and its answer to tlb_shootdown_wait: the round is read BEFORE
 // the CR3 reload, so the reload covers every round up to it (shootdown.h).
+// What this CPU was running is two plain stores, made before the answer so a
+// waiter that sees the answer sees them: no lock, nothing logged from here.
 void inv_tlb_ISR()
 {
     printd(DEBUG_SMP,"Flush\n");
     uint64_t covers = shootdown_flush_covers(&s_shootdown);
     __asm__ volatile("mov rax,cr3\ncmp rax,0\nje overflush\nmov cr3,rax\noverflush:\n" ::: "rax", "memory");
-    shootdown_flushed(&s_shootdown, (uint32_t)cpu_self(), covers);
+    uint32_t cpu = (uint32_t)cpu_self();
+    core_local_storage_t *cls = try_get_core_local_storage();
+    if (cpu < MAX_CPUS && cls != NULL)
+    {
+        s_flush_thread[cpu] = cls->currentThread != NULL ? cls->currentThread->threadID : 0;
+        s_flush_task[cpu] = cls->task != NULL ? cls->task->taskID : 0;
+    }
+    shootdown_flushed(&s_shootdown, cpu, covers);
     write_eoi();
 }

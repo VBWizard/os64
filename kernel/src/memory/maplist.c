@@ -68,6 +68,7 @@ static maplist_node_t *walk(maplist_t *l, uintptr_t addr, bool start_only)
     else if (!start_only && found != l->head && may_lead(l, found, &steps))
         move_to_head(l, found);
     l->steps += steps;
+    l->last_steps = steps;
     if (steps > l->steps_most)
         l->steps_most = steps;
     if (steps > l->window_steps_most)

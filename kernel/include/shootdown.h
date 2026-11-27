@@ -29,6 +29,8 @@ typedef struct
 	uint64_t rounds, late, wait_most_us;
 	uint64_t window_rounds, window_late, window_wait_most_us;
 	uint32_t wait_most_cpu, window_wait_most_cpu;   // which CPU answered the longest round last
+	uint64_t wait_most_thread, window_wait_most_thread;   // and the thread it was running then
+	uint64_t wait_most_task, window_wait_most_task;       // and that thread's task
 } shootdown_t;
 
 typedef struct
@@ -36,6 +38,8 @@ typedef struct
 	uint64_t rounds, late, wait_most_us;
 	uint64_t window_rounds, window_late, window_wait_most_us;
 	uint32_t wait_most_cpu, window_wait_most_cpu;
+	uint64_t wait_most_thread, window_wait_most_thread;
+	uint64_t wait_most_task, window_wait_most_task;
 } shootdown_counts_t;
 
 // A waiter, after its table changes: the round's number.
@@ -50,11 +54,19 @@ void shootdown_flushed(shootdown_t *s, uint32_t cpu, uint64_t covers);
 // Has CPU `cpu` flushed for round `round`?
 bool shootdown_answered(shootdown_t *s, uint32_t cpu, uint64_t round);
 
-// A waiter whose round every CPU answered: how long it waited, which CPU
-// answered last, and whether the wait passed `late_us`. Returns whether it
-// was late. The longest wait keeps its last CPU beside it (two rounds
-// settling at once may pair one's wait with the other's CPU).
-bool shootdown_settled(shootdown_t *s, uint64_t waited_us, uint32_t last_cpu, uint64_t late_us);
+// Who answered a round last: the CPU, and the thread (and its task) that
+// CPU was running when its flush interrupted it.
+typedef struct
+{
+	uint32_t cpu;
+	uint64_t thread, task;
+} shootdown_last_t;
+
+// A waiter whose round every CPU answered: how long it waited, who answered
+// last, and whether the wait passed `late_us`. Returns whether it was late.
+// The longest wait keeps its last answerer beside it (two rounds settling at
+// once may pair one's wait with the other's answerer).
+bool shootdown_settled(shootdown_t *s, uint64_t waited_us, shootdown_last_t last, uint64_t late_us);
 
 // The counts, since the first round and since the last read; the read
 // starts the window again.
