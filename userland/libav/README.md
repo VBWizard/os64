@@ -202,16 +202,16 @@ x86-64.
   allows a `zmm` register in that routine alone.
 - **The scaler's fast bilinear enlarges with code it writes itself.**
   libswscale generates an x86 horizontal filter at run time
-  (`ff_init_hscaler_mmxext`) when asked for `SWS_FAST_BILINEAR` on an
-  enlargement to a width that is a multiple of 32, from one that is a
-  multiple of 16 (`utils.c`, `canMMXEXTBeUsed`; shrinking, fast bilinear
-  is the ordinary filtered scaler with a two-tap filter and writes no
-  code). Where it has `mmap` and `mprotect` it makes that memory
+  (`ff_init_hscaler_mmxext`) when asked for `SWS_FAST_BILINEAR` to the
+  same width or wider, a multiple of 32, from one that is a multiple of
+  16 (`utils.c`, `canMMXEXTBeUsed`; shrinking, fast bilinear is the
+  ordinary filtered scaler with a two-tap filter and writes no code). Where it has `mmap` and `mprotect` it makes that memory
   executable. Here it has neither (`HAVE_MMAP 0`), so it writes the code
   into `av_malloc`'s memory, which os64 does not let execute: running it
   ends the program with a no-execute fault. So os64's callers (libmedia's
-  scaler, `avbench -x`) ask for fast bilinear only when shrinking, and
-  enlarge with plain bilinear. The audit pins both halves of that rule.
+  scaler, `avbench -x`) ask for fast bilinear only when the width
+  shrinks, and otherwise use plain bilinear. The audit pins both halves of
+  that rule.
 - **The scaler's experimental backend is built but not used.** FFmpeg 9's
   libswscale has two: the legacy one, which converts every 8-bit format,
   and an "ops" backend it prefers only for float formats or when a caller

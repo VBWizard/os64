@@ -158,8 +158,8 @@ timeline as sound. yonder, and any other player, see no FFmpeg type.
   pixels at a time and would otherwise write past the row (media_scale.c,
   THE UNSCALED EDGE).
   FAST is FFmpeg's fast bilinear only when shrinking, where it is a
-  two-tap filter rather than FFmpeg's fast code. Enlarging to a width
-  that is a multiple of 32, that path runs x86 code it writes into the
+  two-tap filter rather than FFmpeg's fast code. To the same width or
+  wider, a multiple of 32, that path runs x86 code it writes into the
   heap, and os64's data memory does not execute: it was the P5's first
   fault, `avbench -x 2560x1440`. A picture converted to an odd width
   other than its own is converted one pixel narrower, its last column

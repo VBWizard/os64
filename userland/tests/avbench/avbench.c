@@ -34,13 +34,13 @@
 //              filled in (below). Each frame is converted twice, bilinear
 //              and fast, each by its own scaler and timed apart. FAST is
 //              FFmpeg's fast bilinear only for a frame wider than W x H,
-//              chosen frame by frame: enlarging to a width that is a
+//              chosen frame by frame: to the same width or wider, a
 //              multiple of 32, libswscale's fast path writes x86 code of
 //              its own into the heap and runs it (utils.c,
 //              ff_init_hscaler_mmxext), which os64, keeping data memory
 //              unexecutable, ends with a no-execute fault (media_scale.c,
-//              FAST WHEN SHRINKING, NEVER WHEN ENLARGING). When any frame
-//              enlarged, the "fast" column says fast=bilinear.
+//              FAST ONLY WHEN THE WIDTH SHRINKS). When any frame enlarged,
+//              the "fast" column says fast=bilinear.
 //              `natural` is the picture's own size: conversion, no scaling
 //   -e         with -x: the bilinear conversion in FFmpeg's bit-exact mode,
 //              whose pixels do not depend on which routines FFmpeg chose,

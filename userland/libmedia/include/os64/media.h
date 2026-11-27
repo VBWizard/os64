@@ -359,8 +359,10 @@ int os64_media_scaler_convert(os64_media_scaler_t *s, const os64_media_picture_t
 // Which way the last conversion that succeeded went, for a readout: the picture at its own
 // size (FFmpeg's unscaled converters), bilinear, or fast bilinear (FAST,
 // shrinking); NONE before the first, and for a NULL scaler. It is the way
-// of FFmpeg's conversion, so a picture one pixel narrower than an odd
-// width (AN ODD WIDTH, above) reads as UNSCALED.
+// asked of FFmpeg at the conversion's own size, so a picture one pixel
+// narrower than an odd width (AN ODD WIDTH, above) reads as UNSCALED; and
+// fast bilinear at a width of eight or less, which libswscale itself
+// makes plain bilinear, still reads as fast.
 #define OS64_MEDIA_SCALED_NONE          0
 #define OS64_MEDIA_SCALED_UNSCALED      1
 #define OS64_MEDIA_SCALED_BILINEAR      2

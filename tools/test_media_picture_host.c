@@ -35,7 +35,8 @@
 //     (media_scale.c): bbb's 854-wide
 //     pictures at their own size and scaled to widths that are and are not
 //     multiples of eight, odd ones beside the even one each is converted
-//     at, an enlargement by one, and 3, 2 and 1 wide, with each scaler
+//     at, an enlargement by one, and 3, 2 and 1 wide (four rows high, so
+//     the x86 writers run, not only the C rows at the end), with each scaler
 //     kind, into a buffer of exactly as many rows of a pitch of the width,
 //     the width + 2 and the width + 10 pixels, followed by a guard: every
 //     pixel of every row is written, nothing past the width or the buffer
@@ -68,8 +69,9 @@
 //     open for both does (FFmpeg's probe would otherwise read the sound for
 //     five seconds waiting on the discarded picture; media.c holds its
 //     analysis to a tenth of a second when a picture is discarded).
-// 13  A GRAPH A SIZE (media_scale.c, THE ODD WIDTH): FFmpeg's allocations,
-//     counted through the allocators wrapped at link time, are many at a
+// 13  A GRAPH A SIZE (media_scale.c, THE ODD WIDTH): FFmpeg's allocations
+//     from outside libavutil's mem.c, counted through the allocators
+//     wrapped at link time (a graph built goes through them), are many at a
 //     scaler's first picture (libswscale builds its graph) and none at the
 //     five after, at an odd width, its even neighbour, an odd width with
 //     the height changed too, and an enlargement by one (through the
@@ -545,9 +547,11 @@ static void test_edge(const char *clip, const char *what, uint32_t src_w, const 
            "%ld matched at a wider pitch), every pixel written and none past\n", what, checked, dups, compared);
 }
 
-// FFmpeg's allocations, counted: the allocators are wrapped at link time
-// (tools/test_media_picture_host.sh, --wrap), which the static libraries
-// it builds allow.
+// FFmpeg's allocations counted, those made from outside libavutil's own
+// mem.c (a call inside one object file is not wrapped): the allocators are
+// wrapped at link time (tools/test_media_picture_host.sh, --wrap), which
+// the static libraries it builds allow. A graph built goes through them
+// (libswscale/graph.c's av_mallocz and av_calloc calls).
 static int s_av_allocs;
 void *__real_av_malloc(size_t n);
 void *__real_av_mallocz(size_t n);
@@ -840,10 +844,13 @@ int main(int argc, char **argv)
     // Each odd width beside the even one it is converted at (THE ODD
     // WIDTH), so a write past W - 1 is a guard word hit there; 855 is an
     // enlargement by one, the even-dup through the bounce; 3 and 1 wide
-    // are the smallest with a neighbour and the one without.
+    // are the smallest with a neighbour and the one without, and 2 wide the
+    // smallest even, each four rows high so that libswscale's x86 writers
+    // run on the rows before its last two (written in C): at two wide its
+    // groups of eight would pass the end of the buffer.
     static const uint32_t kProgressive[][2] = {
         { 854, 480 }, { 853, 480 }, { 852, 480 }, { 641, 361 }, { 640, 361 }, { 1279, 719 }, { 1278, 719 },
-        { 640, 360 }, { 855, 480 }, { 3, 2 }, { 2, 2 }, { 1, 2 },
+        { 640, 360 }, { 855, 480 }, { 3, 4 }, { 2, 4 }, { 1, 4 },
     };
     // Interlaced, the width kept and the height changed by a row: a field
     // is then unscaled although the frame is not.

@@ -48,13 +48,15 @@
 // eight, all but the pass's last two rows, which it writes in C so as
 // not to pass the end of the buffer (swscale.c, "we can't use MMX here
 // without overwriting this array's tail"). Rows written in order, top to
-// bottom, carry the extra pixels into the start of the next row, which
-// that row then overwrites, so into the caller's rows directly it is
-// exact only when they are exactly the caller's width apart and the
-// picture is progressive. Otherwise the extra pixels would stay: in the
-// room a wider pitch leaves past the width, or, field by field, on a
-// row of the other field already written. So such a conversion is made
-// into `bounce` too. An odd width is written exactly (in C: THE ODD
+// bottom, carry the extra pixels (fewer than eight) into the start of the
+// rows after, which those rows then overwrite, so into the caller's rows
+// directly it is exact only when they are exactly the caller's width
+// apart, the picture is progressive, and the width is eight or more, so
+// that a group carried from the last row written in groups ends inside
+// the two written in C. Otherwise the extra pixels would stay: in the
+// room a wider pitch leaves past the width, on a row of the other field
+// already written, or, two pixels wide, past the end of the caller's
+// buffer. So such a conversion is made into `bounce` too. An odd width is written exactly (in C: THE ODD
 // WIDTH), and EXACT's writers are C as well (x86/swscale.c takes no
 // packed writer under SWS_BITEXACT). tools/test_media_picture_host.sh
 // checks all of it, interlaced included, against guard words, which ASan
@@ -71,29 +73,34 @@
 // conversion that changes the width to an odd one is made at one pixel
 // narrower, an even width (into the caller's rows, or through `bounce` as
 // THE GROUPS OF EIGHT says), and the caller's last column is copied from
-// its neighbour ("even-dup"): the picture is 1/W
-// narrower before its last column repeats, which no one can see. A
-// picture kept at its own odd width is not slow (the unscaled
-// converters) and is left alone, and so is EXACT, which is FFmpeg's own
-// answer at the size asked, slow or not, for the CRC proofs. The
+// its neighbour ("even-dup"): the picture is 1/W narrower before its last
+// column repeats, which no one can see. A picture whose odd width is kept
+// is left alone: at its own size it is not slow (the unscaled
+// converters), and with only its height changed it is the slow path, but
+// converting it one narrower would soften a picture that is otherwise
+// unscaled across, and a video's width is seldom odd. EXACT is left
+// alone too: it is FFmpeg's own answer at the size asked, slow or not,
+// for the CRC proofs. The
 // conversion's width is the canvas's, set at every call; libswscale
 // rebuilds its graph when either frame's size, interlacing, kind or
 // colours change, never for a pitch or a pointer (libswscale/graph.c,
 // ff_sws_graph_reinit; format.h, ff_fmt_equal), so this rebuilds it only
 // when the picture's size or the caller's changes.
-// FAST WHEN SHRINKING, NEVER WHEN ENLARGING. Shrinking, SWS_FAST_BILINEAR
-// is not FFmpeg's fast bilinear code at all: that runs only enlarging to
-// a width that is a multiple of 32 from one that is a multiple of 16
+// FAST ONLY WHEN THE WIDTH SHRINKS. Shrinking, SWS_FAST_BILINEAR is not
+// FFmpeg's fast bilinear code at all: that runs only to the same width or
+// wider, a multiple of 32, from one that is a multiple of 16
 // (libswscale/utils.c, canMMXEXTBeUsed; x86/swscale.c sets hyscale_fast
 // to NULL otherwise). It is the ordinary filtered scaler with a two-tap
 // filter, which costs less than bilinear's wider one, mostly in the
-// vertical step. Enlarging at those widths, it writes an x86 horizontal
+// vertical step (and at a width of eight or less libswscale takes plain
+// bilinear for it, utils.c). At those widths, it writes an x86 horizontal
 // filter of its own and runs it (ff_init_hscaler_mmxext); with no mmap or
 // mprotect in this build it writes that code into av_malloc's memory,
 // which os64 does not let execute, and the jump into it is a no-execute
 // fault (the P5's first `avbench -x 2560x1440`). So OS64_MEDIA_SCALE_FAST
 // asks for SWS_FAST_BILINEAR only for a picture wider than the
-// destination, and enlarges with plain bilinear (tools/test_av_audit.py
+// destination, and keeps or widens the width with plain bilinear
+// (tools/test_av_audit.py
 // pins when the scaler writes code; libav/README.md § The x86 assembly).
 struct os64_media_scaler {
     SwsContext *sws;
@@ -158,7 +165,7 @@ int os64_media_scaler_convert(os64_media_scaler_t *s, const os64_media_picture_t
     s->canvas->width = (int)width;
     // THE UNSCALED EDGE, and THE GROUPS OF EIGHT: both above.
     bool groups = !s->exact && !(width & 1) && (width & 7) != 0 && source->width != (int)width &&
-                  (pitch != s->width * 4 || (source->flags & AV_FRAME_FLAG_INTERLACED));
+                  (pitch != s->width * 4 || (source->flags & AV_FRAME_FLAG_INTERLACED) || width < 8);
     bool edge = (source->width == (int)width && (width & 7) != 0) || groups;
     if (edge) {
         // Into the scaler's own rows, and copied out below.
@@ -187,7 +194,7 @@ int os64_media_scaler_convert(os64_media_scaler_t *s, const os64_media_picture_t
     // sws_frame_setup), and it does not deinterlace.
     s->canvas->flags = (s->canvas->flags & ~AV_FRAME_FLAG_INTERLACED) | (source->flags & AV_FRAME_FLAG_INTERLACED);
     if (s->fast) {
-        // FAST WHEN SHRINKING, above. A change rebuilds the scaler's
+        // FAST ONLY WHEN THE WIDTH SHRINKS, above. A change rebuilds the scaler's
         // graph, which it does whenever its options change; the caller's
         // flags are never written by libswscale itself (its passes have
         // contexts of their own, libswscale/graph.c), so this compares
