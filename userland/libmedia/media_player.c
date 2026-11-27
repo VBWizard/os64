@@ -1028,7 +1028,7 @@ int os64_media_player_plane(os64_media_player_t *p, int64_t win)
     p->plane_state = OS64_MEDIA_PLANE_STARTING;
     os64_lock_release(&p->lock);
     // A handle reserved before the thread exists: an error means no thread.
-    int64_t h = os64_thread(show_thread, p);
+    int64_t h = os64_thread_named(show_thread, p, "show");
     if (h < 0) {
         os64_lock_acquire(&p->lock);
         p->plane_state = OS64_MEDIA_PLANE_REFUSED;
@@ -1211,7 +1211,7 @@ static int64_t decoding_thread(void *arg)
     uint32_t want = p->cfg.output != NULL ? p->cfg.want : p->cfg.want & ~OS64_MEDIA_WANT_SOUND;
     int r = want != 0 ? os64_media_open_for(&p->cfg.source, want, &p->media, &p->info) : OS64_MEDIA_BAD_ARGS;
     if (r == 0 && (p->cfg.want & OS64_MEDIA_WANT_PICTURE) != 0)
-        p->picture_thread = os64_thread(picture_thread, p);
+        p->picture_thread = os64_thread_named(picture_thread, p, "convert");
     if (r != 0) {
         p->media = NULL;
         os64_lock_acquire(&p->lock);
@@ -1547,7 +1547,7 @@ int os64_media_player_create(const os64_media_player_config_t *cfg, os64_media_p
     // The decoding thread is never joined: it frees the player as its last
     // act. A thread's handle is reserved before the thread exists, so a
     // start that reports failure started nothing, and the player is freed.
-    int64_t h = os64_thread(decoding_thread, p);
+    int64_t h = os64_thread_named(decoding_thread, p, "decode");
     if (h < 0) {
         if (!p->bell_borrowed)
             os64_bell_close(&p->decode_bell);

@@ -26122,7 +26122,7 @@ int main(int argc, char **argv)
     interface_font_finish();
     downloads_follow();
 
-    g.pool = os64_work_pool_create(POOL_WORKERS, POOL_BUDGET - PICTURE_RESERVE, g.win, BELL_WORK);
+    g.pool = os64_work_pool_create_named(POOL_WORKERS, POOL_BUDGET - PICTURE_RESERVE, g.win, BELL_WORK, "worker");
     // The media elements' sessions make their requests as every other
     // request is made (media.h); their threads start with the first.
     const yonder_media_env_t media_env = {g.way.jar, s_preflight, g.cache, media_bell};

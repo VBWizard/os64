@@ -930,7 +930,7 @@ int os64_media_output_create(os64_media_output_t **out)
         os64_free(o);
         return OS64_MEDIA_NO_MEMORY;
     }
-    o->thread = os64_thread(audio_main, o);
+    o->thread = os64_thread_named(audio_main, o, "audio-out");
     if (o->thread < 0) {
         // A start that reports failure may still be running (the kernel,
         // out of handles, starts it detached): it keeps the output, which is

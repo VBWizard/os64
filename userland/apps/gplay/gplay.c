@@ -985,7 +985,7 @@ int main(int argc, char **argv)
     if (s_full_screen)
         full_screen_set(a, true);
 
-    int64_t keys = os64_thread(keys_thread, a);
+    int64_t keys = os64_thread_named(keys_thread, a, "keys");
     run(a, &v, &info, name);
 
     // At the end the sound still in the device plays out (up to a second),

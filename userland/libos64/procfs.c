@@ -224,9 +224,13 @@ int32_t os64_proc_snapshot(os64_proc_info_t *out, size_t capacity)
     return (int32_t)count;
 }
 
+// `name` (cap bytes, may be NULL) receives the thread's name line, "" when
+// the thread is unnamed or the kernel prints no such line.
 static int read_thread_status(const char *path, os64_thread_info_t *info,
-                              os64_proc_cpu_split_t *split)
+                              os64_proc_cpu_split_t *split,
+                              char *name, size_t name_cap)
 {
+    if (name && name_cap) name[0] = '\0';
     char line[PROC_LINE_MAX];
     int32_t h = (int32_t)os64_open(path, NULL);
     if (h < 0) return -1;
@@ -234,6 +238,12 @@ static int read_thread_status(const char *path, os64_thread_info_t *info,
     unsigned split_fields = 0;
     while ((result = os64_readline(h, line, sizeof(line))) == 1)
     {
+        // Taken verbatim after its tab, before split_value: a name may begin
+        // with a space, which split_value would eat.
+        if (os64_memcmp(line, "name\t", 5) == 0) {
+            if (name && name_cap) os64_strcopy(name, name_cap, line + 5);
+            continue;
+        }
         char *value = split_value(line);
         if (value == NULL) continue;
         if (os64_streq(line, "thread")) info->tid = os64_atou(value);
@@ -274,7 +284,19 @@ int32_t os64_proc_read_thread_split(uint64_t pid, uint64_t tid,
     os64_snprintf(path, sizeof(path), "/proc/%lu/thread/%lu/status", pid, tid);
     os64_memset(out, 0, sizeof(*out));
     if (split) os64_memset(split, 0, sizeof(*split));
-    return read_thread_status(path, out, split);
+    return read_thread_status(path, out, split, NULL, 0);
+}
+
+int32_t os64_proc_read_thread_named(uint64_t pid, uint64_t tid,
+                                    os64_thread_info_t *out,
+                                    os64_proc_cpu_split_t *split,
+                                    char *name, size_t name_cap)
+{
+    char path[PROC_PATH_MAX];
+    os64_snprintf(path, sizeof(path), "/proc/%lu/thread/%lu/status", pid, tid);
+    os64_memset(out, 0, sizeof(*out));
+    if (split) os64_memset(split, 0, sizeof(*split));
+    return read_thread_status(path, out, split, name, name_cap);
 }
 
 int32_t os64_proc_threads(uint64_t pid, os64_thread_info_t *out, size_t capacity)
@@ -291,7 +313,7 @@ int32_t os64_proc_threads(uint64_t pid, os64_thread_info_t *out, size_t capacity
         char path[PROC_PATH_MAX];
         os64_snprintf(path, sizeof(path), "/proc/%lu/thread/%s/status", pid, entry.name);
         os64_memset(&out[count], 0, sizeof(out[count]));
-        if (read_thread_status(path, &out[count], NULL) == 0) count++;
+        if (read_thread_status(path, &out[count], NULL, NULL, 0) == 0) count++;
     }
     os64_close(directory);
     return (int32_t)count;

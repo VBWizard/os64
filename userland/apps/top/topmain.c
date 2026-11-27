@@ -599,7 +599,8 @@ int32_t topMain(const top_options_t *opts)
                                   haveThreadSplit ? &threadSplit : NULL);
                     framef("%6s %6s ", tUser, tSystem);
                 }
-                framef("%10s   - %s\n", tTime, e->info.name);
+                framef("%10s   - %s\n", tTime,
+                       os64_monitor_thread_label(monitor, tr->info.pid, tr->info.tid, e->info.name));
 
             }
         }

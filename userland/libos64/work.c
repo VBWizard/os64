@@ -4,11 +4,15 @@
 #include "os64/mem.h"
 #include "os64/thread.h"
 #include "os64/gui.h"
+#include "os64/fmt.h"
+#include "os64/str.h"
+#include "os64/thread_name.h"
 
 // A submitted slot reserves one job-pipe byte. Reads retain their slots
 // until claim; cancellation does not recycle a byte's backing slot.
 _Static_assert(OS64_WORK_MAX_JOBS <= 65536, "job table must fit the kernel pipe");
 _Static_assert(OS64_WORK_MAX_WORKERS <= 65536, "space credits must fit the kernel pipe");
+_Static_assert(OS64_WORK_MAX_WORKERS <= 99, "a worker's name numbers it in two digits");
 // An id is the submit's serial over the slot's index, so a stale id never
 // names a reused slot.
 #define SLOT_BITS 10
@@ -225,7 +229,19 @@ static int64_t worker(void *arg)
 os64_work_pool_t *os64_work_pool_create(int32_t workers, size_t reserve_cap,
                                         int64_t window, uint32_t bit)
 {
+    return os64_work_pool_create_named(workers, reserve_cap, window, bit, 0);
+}
+
+os64_work_pool_t *os64_work_pool_create_named(int32_t workers, size_t reserve_cap,
+                                              int64_t window, uint32_t bit,
+                                              const char *prefix)
+{
     if (workers < 1 || workers > OS64_WORK_MAX_WORKERS || !bit || (bit & (bit - 1))) return NULL;
+    // Room for the prefix, a hyphen and a two-digit number, checked before
+    // anything starts.
+    bool named = prefix && prefix[0];
+    if (named && (!os64_thread_name_valid(prefix) ||
+                  os64_strlen(prefix) + 3 > OS64_THREAD_NAME_MAX - 1)) return NULL;
     os64_gui_window_state_t state;
     if (os64_gui_window_get_state(window, &state) < 0) return NULL;
     os64_work_pool_t *p = os64_calloc(1, sizeof(*p));
@@ -234,7 +250,9 @@ os64_work_pool_t *os64_work_pool_create(int32_t workers, size_t reserve_cap,
     p->cap = reserve_cap; p->window = window; p->bit = bit;
     if (os64_pipe(p->jobs) < 0 || os64_pipe(p->space) < 0) goto fail;
     for (int32_t i = 0; i < workers; ++i) {
-        int64_t h = os64_thread(worker, p);
+        char name[OS64_THREAD_NAME_MAX];
+        if (named) os64_snprintf(name, sizeof(name), "%s-%02d", prefix, i + 1);
+        int64_t h = os64_thread_named(worker, p, named ? name : 0);
         if (h < 0) goto fail;
         p->threads[p->started++] = (int32_t)h;
     }

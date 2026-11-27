@@ -38,6 +38,15 @@ typedef struct {
 // started on failure; partial creation unwinds. NULL means refusal.
 os64_work_pool_t *os64_work_pool_create(int32_t workers, size_t reserve_cap,
                                         int64_t window, uint32_t doorbell_bit);
+// The same, naming the workers prefix-01, prefix-02 and on (os64/thread.h's
+// os64_thread_named), so a monitor tells them apart. A pool's workers run
+// every kind of job, so the prefix says what they are, not what they are
+// doing ("worker"). NULL or "" leaves them unnamed. A prefix whose names
+// would break the rule (printable ASCII, 63 bytes with the number) refuses
+// the pool before any worker starts.
+os64_work_pool_t *os64_work_pool_create_named(int32_t workers, size_t reserve_cap,
+                                              int64_t window, uint32_t doorbell_bit,
+                                              const char *prefix);
 
 // Copies the descriptor. A nonzero id transfers input ownership; zero
 // refuses (invalid args, full table, exhausted ids, broken pool or failed
