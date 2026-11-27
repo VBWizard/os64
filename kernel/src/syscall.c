@@ -309,7 +309,9 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	// they are not in the pointer mask because user_range_accessible checks
 	// data reachability, and the only thing written for them is the exit
 	// stub, through the new stack's own frames (thread_join_create). The
-	// handler bounds both by USER_CANONICAL_MAX.
+	// handler bounds both by USER_CANONICAL_MAX. arg3, the name, is a
+	// buffer but NULL means unnamed, so the mask leaves it out too and the
+	// handler copies it through the guarded string reads.
 	SYSCALL_DEFINE(SYSCALL_THREAD,      "thread",      syscall_thread,      false, 0x00),
 	SYSCALL_DEFINE(SYSCALL_THREAD_EXIT, "thread_exit", syscall_thread_exit, false, 0x00),
 	SYSCALL_DEFINE(SYSCALL_MKDIR,       "mkdir",       syscall_mkdir,       false, 0x01),  // arg0 = path
@@ -5290,17 +5292,18 @@ static uint64_t syscall_klog_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	return ok ? (uint64_t)got : SYSCALL_RESULT_BAD_USER_DATA;
 }
 
-// thread(entry, arg, exit_stub) — os64's first ring-3 threads.
+// thread(entry, arg, exit_stub, name) — os64's first ring-3 threads.
 //
 // Everything the new thread needs already existed: createThread gives it
 // its own guarded user and kernel stacks at unique task-local addresses,
 // and the scheduler has always scheduled THREADS. All that was missing
 // was a way to ask. See os64/syscall_numbers.h for the API argument and
-// thread_join.h for why the handle points at a join object.
+// thread_join.h for why the handle points at a join object. `name` (arg3)
+// is os64/thread_name.h's, NULL for unnamed.
 static uint64_t syscall_thread(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5)
 {
-	(void)arg3; (void)arg4; (void)arg5;
+	(void)arg4; (void)arg5;
 
 	core_local_storage_t *cls = get_core_local_storage();
 	task_t *task = cls ? cls->task : NULL;
@@ -5328,6 +5331,37 @@ static uint64_t syscall_thread(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		printd(DEBUG_THREAD, "syscall_thread: %s passed a non-user address (entry=0x%lx stub=0x%lx) — refused\n",
 		       task->exename, arg0, arg2);
 		return SYSCALL_RESULT_BAD_USER_DATA;
+	}
+
+	// THE NAME FIRST, so a refusal leaves nothing behind: no park, no
+	// handle, no thread. It is copied once into the kernel and checked
+	// there, so what is checked is what the thread keeps whatever ring 3
+	// does to its buffer meanwhile. The length scan only tells "too long"
+	// (INVALID, a rule) from "cannot be read" (BAD_USER_DATA); the copy
+	// checks its own terminator, because the buffer may change between them.
+	char name[OS64_THREAD_NAME_MAX];
+	name[0] = '\0';
+	if (arg3 != 0)
+	{
+		size_t len = 0;
+		int scan = user_string_length((const char *)arg3, sizeof(name), &len);
+		if (scan == 0)
+		{
+			printd(DEBUG_THREAD, "syscall_thread: %s passed a name with no end within %u bytes — refused\n",
+			       task->exename, (unsigned)sizeof(name));
+			return SYSCALL_RESULT_INVALID;
+		}
+		if (scan < 0 || !copy_user_string((const char *)arg3, name, sizeof(name)))
+		{
+			printd(DEBUG_THREAD, "syscall_thread: %s passed a name it cannot read — refused\n", task->exename);
+			return SYSCALL_RESULT_BAD_USER_DATA;
+		}
+		if (!os64_thread_name_valid(name))
+		{
+			printd(DEBUG_THREAD, "syscall_thread: %s passed a name with a byte outside printable ASCII — refused\n",
+			       task->exename);
+			return SYSCALL_RESULT_INVALID;
+		}
 	}
 
 	// THE REAP'S BACKLOG (THREAD_STACKS.md § The reap). Each ended thread
@@ -5376,7 +5410,7 @@ static uint64_t syscall_thread(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		printd(DEBUG_THREAD, "syscall_thread: %s out of handles; no thread made\n", task->exename);
 		return SYSCALL_RESULT_INVALID;
 	}
-	thread_join_t *j = thread_join_create(task, arg0, arg1, arg2);
+	thread_join_t *j = thread_join_create(task, arg0, arg1, arg2, name[0] ? name : NULL);
 	if (j == NULL)
 	{
 		(void)handle_cancel_reserved(task, h);

@@ -1269,6 +1269,9 @@ static void proc_gen_thread_status(synth_text_t *t, task_t *task, thread_t *th)
 
 	synth_text_addf(t, "thread\t%lu\n", th->threadID);
 	synth_text_addf(t, "task\t%lu\n", task->taskID);
+	// Empty when unnamed. Printed as it is: the rule admits printable ASCII
+	// alone (os64/thread_name.h), so no tab or newline can split the record.
+	synth_text_addf(t, "name\t%s\n", th->name);
 	synth_text_addf(t, "state\t%s\n", proc_state_name(th->threadState));
 	// pinnedCPU is the thread's PINNED AFFINITY, not the CPU it is running on —
 	// a distinction worth the extra word, because labelling it "core" printed

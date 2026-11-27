@@ -27,7 +27,8 @@
 // What it does not reach: a pointer passed as a syscall argument is refused
 // by the dispatcher's own bound before any copy helper sees it, so the
 // helpers' bound is exercised only through EMBEDDED pointers (spawn's argv
-// elements); and no case loads a program whose segment, rather than its
+// elements) and the arguments the mask leaves out because NULL is meaningful
+// (a thread's name); and no case loads a program whose segment, rather than its
 // entry, lies past the ceiling, so elf_map_segment's bound is untested here.
 //
 // `badptr <group>` runs one group, so each door can be shown on its own:
@@ -36,7 +37,7 @@
 //   out     copy-out: read into a buffer, ticks, getcwd, stat's dirent
 //   string  spawn's path and argv elements (the page-at-a-time measurer)
 //   proc    /proc/self/mem: a seek past the ceiling, and a read at it
-//   thread  a thread whose entry or exit stub is not a user address
+//   thread  a thread whose entry, exit stub or name is not a user address
 //   entry   a program whose ELF entry point is not a user address: static,
 //           dynamic, and position-independent (where only the entry plus the
 //           load bias is out of range)
@@ -286,8 +287,23 @@ static void group_thread(void)
             continue;
         beacon("thread entry", b);
         expect_refused(0x40, "thread entry", b,
-                       (int64_t)os64_syscall3(SYSCALL_THREAD, b->addr, 0,
-                                              (uint64_t)(uintptr_t)&os64_thread_trampoline));
+                       (int64_t)os64_syscall4(SYSCALL_THREAD, b->addr, 0,
+                                              (uint64_t)(uintptr_t)&os64_thread_trampoline, 0));
+    }
+
+    // A NAME the kernel would copy: a string read through a bad pointer
+    // would read the kernel's half for ring 3. Valid entry and stub, so a
+    // kernel that took the name would start a thread, and the answer here
+    // would be a handle instead of a refusal.
+    for (int i = 0; i < gBadCount; i++)
+    {
+        const bad_t *b = &gBad[i];
+        if (b->addr < CEILING)
+            continue;
+        beacon("thread name", b);
+        expect_refused(0x42, "thread name", b,
+                       (int64_t)os64_syscall4(SYSCALL_THREAD, (uint64_t)(uintptr_t)&never_runs, 0,
+                                              (uint64_t)(uintptr_t)&os64_thread_trampoline, b->addr));
     }
 
     // An EXIT STUB the thread would `ret` into. That one would only kill this
@@ -300,8 +316,8 @@ static void group_thread(void)
             continue;
         beacon("thread exit_stub", b);
         expect_refused(0x41, "thread exit_stub", b,
-                       (int64_t)os64_syscall3(SYSCALL_THREAD,
-                                              (uint64_t)(uintptr_t)&never_runs, 0, b->addr));
+                       (int64_t)os64_syscall4(SYSCALL_THREAD,
+                                              (uint64_t)(uintptr_t)&never_runs, 0, b->addr, 0));
     }
 }
 

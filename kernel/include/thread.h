@@ -7,6 +7,7 @@
 #include "signals.h"
 #include "fpu.h"
 #include "reaplist.h"
+#include "os64/thread_name.h"
 
 #define THREAD_STACK_GUARD_PAGE_COUNT	4			//Number of pages of unmapped memory assigned to each side of a stack as a guard
 
@@ -235,6 +236,11 @@ typedef struct s_thread
 	uint64_t anonZeroPages;
 	// Next handle index for task-window wait fairness; used by this thread.
 	uint32_t gui_wait_cursor;
+	// What the thread is for (os64/thread_name.h), "" when unnamed. Written
+	// by thread_name_init before the thread is published to its task's list
+	// or the scheduler, and never after, so a reader holding the thread
+	// reads it without a lock.
+	char name[OS64_THREAD_NAME_MAX];
 } thread_t;
 
 _Static_assert(offsetof(thread_t, fpuState) % FPU_IMAGE_ALIGN == 0,
@@ -249,6 +255,11 @@ _Static_assert(offsetof(thread_t, fpuState) % FPU_IMAGE_ALIGN == 0,
 // allocation that fails panics, as a task's first thread always has:
 // nothing unwinds a half-built task.
 thread_t* createThread(void* parentTask, bool kernelThread, uint64_t userStack, bool mayRefuse);
+// Give a thread its name: `name` is a kernel string os64_thread_name_valid
+// takes, or NULL for unnamed. Only before the thread is published (its
+// task's list, the scheduler): a name is fixed for the thread's life, which
+// is what lets readers take it without a lock.
+void thread_name_init(thread_t* thread, const char* name);
 // Return a thread ID to the pool (thread.c owns the TID bitmap). Called by
 // the undertaker (task_destroy) — a buried thread's ID is reusable.
 bool mark_TID_unused(uint32_t tid);

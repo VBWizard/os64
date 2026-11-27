@@ -35,6 +35,13 @@
 // Start a thread running fn(arg). Returns a HANDLE (>= 0), or negative.
 int64_t os64_thread(int64_t (*fn)(void *), void *arg);
 
+// The same, naming the thread for its job ("decode", "worker-03"): its
+// /proc/<id>/thread/<tid>/status says so and a monitor's row shows it.
+// NULL or "" is unnamed. A name must be printable ASCII and at most 63
+// bytes (os64/thread_name.h); one that is not is refused, no thread made.
+// The name is copied: the caller's buffer is its own again on return.
+int64_t os64_thread_named(int64_t (*fn)(void *), void *arg, const char *name);
+
 // Wait for a thread and collect its value. Returns 0, or negative if the
 // handle isn't a thread. (Convenience only — os64_read on the handle does
 // exactly this.) retval may be NULL if you only want the wait.

@@ -242,7 +242,7 @@
 // needed durability, so durability got a name.
 #define SYSCALL_SYNC       32
 
-// thread(entry, arg, exit_stub) — start a second line of execution inside
+// thread(entry, arg, exit_stub, name) — start a second line of execution inside
 // THIS task, sharing everything: the same address space, the same heap,
 // the same open handles. Returns a HANDLE, or negative.
 //
@@ -257,6 +257,13 @@
 // function that simply returns lands there and the stub calls
 // thread_exit with the value in RAX. It cannot be a kernel address —
 // ring 3 would fault the instant it tried to return into one.
+//
+// name is what the thread is for, NULL or "" for unnamed: printable ASCII,
+// at most 63 bytes, copied at the call and fixed for the thread's life
+// (os64/thread_name.h). A name that breaks the rule refuses the call, and
+// no thread is made. All four registers mean something: a caller passing
+// three leaves R10 holding whatever it held, which the kernel reads as a
+// name.
 //
 // Threads share an address space, so they need NO copy-on-write; that is
 // fork's problem, and fork is the next customer for this same plumbing.
