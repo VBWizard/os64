@@ -128,9 +128,13 @@
 #define GUI_WINDOW_DESKTOP         (1u << 5)
 // NOBODY CAN SEE IT (2026-08-27): minimized, or entirely behind one window
 // above it (wm_rect_is_occluded's single-window containment), or a text
-// terminal holds the glass. Kernel-owned — never a creation flag — and kept
-// current by wm_cover_sweep_locked, which the compositor runs every frame
-// after the window manager has had its say. Published through
+// terminal holds the glass. Kernel-owned — never a creation flag — and set
+// by wm_cover_sweep_locked, which the compositor runs at every pass after
+// the window manager has had its say. It is the verdict as of the last
+// pass: a pass runs when there is something to draw or deliver, and a
+// switch to a text terminal makes none (tty_focus nudges the compositor
+// only on the way back; both keyboard drivers switch inside the driver), so
+// the flag can lag such a switch either way (DEBTS). Published through
 // gui_window_get_state so a client can stop working for an audience of
 // nobody; the COVERED/UNCOVERED events announce each flip.
 #define GUI_WINDOW_COVERED         (1u << 7)

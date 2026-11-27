@@ -181,9 +181,12 @@ static inline void os64_gui_frame_for_content(uint32_t content_w, uint32_t conte
 // not saving a maximized or minimized frame as its ordinary position.
 #define OS64_GUI_WINDOW_MAXIMIZED        (1u << 3)
 #define OS64_GUI_WINDOW_MINIMIZED        (1u << 4)
-// Nobody can see this window right now: it is minimized, or it sits entirely
-// behind one window above it, or a text terminal holds the glass. Kernel-
-// tracked, never yours to set. The frame clock reads it to stop an animation
+// Nobody can see this window, as of the compositor's last pass: it is
+// minimized, or it sits entirely behind one window above it, or a text
+// terminal holds the glass. Kernel-tracked, never yours to set. A pass runs
+// when there is something to draw or deliver, and a switch TO a text
+// terminal makes none, so for a moment either side of such a switch the
+// flag can lag it (DEBTS). The frame clock reads it to stop an animation
 // nobody is watching (os64_frame_clock_bind); an app with its own loop reads
 // it after a WINDOW_COVERED/UNCOVERED event. THIS FLAG IS THE TRUTH and the
 // event is only the nudge: a queue is 64 deep and drops the newest when

@@ -9,8 +9,9 @@
 //                            keeps being shown), and the refusals
 //   fullscreentest --chord   waits for the person (or the QEMU driver) to
 //                            press Ctrl+Alt+F twice on its window: in, then out
-//   fullscreentest --vt      waits for a text terminal to take the glass,
-//                            then asks: the answer must be NOT_FOCUSED
+//   fullscreentest --vt      waits for a text terminal to take the glass
+//                            (/sys/gui's owns_glass), then asks: the answer
+//                            must be NOT_FOCUSED
 #include "os64/os64.h"
 #include "os64/gui.h"
 
@@ -96,17 +97,50 @@ static int chord_mode(void)
     return failures ? 1 : 0;
 }
 
+// Whether the desktop holds the glass, as /sys/gui's `owns_glass:` says it:
+// 1 yes, 0 a text terminal does, -1 unreadable. The kernel's own answer at
+// this moment. COVERED is not that answer: it is the compositor's verdict
+// at its last pass, and losing the glass to a terminal wakes no pass, so it
+// can lag the switch either way (it did on the P5, with a USB keyboard).
+static int desktop_owns_glass(void)
+{
+    char text[8192];
+    int64_t fd = os64_open("/sys/gui", "r");
+    if (fd < 0)
+        return -1;
+    int64_t used = 0, n;
+    while (used < (int64_t)sizeof(text) - 1 &&
+           (n = os64_read((int32_t)fd, text + used, sizeof(text) - 1 - (size_t)used)) > 0)
+        used += n;
+    os64_close((int32_t)fd);
+    text[used] = '\0';
+    static const char key[] = "owns_glass: ";
+    for (int64_t i = 0; i + (int64_t)sizeof(key) - 1 < used; i++) {
+        if (os64_memcmp(text + i, key, sizeof(key) - 1) == 0)
+            return text[i + sizeof(key) - 1] == 'y' ? 1 : 0;
+    }
+    return -1;
+}
+
 static int vt_mode(void)
 {
     int64_t win = os64_gui_window_create_content("Full screen VT", 60, 60, 320, 200, 0);
     CHECK(win > 0);
+    CHECK(desktop_owns_glass() == 1);
     os64_printf("fullscreentest: switch to a text terminal (Ctrl+Alt+F2), then back\n");
     bool asked = false;
-    for (unsigned i = 0; i < 300 && !asked; i++) {
-        os64_sleep(100);
-        if (flag(win, OS64_GUI_WINDOW_COVERED)) {
-            CHECK(os64_gui_window_set_full_screen(win, true) == OS64_GUI_ERR_NOT_FOCUSED);
+    for (unsigned i = 0; i < 600 && !asked; i++) {
+        os64_sleep(50);
+        if (desktop_owns_glass() != 0)
+            continue;
+        int64_t rc = os64_gui_window_set_full_screen(win, true);
+        // Counted only if the terminal still held the glass after the ask,
+        // so a switch back in between cannot be mistaken for the answer.
+        if (desktop_owns_glass() == 0) {
+            CHECK(rc == OS64_GUI_ERR_NOT_FOCUSED);
             asked = true;
+        } else if (rc == 0) {
+            (void)os64_gui_window_set_full_screen(win, false);
         }
     }
     CHECK(asked);
