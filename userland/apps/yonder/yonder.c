@@ -22381,10 +22381,12 @@ static void video_mark(GlassPane *gp, const flow_box_t *b, os64_gui_rect_t c, os
         return;
     for (int32_t k = 0; k < gp->n; ++k) {
         Glass *gl = gp->now[k];
-        os64_gui_rect_t cut = on_glass(gl, clip), part;
+        os64_gui_rect_t cut = glass_cut(gl, clip), part;
         os64_gui_rect_t square = {c.x + gl->dx + (c.w - side) / 2, c.y + gl->dy + (c.h - side) / 2, side, side};
-        if (os64_rect_intersect(cut, square, &part))
-            os64_draw_fill_rect_alpha(gl->surf, part, 0x000000u, 160);
+        if (!os64_rect_intersect(cut, square, &part))
+            continue;
+        plane_note_over(gl, part);  // the square alone is over the picture, not the whole clip
+        os64_draw_fill_rect_alpha(gl->surf, part, 0x000000u, 160);
         for (int32_t d = 0; d < 3; d++) {
             os64_gui_rect_t spot = {square.x + side / 2 - dot / 2 + (d - 1) * dot * 2, square.y + (side - dot) / 2,
                                     dot, dot};
