@@ -181,14 +181,24 @@ static inline void os64_gui_frame_for_content(uint32_t content_w, uint32_t conte
 // not saving a maximized or minimized frame as its ordinary position.
 #define OS64_GUI_WINDOW_MAXIMIZED        (1u << 3)
 #define OS64_GUI_WINDOW_MINIMIZED        (1u << 4)
-// Nobody can see this window right now: it is minimized, or it sits entirely
-// behind one window above it, or a text terminal holds the glass. Kernel-
-// tracked, never yours to set. The frame clock reads it to stop an animation
+// Nobody can see this window, as of the compositor's last pass: it is
+// minimized, or it sits entirely behind one window above it, or a text
+// terminal holds the glass. Kernel-tracked, never yours to set. A pass runs
+// when there is something to draw or deliver, and a switch TO a text
+// terminal makes none, so for a moment either side of such a switch the
+// flag can lag it (DEBTS). The frame clock reads it to stop an animation
 // nobody is watching (os64_frame_clock_bind); an app with its own loop reads
 // it after a WINDOW_COVERED/UNCOVERED event. THIS FLAG IS THE TRUTH and the
 // event is only the nudge: a queue is 64 deep and drops the newest when
 // full, so an app that trusted the last event it saw could sleep forever.
 #define OS64_GUI_WINDOW_COVERED          (1u << 7)
+// The window covers the screen: no chrome, the screen's size, and over every
+// other window while it or a popup it owns has focus (os64_gui_window_set_
+// full_screen). A LAYER over the state beneath: MAXIMIZED stays set when the
+// window was maximized before, and the frame reported is the live one (the
+// screen), so a program saving its geometry skips on this flag exactly as it
+// skips on MAXIMIZED.
+#define OS64_GUI_WINDOW_FULL_SCREEN      (1u << 10)
 
 // Where a window IS and what state it is in — the readback half of create.
 //
@@ -329,6 +339,13 @@ typedef struct os64_gui_surface
 // or without anything copied, so successive answers are a period apart.
 // `frame.period_ns` is the refresh period (measured, or the free clock's).
 #define OS64_GUI_EVENT_FRAME 19
+// The window entered or left full screen, by its program's call or by the
+// person's Ctrl+Alt+F. No payload: read OS64_GUI_WINDOW_FULL_SCREEN with
+// get_state. Coalesced outside the input ring, so a full queue cannot lose
+// it. A size change arrives as WINDOW_RESIZE besides, in the ring. Either
+// way, repaint the whole content and publish it: until the window publishes
+// it shows black (os64_gui_window_set_full_screen).
+#define OS64_GUI_EVENT_WINDOW_FULL_SCREEN 20
 #define OS64_GUI_PLACEMENT_X      (1u << 0)
 #define OS64_GUI_PLACEMENT_Y      (1u << 1)
 #define OS64_GUI_PLACEMENT_WIDTH  (1u << 2)
@@ -568,12 +585,37 @@ static inline int64_t os64_gui_window_focus(int64_t handle)
 static inline int64_t os64_gui_window_set_pinned(int64_t handle,bool pinned)
 { return (int64_t)os64_syscall2(SYSCALL_GUI_WINDOW_SET_PINNED,(uint64_t)handle,pinned?1:0); }
 
+// Put an owned ordinary window over the whole screen, or bring it back.
+//   - Entering is refused for a desktop or popup window (BAD_ARGS); when
+//     neither the window nor a popup it owns has focus, or a text terminal
+//     holds the screen (NOT_FOCUSED); and when the screen is smaller than
+//     the window's minimum or larger than its reservation (SCREEN_FIT).
+//   - Leaving a full-screen window is always allowed, and returns it to
+//     exactly where it was: maximized if it was, else its old frame.
+//   - Either way the window gets OS64_GUI_EVENT_WINDOW_FULL_SCREEN, and
+//     WINDOW_RESIZE when its size changed. Repaint the whole content and
+//     publish it: until the window next publishes pixels the compositor
+//     shows its content black and none of its planes, and what that publish
+//     does not cover stays black, so the glass never shows the old picture
+//     at the new size. (A publish of plane edits with an empty damage
+//     rectangle publishes no pixels.)
+//   - Losing focus to another program does not leave full screen: the
+//     window drops beneath the one that took focus and comes back over
+//     everything when it has focus again. Ctrl+Alt+F does the same as this
+//     call for the focused window, and is the window manager's: no program
+//     sees it.
+// Asking for the state the window is already in succeeds and changes nothing.
+static inline int64_t os64_gui_window_set_full_screen(int64_t handle, bool on)
+{ return (int64_t)os64_syscall2(SYSCALL_GUI_WINDOW_SET_FULL_SCREEN, (uint64_t)handle, on ? 1 : 0); }
+
 // Set minimum drawable dimensions, excluding borders/titlebar. Zero or a
 // value below the WM floor uses that floor (64x32, capped per dimension by a
 // popup's birth capacity). The minimum must fit the
 // window's existing canvas reservation; otherwise BAD_ARGS leaves it unchanged.
 // A successful call grows an undersized window and emits WINDOW_RESIZE if its
-// size changes; lowering a limit does not shrink it. Re-fetch the surface after
+// size changes; lowering a limit does not shrink it. A full-screen window
+// keeps the screen's size: a minimum larger than the screen is BAD_ARGS
+// while it is full screen, and a smaller one is applied when it leaves. Re-fetch the surface after
 // success before drawing. An active WM resize gesture is cancelled when the
 // limits change; the WM consumes its remaining mouse releases. Drag, maximize,
 // and restore honor these content limits even if the resulting frame extends
@@ -592,7 +634,10 @@ static inline int64_t os64_gui_window_set_min_size(int64_t handle,
 // decoration metrics: preserve its top-left where possible, otherwise shift
 // it onto the screen. Sizes are refused rather than silently reduced.
 // Maximized windows update their normal restore frame only; their visible
-// surface stays maximized. No-op requests succeed. Visible changes emit
+// surface stays maximized. A full-screen window updates the frame it goes
+// back to (with the chrome of its state beneath), or its restore frame when
+// it was maximized before; its visible surface stays the screen. No-op
+// requests succeed. Visible changes emit
 // WINDOW_RESIZE, never WINDOW_PLACEMENT; refresh the surface after success.
 // Focus, pin and minimization state are preserved. Valid requests cancel an
 // active resize gesture using the compositor's normal release-draining rules.

@@ -745,14 +745,16 @@ int64_t gui_window_publish_edits(int64_t handle, const os64_gui_rect_t *damage,
 
 // ── Frames (VIDEO_PLANE.md § 3.6) ───────────────────────────────────────────
 
-// The one test of whether a plane is shown: its window not covered, its
-// place not empty, and its clip, as the content stands and cut to the
+// The one test of whether a plane is shown: its window not covered and not
+// blank across a full-screen edge (composite_one composes no plane then),
+// its place not empty, and its clip, as the content stands and cut to the
 // screen, meeting what of the window is visible (wm_visible_damage's walk,
 // which answers with the pieces' bounding box when it runs out of them, and
 // knows only the windows above, not the screen's edge). Under kGuiLock.
 static bool plane_shown_locked(window_t *win, const gui_plane_t *p)
 {
-	if (p->state != GUI_PLANE_PLACED || (win->flags & GUI_WINDOW_COVERED))
+	if (p->state != GUI_PLANE_PLACED || (win->flags & GUI_WINDOW_COVERED) ||
+	    win->blank_until_publish)
 		return false;
 	pc_rect_t clip = pc_cut(p->place.clip, content_bounds(win));
 	if (pc_empty(clip))

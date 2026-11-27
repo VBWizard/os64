@@ -530,3 +530,18 @@ Not for now, on Chris's word; for the list.
   a menu entry would reach yonder as two arguments, not as a redirection.
   If the lines should be discarded outright for a menu start, that is a
   word for grootmenu's entries (a way to say "no output"), its own row.
+
+- **A local file that is not a page opens as what it is.** `yonder
+  clip.mp4` reads the file whole and parses it as HTML: a local path's
+  body is a page whatever the file holds, and one past the size a page
+  may be is "Too big to open". Over the network a picture or a sound
+  asked for by itself already gets a page of its own (libway's
+  `WAY_BODY_IMAGE` and `WAY_BODY_MEDIA`); a local path gets neither. The
+  row: a local picture, sound or video opens on the same page of its own
+  as a fetched one, its kind taken from what the file holds, and a media
+  file is played through the player's window of bytes, never read whole
+  (a film is larger than any page). A video asked for by itself, local
+  or fetched, is part of it. It is also the fair way to compare yonder
+  with gplay on one clip, which is how it came up. **PDF** is named by
+  Chris for the same door and is not the same work: nothing in os64
+  draws one, so it is an arc of its own with a design before it.
