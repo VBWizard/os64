@@ -782,6 +782,9 @@ typedef enum os64_shutdown_mode
 #define SYSCALL_GUI_WINDOW_PUBLISH_EDITS 75
 #define SYSCALL_GUI_PLANE_FRAME_WAIT 76
 #define SYSCALL_GUI_PLANE_POKE 77
+// Put an owned window over the whole screen or bring it back: arg0 handle,
+// arg1 0 or 1. See os64/gui.h.
+#define SYSCALL_GUI_WINDOW_SET_FULL_SCREEN 78
 
 // Owner-task notification: arg0 = window handle, arg1 = nonzero uint32 mask.
 // Bits coalesce outside the input ring; see os64/gui.h.

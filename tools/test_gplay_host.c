@@ -108,9 +108,12 @@ static void keys(void)
     CHECK(gplay_key(&s, '[', 0x1A, false) == GPLAY_KEY_SOUND_EARLIER &&
               gplay_key(&s, ']', 0x1B, false) == GPLAY_KEY_SOUND_LATER,
           "the sync dial");
+    CHECK(gplay_key(&s, 'f', 0x21, false) == GPLAY_KEY_FULL_SCREEN &&
+              gplay_key(&s, 'F', 0x21, true) == GPLAY_KEY_FULL_SCREEN,
+          "f");
     CHECK(gplay_key(&s, 'q', 0x10, false) == GPLAY_KEY_QUIT, "q");
-    CHECK(gplay_key(&s, 27, 0x01, false) == GPLAY_KEY_QUIT && s == 0, "Escape, PS/2");
-    CHECK(gplay_key(&s, 27, 0x29, false) == GPLAY_KEY_QUIT && s == 0, "Escape, USB");
+    CHECK(gplay_key(&s, 27, 0x01, false) == GPLAY_KEY_ESCAPE && s == 0, "Escape, PS/2");
+    CHECK(gplay_key(&s, 27, 0x29, false) == GPLAY_KEY_ESCAPE && s == 0, "Escape, USB");
     CHECK(gplay_key(&s, 'x', 0x2D, false) == GPLAY_KEY_NONE && gplay_key(&s, 0, 0x3B, false) == GPLAY_KEY_NONE,
           "others");
 

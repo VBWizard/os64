@@ -197,6 +197,7 @@
 #include "driver/net/ipv4.h"            // kNetIPv4Address/Gateway/Netmask
 #include "gui/glass.h"                 // glass_view_count — /sys/gui's viewer count
 #include "gui/plane.h"                 // gui_planes_status — /sys/gui's planes
+#include "gui/window.h"                // gui_full_screen_status — /sys/gui's full screen
 #include "driver/net/loopback.h"        // kNetLoopback — lo's queue in /sys/net/knet
 #include "driver/net/net_wire.h"        // NET_IPV4_OCTETS — the a.b.c.d splitter
 #include "driver/net/dhcp.h"            // kDhcpStats — the lease, and how it was got
@@ -1775,6 +1776,29 @@ static void sys_gen_gui_frame_clock(synth_text_t *t, const gui_composite_count_t
 // it is shown now (the frame wait's test) and its creator parked, frames
 // asked for and answered, and waits ended by a poke, the patience or a
 // caught signal.
+// Full screen (GUI_WINDOW_FULL_SCREEN): the window over every band now and
+// for how long, how many windows are full screen, the edges since boot by
+// whom (its program, the person's Ctrl+Alt+F, or the window destroyed while
+// full screen), and the black edges' ends: how many, how many by a partial
+// publish that filled the content black first, and that fill's longest hold
+// of kGuiLock, which is what an edge costs the lock.
+static void sys_gen_gui_full_screen(synth_text_t *t)
+{
+	wm_full_screen_status_t s;
+	gui_full_screen_status(&s);
+	if (s.front_id != 0)
+		synth_text_addf(t, "full screen: window %u (task %lu) in front for %lu ms",
+		                s.front_id, s.front_owner,
+		                (kTicksSinceStart - s.front_since_tick) * 1000 / TICKS_PER_SECOND);
+	else
+		synth_text_addf(t, "full screen: none in front");
+	synth_text_addf(t, "; %u full screen now; entered %lu (%lu by chord), left %lu (%lu by chord), "
+	                "destroyed while full screen %lu; black edges ended %lu, %lu by a partial publish "
+	                "(fill longest %lu us)\n",
+	                s.full_screen_now, s.entered, s.entered_by_chord, s.left, s.left_by_chord, s.gone,
+	                s.blank_ends, s.blank_fills, s.blank_fill_worst_us);
+}
+
 static void sys_gen_gui_planes(synth_text_t *t)
 {
 	enum { ROWS = 8 };
@@ -1895,6 +1919,7 @@ static void sys_gen_gui(synth_text_t *t)
 	                comp.glass_buckets[0], comp.glass_buckets[1], comp.glass_buckets[2],
 	                comp.glass_buckets[3], comp.glass_buckets[4], comp.glass_buckets[5],
 	                comp.glass_buckets[6]);
+	sys_gen_gui_full_screen(t);
 	sys_gen_gui_planes(t);
 	sys_gen_gui_frame_clock_state(t, &comp);
 	sys_gen_gui_frame_clock(t, &comp);
