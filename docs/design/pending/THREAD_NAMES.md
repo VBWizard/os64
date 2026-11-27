@@ -219,15 +219,19 @@ syscall calls and assembly included.
   `os64_thread_name_valid`), shared by the kernel and libos64, with a host
   test and mutants (`tools/test_thread_name_host.sh`,
   `tools/test_thread_name_mutants.py`).
-- `syscall_thread` copies and checks the name before anything else it does,
-  the reap backlog's park included, so a refusal leaves nothing behind: -1
+- `syscall_thread` copies and checks the name right after the entry and the
+  exit stub, before the reap backlog's park, the handle and the thread, so
+  a refusal leaves nothing behind: -1
   for a name with no end within 64 bytes or a byte outside the range, -2 for
   one that cannot be read.
 - Both creation doors name the thread through one helper,
   `thread_name_init`, before the thread is published: `thread_join_create`
   for a thread a program asks for, `task_create` for a kernel task's thread
   (named for its task, on the caller's asking for a kernel task, never on
-  the path). A user task's first thread stays unnamed. createThread takes no
+  the path). A program spawned from ring 3 has its first thread unnamed. The
+  name stays out of the dispatch pointer mask (which, as it happens, passes
+  NULL through): the handler's guarded string reads vet every page, and
+  badptr's name group reaches their own bound that way. createThread takes no
   name: a kernel task's thread is made before its task's name is worked out.
 - `/proc/<id>/thread/<tid>/status` prints `name` after `task`.
 - Fixtures: `/tests/threadnames`, and `badptr thread`'s name group.

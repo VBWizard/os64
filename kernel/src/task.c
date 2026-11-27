@@ -2741,11 +2741,13 @@ task_t *task_create_checked(char *path, int argc, char **argv, task_t *parentTas
 
 	// A kernel task's thread is named for its task (kworker, knet, idle3):
 	// its row in a monitor is the first place to look when a daemon is held
-	// off its CPU. A user program's first thread stays unnamed, so its row
-	// reads the program's own name. Keyed on the caller asking for a kernel
-	// task, never on the path, which ring 3 chooses. The task is not on
-	// kTaskList until it is submitted, so the name is in place before any
-	// reader can find the thread.
+	// off its CPU. Keyed on the caller asking for a kernel task, never on the
+	// path, which ring 3 chooses; so a program spawned from ring 3 has its
+	// first thread unnamed, and its row reads the program's own name, while
+	// a kernel test that asks for a kernel task to run a fixture gets the
+	// fixture's name on it. The task is not on kTaskList until it is
+	// submitted, so the name is in place before any reader can find the
+	// thread.
 	if (isKernelTask)
 		thread_name_init(newTask->threads, newTask->exename);
 
