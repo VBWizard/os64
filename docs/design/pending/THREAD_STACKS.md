@@ -190,6 +190,33 @@ line is what would name one.
   (DEBTS, "A copy can outlive the check that allowed it", whose cure, a
   copy that survives its fault, cures both).
 
-## As built
+## As built (2026-11-26)
 
-(Filled in at the end of the slice.)
+- **QEMU, 8 CPUs:** `stackchurn` makes 4,004 threads (`/proc` says 4,005
+  made, 1 live after, 27 MB kept until burial: thread_t's and page tables).
+  `stackchurn long` makes 16,004, released by kworker in 11,779 rounds;
+  no creator ever parked. testrun passes with stackchurn in it, beside
+  `maprace`, `threadtest` and `rangecheck` (`playertest` step 5 fails at
+  times under host load, the flake DEBTS books, and failed the same way on
+  #757's own image).
+- **The sparse layout (24 CPUs):** `stackchurn`, `maprace` and `threadtest`
+  pass. Ten rounds of the waited invalidation waited over 100 ms there,
+  the longest 412 ms with CPU 1 answering last, all in the last seconds
+  of a run on a host whose 24 CPUs were also carrying 24 emulated ones
+  and other work; at 8 CPUs the longest was 18 ms in one run and 124 ms
+  (CPU 4) in another under load. Whether a long syscall or a descheduled
+  emulated CPU held them, the P5's `/sys/memory/shootdown` will say.
+- **Pure cores:** `tools/test_reaplist_host.sh` (1.05 M checks) and 32 of
+  32 mutants; `tools/test_shootdown_host.sh` (599 K checks) and 22 of 22.
+- **Hand mutants against the fixture:**
+  - no thread handed to the reap: caught (step 4: 4,005 live, 4.5 GB not
+    back);
+  - the reap freeing without the waited invalidation: NOT caught; nothing
+    in QEMU reaches a stale translation;
+  - the heap-range door's CAS made a plain store: NOT caught in two runs
+    (two makers must claim within the same few instructions);
+  - the thread chain's splice made a plain store: NOT caught in 20,000
+    threads, for the same reason; the made count in step 4 is what would
+    show a lost thread.
+- **Not exercised by the fixture:** the creator's bounded park. Its makers
+  join each thread before the next, so the backlog stays under the bound.
