@@ -110,6 +110,14 @@ int32_t os64_proc_read_thread(uint64_t pid, uint64_t tid,
 int32_t os64_proc_read_thread_split(uint64_t pid, uint64_t tid,
                                     os64_thread_info_t *out,
                                     os64_proc_cpu_split_t *split);
+// The same read, also taking the thread's name (os64/thread_name.h) into
+// name: "" when it is unnamed or the kernel prints no name line. A name
+// longer than name_cap - 1 is cut to fit; OS64_THREAD_NAME_MAX holds any.
+// split and name may be NULL.
+int32_t os64_proc_read_thread_named(uint64_t pid, uint64_t tid,
+                                    os64_thread_info_t *out,
+                                    os64_proc_cpu_split_t *split,
+                                    char *name, size_t name_cap);
 
 // Read the calling process's controlling terminal (via /proc/self/tty).
 // Returns 0 on success, -1 if the file cannot be opened or parsed.
