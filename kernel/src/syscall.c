@@ -793,8 +793,10 @@ void restore_user_cr3(void)
 // the program's own race, and its cost is the program's: the copy faults in
 // ring 0 on a page no longer there, and the fault resumes at the copy's
 // failure exit (user_copy.S; USER_COPY.md), so the call answers not copied.
-// This check stays the gate all the same: a copy given an address it would
-// refuse (the kernel's half, a supervisor page, page zero) still panics.
+// This check stays the gate all the same: a copy given an address on the
+// kernel's half or page zero still panics, and a supervisor page in the
+// user range (a kernel stack) does not fault in ring 0 at all, so this
+// check is the only thing that refuses it.
 static bool user_range_accessible(const void *user_ptr, size_t length, bool for_write)
 {
 	uintptr_t addr = (uintptr_t)user_ptr;
@@ -1015,8 +1017,8 @@ out:
 // never crosses the end of the page the check just passed, so a string
 // ending near the end of the last mapped page still measures. The answer is
 // only as current as the scan: user memory can change after it, so a caller
-// that copies bounds its copy by the length measured and forces the
-// terminator itself.
+// that copies bounds its copy by the length measured and refuses what does
+// not arrive terminated.
 static int user_string_length(const char *user_str, size_t cap, size_t *len)
 {
         if (user_str == NULL)

@@ -1253,9 +1253,10 @@ static void sys_gen_memory_reap(synth_text_t *t)
 	synth_text_addf(t, "refused: %lu (a node handed or claimed in the wrong state)\n", c.refused);
 }
 
-// /sys/memory/usercopy — user copies whose page a sibling took away between
-// the check and the copy, each answered "not copied" instead of a panic
-// (user_copy.h; USER_COPY.md). None is the expected number outside a
+// /sys/memory/usercopy — user copies that faulted on a page the handler
+// could not give them (a sibling took it away between the check and the
+// copy, or it could not be read in), each answered "not copied" instead of
+// a panic (user_copy.h; USER_COPY.md). None is the expected number outside a
 // program racing its own memory, as /tests/copyrace does on purpose.
 static void sys_gen_memory_usercopy(synth_text_t *t)
 {

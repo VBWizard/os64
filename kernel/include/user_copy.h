@@ -4,9 +4,10 @@
 // The copies that touch user memory by its user address, and the only ones
 // that may (USER_COPY.md). Each answers 0 when every byte was copied, else
 // the bytes not copied, counting an 8-byte step the fault interrupted as
-// not copied at all: a page a sibling took away after the check
-// (user_range_accessible) faults inside the copy, and the fault resumes at
-// the copy's failure exit instead of panicking (copy_fault.h). The check
+// not copied at all: a page the fault handler cannot give the copy (a
+// sibling took it away after the check, user_range_accessible, or it could
+// not be read in) faults inside the copy, and the fault resumes at the
+// copy's failure exit instead of panicking (copy_fault.h). The check
 // stays the gate: give these only a range it has just passed.
 
 #include <stdbool.h>
