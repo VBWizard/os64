@@ -1,0 +1,31 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Full screen: the prefixed names</title>
+<!--
+  VIDEO.md § 9, the Fullscreen API (slice 2). A page written for the
+  prefixed names alone, as a quarter of the pages that ask for full screen
+  are: webkitRequestFullscreen, webkitExitFullscreen,
+  webkitFullscreenElement, webkitIsFullScreen, webkitfullscreenchange and
+  :-webkit-full-screen. "Full screen" covers the screen and the box turns
+  green; "Exit" (inside it) comes back; the log follows each change.
+-->
+<style>
+  body { font: 16px sans-serif; margin: 16px; background: #223; color: #ddd; }
+  #box { width: 320px; height: 180px; background: #36c; }
+  #box:-webkit-full-screen { background: #3a3; }
+  #log { font: 13px monospace; white-space: pre; margin-top: 12px; }
+</style>
+<h1>Full screen: the prefixed names</h1>
+<div id="box"><button id="exit">Exit</button></div>
+<p><button id="go">Full screen</button></p>
+<div id="log"></div>
+<script>
+  const box = document.getElementById('box'), log = document.getElementById('log');
+  const note = s => { log.textContent += s + '\n'; };
+  document.addEventListener('webkitfullscreenchange', () =>
+    note('webkitfullscreenchange: webkitIsFullScreen ' + document.webkitIsFullScreen + ', element ' +
+         (document.webkitFullscreenElement ? '#' + document.webkitFullscreenElement.id : 'null')));
+  document.getElementById('go').onclick = () => box.webkitRequestFullscreen();
+  document.getElementById('exit').onclick = () => document.webkitExitFullscreen();
+  note('webkitFullscreenEnabled ' + document.webkitFullscreenEnabled);
+</script>

@@ -1,0 +1,71 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Full screen: a player's container</title>
+<!--
+  VIDEO.md § 9, the Fullscreen API (slice 2). A player as the web builds
+  one: a container holding the video and its own controls, the CONTAINER
+  asked to go full screen (not the video), its bar over the picture.
+
+  Try, in order:
+  - "Full screen" (a click: allowed). The window covers the screen, the
+    browser's rows are gone, the container fills the screen, its border
+    turns green (:fullscreen) and the log says fullscreenchange. The red box
+    on the page (stacked over everything) is NOT there: the top layer is.
+  - Escape: back, the rows return, fullscreenchange again.
+  - "Full screen", then the bar's "Exit" (document.exitFullscreen).
+  - "Full screen, then remove": full screen, and two seconds later the
+    container leaves the page; the window comes back, and the log says the
+    change reached the document.
+  - "Full screen", then the bar's "Alert" or its "Next page" link: each
+    leaves full screen first (an alert speaks in the status row, which full
+    screen hides; a navigation leaves).
+  - Ctrl+Alt+F (the window manager's) while the container is full screen:
+    the window comes back and the page hears fullscreenchange.
+  The log keeps every event and every promise's answer.
+
+  Under `--plane-check=1` the video stays on its plane full screen, the bar
+  an overlay; the record's plane-check counts must say wrong 0.
+-->
+<style>
+  body { font: 16px sans-serif; margin: 16px; background: #223; color: #ddd; }
+  #c { position: relative; width: 480px; height: 300px; border: 4px solid #888; background: #000; }
+  #c:fullscreen { border-color: #3c3; }
+  video { position: absolute; left: 0; top: 0; width: 100%; height: calc(100% - 44px); background: #000; }
+  #bar { position: absolute; left: 0; bottom: 0; width: 100%; height: 44px; background: rgba(0, 0, 0, .6);
+         display: flex; gap: 8px; align-items: center; padding: 0 8px; box-sizing: border-box; }
+  #bar button, #bar a { font-size: 14px; color: #fff; }
+  #out { position: fixed; right: 24px; bottom: 24px; width: 120px; height: 60px; background: #e22;
+         z-index: 9999; color: #fff; }
+  #log { font: 13px monospace; white-space: pre; margin-top: 12px; }
+</style>
+<h1>Full screen: a player's container</h1>
+<p><button id="go">Full screen</button> <button id="remove">Full screen, then remove</button></p>
+<div id="c">
+  <video id="v" src="bbb-480p-3s-av.mp4" autoplay muted loop></video>
+  <div id="bar"><button id="exit">Exit</button><button id="say">Alert</button><a href="audio.html">Next page</a>
+    <span id="state">windowed</span></div>
+</div>
+<div id="out">on the page, over everything</div>
+<div id="log"></div>
+<script>
+  const c = document.getElementById('c'), log = document.getElementById('log');
+  const note = s => { log.textContent += s + '\n'; };
+  const where = e => e.target === document ? 'document' : '#' + e.target.id;
+  document.addEventListener('fullscreenchange', e => {
+    note('fullscreenchange at ' + where(e) + '; fullscreenElement ' +
+         (document.fullscreenElement ? '#' + document.fullscreenElement.id : 'null'));
+    document.getElementById('state').textContent = document.fullscreenElement ? 'full screen' : 'windowed';
+  });
+  document.addEventListener('fullscreenerror', e => note('fullscreenerror at ' + where(e)));
+  document.getElementById('go').onclick = () =>
+    c.requestFullscreen().then(() => note('requestFullscreen resolved'),
+                               e => note('requestFullscreen rejected: ' + e.name));
+  document.getElementById('exit').onclick = () =>
+    document.exitFullscreen().then(() => note('exitFullscreen resolved'),
+                                   e => note('exitFullscreen rejected: ' + e.name));
+  document.getElementById('remove').onclick = () =>
+    c.requestFullscreen().then(() => setTimeout(() => { c.remove(); note('removed'); }, 2000),
+                               e => note('requestFullscreen rejected: ' + e.name));
+  document.getElementById('say').onclick = () => alert('An alert while full screen');
+  note('fullscreenEnabled ' + document.fullscreenEnabled);
+</script>
