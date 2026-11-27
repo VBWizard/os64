@@ -12,6 +12,7 @@ void maplist_link(maplist_t *l, maplist_node_t *n, uintptr_t start, uintptr_t en
 {
     n->start = start;
     n->end = end;
+    n->linked = ++l->links;
     n->holds = 0;
     n->listed = true;
     n->prev = NULL;
@@ -34,8 +35,22 @@ static void move_to_head(maplist_t *l, maplist_node_t *n)
     l->head = n;
 }
 
+// May `n` move to the head? Not past a node that overlaps it and was linked
+// after it: that node governs their shared addresses (maplist.h). The nodes
+// ahead of `n` are the ones the walk just stepped over, so this is a second
+// look at them, counted in `*steps`.
+static bool may_lead(maplist_t *l, maplist_node_t *n, uint64_t *steps)
+{
+    for (maplist_node_t *m = l->head; m != n; m = m->next) {
+        (*steps)++;
+        if (m->linked > n->linked && m->start < n->end && n->start < m->end)
+            return false;
+    }
+    return true;
+}
+
 // The walk, counted: `start_only` matches an exact start, otherwise a
-// range holding `addr`, which moves what it finds to the head.
+// range holding `addr`, which moves what it finds to the head (may_lead).
 static maplist_node_t *walk(maplist_t *l, uintptr_t addr, bool start_only)
 {
     uint64_t steps = 0;
@@ -50,7 +65,7 @@ static maplist_node_t *walk(maplist_t *l, uintptr_t addr, bool start_only)
     l->lookups++;
     if (found == NULL)
         l->misses++;
-    else if (!start_only && found != l->head)
+    else if (!start_only && found != l->head && may_lead(l, found, &steps))
         move_to_head(l, found);
     l->steps += steps;
     if (steps > l->steps_most)

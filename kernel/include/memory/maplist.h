@@ -19,6 +19,12 @@
 // would otherwise sit behind every region made since. So the list's order is
 // most recently found or made first, and a reader that copies only part of
 // the list (/proc's maps past its walk guard) gets those.
+//
+// WHERE TWO NODES HOLD ONE ADDRESS, THE ONE LINKED LAST GOVERNS IT (an ELF
+// image's segments can share a boundary page, and the writable one, linked
+// after the code, must govern it). The list keeps that by keeping every
+// overlapping pair newer-linked first: a link is the newest, and a hit is
+// moved only past nodes that do not overlap it or were linked before it.
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -27,6 +33,7 @@
 typedef struct maplist_node {
     struct maplist_node *prev, *next;
     uintptr_t start, end;           // [start, end)
+    uint64_t linked;                // link order: larger is linked later
     uint32_t holds;                 // callers using it outside the lock
     bool listed;
 } maplist_node_t;
@@ -34,6 +41,7 @@ typedef struct maplist_node {
 typedef struct {
     maplist_node_t *head;
     uint32_t count;
+    uint64_t links;                 // nodes ever linked: the next one's `linked`
     // The walk: lookups made, lookups that found nothing (each walked the
     // whole list), nodes stepped over in all, and the longest single walk,
     // since the list began; and where the last read left them
@@ -51,8 +59,9 @@ void maplist_init(maplist_t *l);
 // `n` linked at the head over [start, end), listed, with no holds.
 void maplist_link(maplist_t *l, maplist_node_t *n, uintptr_t start, uintptr_t end);
 
-// The listed node whose range holds `addr`, NULL for none, moved to the
-// head when found. Counted.
+// The listed node whose range holds `addr` (the one linked last, where two
+// do), NULL for none, moved to the head when found unless a node ahead of
+// it overlaps it and was linked after it. Counted, the check included.
 maplist_node_t *maplist_find(maplist_t *l, uintptr_t addr);
 
 // maplist_find, and a hold on what it found: the caller may use it after
