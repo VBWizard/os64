@@ -99,6 +99,34 @@ static void collect(os64_work_pool_t *p, os64_work_id_t expected, unsigned numbe
     } while (now()<end);
     CHECK(false);
 }
+// How many of this program's threads carry `name`.
+static unsigned threads_named(const char *name)
+{
+    static os64_thread_info_t list[64];
+    int32_t n=os64_proc_threads(os64_taskid(),list,64); unsigned count=0;
+    for (int32_t i=0;i<n;++i) {
+        os64_thread_info_t info; char got[OS64_THREAD_NAME_MAX];
+        if (os64_proc_read_thread_named(os64_taskid(),list[i].tid,&info,NULL,got,sizeof(got))==0 &&
+            os64_streq(got,name)) ++count;
+    }
+    return count;
+}
+// Named workers read back numbered; a prefix whose names break the rule
+// refuses the pool, and the longest prefix that fits is taken.
+static void named_pool(int64_t win)
+{
+    os64_work_pool_t *p=os64_work_pool_create_named(3,4,win,4,"worker"); CHECK(p!=NULL); if (!p) return;
+    CHECK(threads_named("worker-01")==1 && threads_named("worker-02")==1 &&
+          threads_named("worker-03")==1 && threads_named("worker-04")==0);
+    os64_work_pool_destroy(p);
+    CHECK(os64_work_pool_create_named(1,1,win,4,"bad\tname")==NULL);
+    char prefix[OS64_THREAD_NAME_MAX]; os64_memset(prefix,'p',sizeof(prefix));
+    prefix[61]=0; CHECK(os64_work_pool_create_named(1,1,win,4,prefix)==NULL);
+    prefix[60]=0; p=os64_work_pool_create_named(1,1,win,4,prefix); CHECK(p!=NULL);
+    if (p) { os64_strcopy(prefix+60,sizeof(prefix)-60,"-01"); CHECK(threads_named(prefix)==1); os64_work_pool_destroy(p); }
+    p=os64_work_pool_create_named(1,1,win,4,""); CHECK(p!=NULL); if (p) os64_work_pool_destroy(p);
+    os64_printf("worktest: named workers read back numbered; a bad prefix refused\n");
+}
 static void synthetic(int64_t win)
 {
     // Exercise the user/kernel deadline boundary before testing admission.
@@ -226,7 +254,7 @@ int main(int argc, char **argv)
     CHECK(win>0); if (win<=0) return WORK_FAIL;
     int64_t guard=os64_thread(watchdog,NULL); CHECK(guard>=0);
     if (argc>1) fetching(win,argv[1],argc>2 && os64_streq(argv[2],"--cancel"));
-    else synthetic(win);
+    else { synthetic(win); named_pool(win); }
     os64_gui_window_destroy(win);
     STORE(&finished,true);
     if (guard>=0) { os64_thread_join((int32_t)guard,NULL); os64_close((int32_t)guard); }

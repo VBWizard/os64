@@ -31,6 +31,7 @@
 // burning need for daemon threads ever turns up, which we doubt.)
 
 #include <stdint.h>
+#include "os64/thread_name.h"   // OS64_THREAD_NAME_MAX, os64_thread_name_valid
 
 // Start a thread running fn(arg). Returns a HANDLE (>= 0), or negative.
 int64_t os64_thread(int64_t (*fn)(void *), void *arg);
