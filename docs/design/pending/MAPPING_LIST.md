@@ -181,7 +181,12 @@ walked everything, found nothing, and fell back to the page table.
   the head (`maplist.c`, O(1), under `mapLock` like every walk). The hot
   mappings are the old ones (the image, the libraries, the first heap
   arena) and linking new regions at the head had put them behind a
-  thousand others. Burial takes all and unmap finds by start; `/proc`
+  thousand others. A hit is not moved past a node that overlaps it and
+  was linked after it: where two mappings hold one address (an ELF image's
+  segments can share a boundary page), the one linked last governs it, as
+  it always did, so the writable segment keeps its page (the check looks
+  again at the nodes the walk stepped over, and is counted in the steps).
+  Burial takes all and unmap finds by start; `/proc`
   maps sorts its rows, and past its walk guard (512 rows) shows the
   mappings most recently found or made, where it showed the newest. No pointer is stored, so there is no lifetime question; a
   per-thread hint was weighed and set aside, because the misses were the

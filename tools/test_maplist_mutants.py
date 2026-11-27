@@ -76,12 +76,18 @@ mutants = [
     # Move to front: a hit by address becomes the head, its old neighbours
     # joined, its own links whole; a lookup by start and a miss move nothing.
     ('mtf-off', '        move_to_head(l, found);\n', '        (void)move_to_head;\n'),
-    ('mtf-by-start-too', '    else if (!start_only && found != l->head)', '    else if (found != l->head)'),
+    ('mtf-by-start-too', '    else if (!start_only && found != l->head &&', '    else if (found != l->head &&'),
     ('mtf-old-link-kept', '{\n    n->prev->next = n->next;\n', '{\n'),
     ('mtf-back-link-kept', '    if (n->next != NULL)\n        n->next->prev = n->prev;\n    n->prev = NULL;', '    n->prev = NULL;'),
     ('mtf-stale-prev', '        n->next->prev = n->prev;\n    n->prev = NULL;\n    n->next = l->head;', '        n->next->prev = n->prev;\n    n->next = l->head;'),
-    ('mtf-head-no-back-link', '    l->head->prev = n;\n    l->head = n;\n}\n\n// The walk', '    l->head = n;\n}\n\n// The walk'),
-    ('mtf-head-not-moved', '    l->head->prev = n;\n    l->head = n;\n}\n\n// The walk', '    l->head->prev = n;\n}\n\n// The walk'),
+    ('mtf-head-no-back-link', '    l->head->prev = n;\n    l->head = n;\n}\n\n// May', '    l->head = n;\n}\n\n// May'),
+    ('mtf-head-not-moved', '    l->head->prev = n;\n    l->head = n;\n}\n\n// May', '    l->head->prev = n;\n}\n\n// May'),
+    # Overlap precedence: a hit never moves ahead of a newer node it overlaps.
+    ('may-lead-always', '        if (m->linked > n->linked && m->start < n->end && n->start < m->end)\n            return false;\n', ''),
+    ('may-lead-older', 'if (m->linked > n->linked && m->start', 'if (m->linked < n->linked && m->start'),
+    ('may-lead-adjacent', 'm->start < n->end && n->start < m->end', 'm->start <= n->end && n->start <= m->end'),
+    ('may-lead-uncounted', '        (*steps)++;\n', '        (void)steps;\n'),
+    ('linked-not-numbered', '    n->linked = ++l->links;', '    n->linked = l->links;'),
     # The misses.
     ('miss-uncounted', '        l->misses++;\n', '        ;\n'),
     ('read-no-restart-misses', '    l->read_misses = l->misses;\n', ''),
