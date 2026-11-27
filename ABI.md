@@ -141,7 +141,10 @@ off: no waiting on interrupt-delivered events, keep bodies short.
   `user_range_accessible`, the vetting step the copy helpers share, so the
   bound travels with the vetting instead of with each caller. (The bound
   is NOT kHHDMOffset: the gap between the two is non-canonical, and a
-  ring-0 touch there is a #GP, a panic.) They ferry through bounded kernel
+  ring-0 touch there is a #GP, a panic.) Their bytes move through
+  `user_copy_in`/`user_copy_out` (user_copy.S): a page a sibling thread
+  took away between the vetting and the copy answers `false`, as a
+  refused range does, instead of a ring-0 fault (USER_COPY.md). They ferry through bounded kernel
   chunks
   (write() uses 512 bytes) so a user-supplied length can never become
   unbounded kernel stack use. The helpers run inside a "user-CR3 window"
@@ -363,8 +366,9 @@ found three real items:
    faults itself. The copy helpers (`copy_user_string`/`_buffer`) are
    already the hand-rolled chokepoint this would formalize, so it's a
    discipline-wide change, not a missing protection. Deferred with intent;
-   do it when the copy helpers are the ONLY user-access path (they nearly
-   are — argv setup in task.c is the other).
+   the gate was the copy routines being the ONLY user-access path, which
+   they are since USER_COPY.md (2026-11-27): the bracket goes around
+   `user_copy_in`/`user_copy_out` (DEBTS has the row).
 
 ## Failure fingerprints (symptom → cause)
 
