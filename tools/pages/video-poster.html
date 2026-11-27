@@ -21,6 +21,9 @@
     F  a blue poster and no source, no size given: a 200x200 box, blue
     G  a red poster and no source, its poster taken away at 2.5 s: the box
        goes to 300x150 and its own green
+    H  autoplay, muted, a square blue poster filling a square box: once it
+       plays, the 16:9 picture letterboxed with green above and below it,
+       and none of the poster's blue left there
 
   The title is A's paused (z) or playing (p) state and time, E's state,
   and F's and G's box sizes, every half second; the boxes' colours say the rest
@@ -36,6 +39,7 @@
   #e { left: 260px; top: 160px; width: 240px; height: 135px; }
   #f { left: 510px; top: 160px; }
   #g { left: 10px; top: 310px; }
+  #h { left: 330px; top: 310px; width: 135px; height: 135px; }
 </style>
 <video id="a" poster="poster-red.png" src="bbb-480p-3s-av.mp4" muted preload="auto"></video>
 <video id="b" poster="missing-poster.png" src="bbb-480p-3s-av.mp4" muted preload="auto"></video>
@@ -44,6 +48,7 @@
 <video id="e" poster="poster-red.png" src="bbb-480p-3s-av.mp4" muted autoplay loop></video>
 <video id="f" poster="poster-blue-square.png"></video>
 <video id="g" poster="poster-red.png"></video>
+<video id="h" poster="poster-blue-square.png" src="bbb-480p-3s-av.mp4" muted autoplay loop></video>
 <script>
   const $ = id => document.getElementById(id);
   let step = 0;
