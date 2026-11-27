@@ -160,6 +160,13 @@ typedef enum {
 // TOO_BIG: nothing came back). A reader holding only the result, as the
 // cascade does, learns from `incomplete` alone that it is short.
 typedef struct {
+    // Which parse filled this struct: a number no other parse in the
+    // program has had, new at every parse, never 0 for a parse's result. A
+    // cascade's kept read knows its sheets by it (not by their addresses,
+    // which a freed sheet hands on), so whatever changes a parsed sheet in
+    // place, without parsing it again (an insertRule the day there is one,
+    // a disabled flag if it lives here), must give it a new serial too.
+    uint64_t serial;
     struct os64_arena *arena;
     // What `arena` was made to hold; 0 means the default GARB_ARENA_MAX.
     // Caller-bounded parses and readers with their own arena state its cap

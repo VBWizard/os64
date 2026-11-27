@@ -549,6 +549,57 @@ static void paint_recursive(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_r
 		paint_recursive(c, ui, list, count);
 }
 
+// A widget and its children painted for `rect` and cut to it: each through
+// a sub-surface whose corner is the corner of what is seen of it there (its
+// bounds, its own clip and `rect`), as paint_cut paints a clipped widget,
+// so nothing outside `rect` changes, whatever a widget paints of its bounds.
+static void paint_within(os64_ui_widget_t *w, os64_ui_t *ui, os64_gui_rect_t rect)
+{
+	os64_gui_rect_t seen, cut;
+	if (w == (os64_ui_widget_t *)0 || w->hidden || !os64_rect_intersect(w->bounds, rect, &seen))
+		return;
+	w->ui = ui;
+	os64_gui_surface_t whole = ui->ctx->surf;
+	os64_gui_rect_t canvas = {0, 0, (int32_t)whole.width, (int32_t)whole.height};
+	if (w->cls->paint && (!w->clipped || os64_rect_intersect(seen, w->clip, &cut)) &&
+	    os64_rect_intersect(w->clipped ? cut : seen, canvas, &cut)) {
+		os64_gui_rect_t bounds = w->bounds, moved = {seen.x - cut.x, seen.y - cut.y, seen.w, seen.h};
+		ui->ctx->surf.pixels = whole.pixels + (size_t)cut.y * whole.pitch_px + (size_t)cut.x;
+		ui->ctx->surf.width = (uint32_t)cut.w;
+		ui->ctx->surf.height = (uint32_t)cut.h;
+		w->bounds.x -= cut.x;
+		w->bounds.y -= cut.y;
+		paint_self(w, ui, &moved, 1, moved);
+		w->bounds = bounds;
+		ui->ctx->surf = whole;
+	}
+	for (os64_ui_widget_t *c = w->first_child; c; c = c->next_sibling)
+		paint_within(c, ui, rect);
+}
+
+static void paint_after_walk(os64_ui_widget_t *w, os64_ui_t *ui, const os64_ui_widget_t *from,
+                             os64_gui_rect_t rect, bool *after)
+{
+	for (; w != (os64_ui_widget_t *)0; w = w->next_sibling) {
+		if (w == from) {
+			*after = true;
+			continue;
+		}
+		if (*after)
+			paint_within(w, ui, rect);
+		else if (!w->hidden)
+			paint_after_walk(w->first_child, ui, from, rect, after);
+	}
+}
+
+void os64_ui_paint_after(os64_ui_t *ui, const os64_ui_widget_t *from, os64_gui_rect_t rect)
+{
+	os64_gui_rect_t dirty = ui->dirty;
+	bool after = false;
+	paint_after_walk(ui->root, ui, from, rect, &after);
+	ui->dirty = dirty;
+}
+
 uint32_t os64_ui_render_list(os64_ui_t *ui, os64_gui_rect_t out[OS64_UI_DAMAGE_MAX])
 {
 	reconcile(ui);

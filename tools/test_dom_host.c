@@ -6,6 +6,7 @@
 #include "quickjs.h"
 #include <dom/dom.h>
 #include <dom/media.h>
+#include <dom/fullscreen.h>
 #include <html/html.h>
 #include <page/page.h>
 #include <math.h>
@@ -266,6 +267,7 @@ static char *native_serialized(const os64_html_node_t *node)
 #include "test_dom_text.inc"
 #include "test_dom_canvas.inc"
 #include "test_dom_canvas_images.inc"
+#include "test_dom_turn_checks.inc"
 #include "test_dom_canvas_paints.inc"
 #include "test_dom_custom.inc"
 #include "test_dom_observer.inc"
@@ -286,6 +288,7 @@ static char *native_serialized(const os64_html_node_t *node)
 #include "test_dom_intersection.inc"
 #include "test_dom_resize.inc"
 #include "test_dom_media.inc"
+#include "test_dom_fullscreen.inc"
 #include "test_dom_walker.inc"
 #include "test_dom_pointer.inc"
 #include "test_dom_importmap.inc"
@@ -315,6 +318,7 @@ static char *native_serialized(const os64_html_node_t *node)
 #include "test_dom_departure.inc"
 #include "test_dom_stream_realms.inc"
 #include "test_dom_child_install.inc"
+#include "test_dom_fullscreen_frame.inc"
 #include "test_dom_recovery.inc"
 #include "test_dom_recovery_host.inc"
 #include "test_dom_retention.inc"
@@ -336,6 +340,7 @@ static char *native_serialized(const os64_html_node_t *node)
 typedef struct {
     DomFixture *fixture;
     unsigned calls;
+    unsigned needs[3];      // the provider asked for each os64_dom_geometry_need_t
     bool refuse, slow, unboxed;
 } GeometryFixture;
 
@@ -344,6 +349,7 @@ static bool fake_geometry(void *opaque, const os64_html_node_t *node, os64_dom_g
     GeometryFixture *fixture=opaque;
     check(node->kind==OS64_HTML_ELEMENT, "geometry provider receives a native element");
     fixture->calls++;
+    if((unsigned)out->need<3) fixture->needs[out->need]++;
     *out=(os64_dom_geometry_t){.x=1.25,.y=-3.5,.width=20.5,.height=30.25,
         .offset_left=2,.offset_top=3,.offset_width=21,.offset_height=30,
         .client_left=1,.client_top=2,.client_width=19,.client_height=27,
@@ -389,6 +395,29 @@ static void dom_geometry_cases(void)
     os64_dom_geometry_stats_t stats=os64_dom_geometry_stats(f.binding,true);
     check(stats.layouts==11&&stats.elapsed_us==2750&&os64_dom_geometry_stats(f.binding,false).layouts==0,
           "geometry telemetry counts provider work and resets independently");
+    /* What each read asks the provider for (os64_dom_geometry_need_t): the
+     * offset and client members and offsetParent BOXES, the scroll members
+     * REACH, the rectangles ALL. */
+    memset(provider.needs,0,sizeof(provider.needs));
+    dom_script(&f,GEOMETRY_ASSERT
+        "var n=document.getElementById('one');"
+        "n.offsetLeft;n.offsetWidth;n.offsetParent;n.clientWidth;n.clientTop;",
+        "geometry-needs-boxes");
+    check(provider.needs[OS64_DOM_NEED_BOXES]==5&&provider.needs[OS64_DOM_NEED_REACH]==0&&provider.needs[OS64_DOM_NEED_ALL]==0,
+          "geometry: offset and client reads ask for boxes");
+    memset(provider.needs,0,sizeof(provider.needs));
+    dom_script(&f,GEOMETRY_ASSERT
+        "var n=document.getElementById('one');n.scrollTop;n.scrollLeft;n.scrollWidth;n.scrollHeight;",
+        "geometry-needs-reach");
+    check(provider.needs[OS64_DOM_NEED_REACH]==4&&provider.needs[OS64_DOM_NEED_BOXES]==0&&provider.needs[OS64_DOM_NEED_ALL]==0,
+          "geometry: scroll reads ask for the reach");
+    memset(provider.needs,0,sizeof(provider.needs));
+    dom_script(&f,GEOMETRY_ASSERT
+        "var n=document.getElementById('one');n.getBoundingClientRect();n.getClientRects();",
+        "geometry-needs-all");
+    check(provider.needs[OS64_DOM_NEED_ALL]==2&&provider.needs[OS64_DOM_NEED_BOXES]==0&&provider.needs[OS64_DOM_NEED_REACH]==0,
+          "geometry: rectangles ask for everything");
+    os64_dom_geometry_stats(f.binding,true);
     /* getClientRects (CSSOM View § 6.1): the border box an element with a
      * box has, in a DOMRectList; empty for one with none. */
     dom_script(&f,GEOMETRY_ASSERT
@@ -660,7 +689,7 @@ static void dom_global_miss_cases(void)
 int main(int argc, char **argv)
 {
     if(argc==2&&!strcmp(argv[1],"--core")){dom_identity_cases();dom_control_cases();dom_clone_control_cases();dom_clone_character_data_cases();dom_refusal_cases();dom_budget_cases();printf("DOM core probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
-    if(argc==2&&!strcmp(argv[1],"--canvas")){dom_image_data_cases();dom_canvas_cases();dom_canvas_image_cases();dom_canvas_paint_cases();dom_canvas_refusals();printf("DOM canvas probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--canvas")){dom_image_data_cases();dom_canvas_cases();dom_canvas_image_cases();dom_turn_check_cases();dom_canvas_paint_cases();dom_canvas_refusals();printf("DOM canvas probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--reclaim")){dom_reclaim_cases();printf("DOM reclaim probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--clone")){dom_clone_control_cases();dom_clone_native_cases();dom_clone_state_cap_cases();dom_clone_character_data_cases();dom_clone_allocation_cases();printf("DOM clone probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--implementation")){dom_implementation_cases();implementation_allocation_cases();printf("DOM implementation probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
@@ -682,13 +711,13 @@ int main(int argc, char **argv)
     if(argc==2&&!strcmp(argv[1],"--inner-text")){dom_inner_text_cases();printf("DOM inner text probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--blob")){dom_blob_cases();printf("DOM blob probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--file-reader")){dom_file_reader_cases();printf("DOM file reader probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
-    if(argc==2&&!strcmp(argv[1],"--media")){dom_media_cases();printf("DOM media probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}    if(argc==2&&!strcmp(argv[1],"--walker")){dom_walker_cases();printf("DOM walker probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--media")){dom_media_cases();printf("DOM media probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}    if(argc==2&&!strcmp(argv[1],"--fullscreen")){dom_fullscreen_cases();dom_fullscreen_frame_cases();printf("DOM fullscreen probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}    if(argc==2&&!strcmp(argv[1],"--walker")){dom_walker_cases();printf("DOM walker probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--performance")){dom_performance_cases();dom_performance_observer_cases();printf("DOM performance probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--p2b")){dom_p2b_cases();dom_p2b_sweep_cases();printf("DOM P2b probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--observer")){dom_observer_cases();printf("DOM observer probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--custom")){dom_custom_cases();printf("DOM custom probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--events")){dom_event_cases();printf("DOM events probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
-    if(argc==2&&!strcmp(argv[1],"--modern")){dom_modern_cases();dom_storage_cases();dom_base64_cases();dom_encoding_cases();dom_image_data_cases();dom_canvas_cases();dom_canvas_image_cases();dom_canvas_paint_cases();dom_canvas_refusals();dom_screen_cases();dom_performance_cases();dom_performance_observer_cases();dom_url_cases();dom_storage_engine_cases();dom_fetch_cases();printf("DOM modern probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--modern")){dom_modern_cases();dom_storage_cases();dom_base64_cases();dom_encoding_cases();dom_image_data_cases();dom_canvas_cases();dom_canvas_image_cases();dom_turn_check_cases();dom_canvas_paint_cases();dom_canvas_refusals();dom_screen_cases();dom_performance_cases();dom_performance_observer_cases();dom_url_cases();dom_storage_engine_cases();dom_fetch_cases();printf("DOM modern probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--storage-quota")){dom_storage_quota_cases();printf("DOM storage quota: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--pointer")){dom_pointer_cases();printf("DOM pointer: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--cluster-failures")){dom_cluster_failure_cases();printf("DOM cluster failures: %u checks, %u failed\n",checks,failures);return failures?1:0;}
@@ -778,7 +807,7 @@ int main(int argc, char **argv)
     dom_inner_text_cases();
     dom_storage_cases();
     dom_base64_cases();
-    dom_encoding_cases();dom_image_data_cases();dom_canvas_cases();dom_canvas_image_cases();dom_canvas_paint_cases();dom_canvas_refusals();
+    dom_encoding_cases();dom_image_data_cases();dom_canvas_cases();dom_canvas_image_cases();dom_turn_check_cases();dom_canvas_paint_cases();dom_canvas_refusals();
     dom_screen_cases();
     dom_performance_cases();
     dom_performance_observer_cases();
@@ -794,6 +823,8 @@ int main(int argc, char **argv)
     dom_intersection_cases();
     dom_resize_cases();
     dom_media_cases();
+    dom_fullscreen_cases();
+    dom_fullscreen_frame_cases();
     dom_blob_cases();
     dom_file_reader_cases();
     dom_walker_cases();

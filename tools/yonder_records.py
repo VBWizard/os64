@@ -95,7 +95,7 @@ class State(enum.IntEnum):
 # RP_NOT_REPRODUCED): a MISSING line's kind or a FAILED line's what. A
 # `REPLAY not reproduced:` line naming anything else is refused, since it
 # would keep lines of that kind out of every comparison.
-NOT_REPRODUCED = {'font-fetch', 'image', 'picture-fetch'}
+NOT_REPRODUCED = {'font-fetch', 'image', 'media', 'picture-fetch'}
 
 END = b'end'
 UNWRITTEN = b'verdict: unwritten'

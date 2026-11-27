@@ -322,10 +322,24 @@ typedef enum {
     OS64_DOM_SCRIPT_IMPORTMAP   /* the host registers it (yonder's importmap.c) */
 } os64_dom_script_kind_t;
 
+/* What a geometry read will take from the snapshot, which the binding sets
+ * before it calls the provider (`need`): BOXES, the offset and client
+ * members and offset_parent, which no transform and no paint-only style
+ * moves; REACH, the scroll members as well, which a transform's reach can
+ * move; ALL, any member (the rectangles see through transforms). A provider
+ * may make current only what the need reads, or ignore it and make
+ * everything current. */
+typedef enum {
+    OS64_DOM_NEED_ALL = 0,
+    OS64_DOM_NEED_BOXES,
+    OS64_DOM_NEED_REACH
+} os64_dom_geometry_need_t;
+
 /* Numeric snapshot in CSS pixels. Offset/client members are integer pixels;
  * rect members can be fractional after device-pixel layout is unzoomed.
  * offset_parent is borrowed from the provider's live document. */
 typedef struct {
+    os64_dom_geometry_need_t need;  /* in: what the read takes */
     double x, y, width, height;
     int32_t offset_left, offset_top, offset_width, offset_height;
     int32_t client_left, client_top, client_width, client_height;
@@ -995,6 +1009,32 @@ void os64_dom_free(os64_dom_t *dom);
  * of C-retained engine values; it becomes zero on drain. NULL answers zero. */
 size_t os64_dom_bytes(const os64_dom_t *dom);
 size_t os64_dom_registry_count(const os64_dom_t *dom);
+/* The records a host's every-turn checks have visited since the binding was
+ * made: the wrapped image elements os64_dom_image_event polled and the
+ * canvases os64_dom_canvas_visit_damage looked at (canvas.h). A host
+ * subtracts two readings for a span. NULL answers zero. */
+uint64_t os64_dom_checks_visited(const os64_dom_t *dom);
+/* WHAT THE WRAPPERS OF NODES HOLD, for a census of who holds the detached
+ * (yonder's record): of the node wrappers on this binding's own registry
+ * (in a cluster, another member's wrappers are on that member's),
+ * those whose node is in the document's tree, a shadow tree included
+ * (`connected`), and the rest (`elsewhere`: detached, a template's
+ * contents, another document's), and of the rest how many only the
+ * registry references (`elsewhere_only_ours`: the object's reference
+ * count is 1, so no script, no other engine value and none of the
+ * binding's own holders, a view or a queued record, holds it). The
+ * nodes of the rest go to `out`, up to `cap` of them; the answer is how
+ * many there were. Each wrapper holds its node (os64_html_hold) for as
+ * long as it is on the registry.
+ * Also the live collections' records: `collections`, of which
+ * `collections_script` are the script's (made for one call, not kept by
+ * a record), and `collections_dead`, the script's whose objects are gone
+ * and that wait to be freed with their holds. */
+typedef struct {
+    size_t wrappers, connected, elsewhere, elsewhere_only_ours;
+    size_t collections, collections_script, collections_dead;
+} os64_dom_wrappers_t;
+size_t os64_dom_wrappers(const os64_dom_t *dom, const os64_html_node_t **out, size_t cap, os64_dom_wrappers_t *counts);
 /* WHAT os64_dom_bytes HOLDS, by kind (MEMORY_CENSUS.md § 4): every block
  * the binding charges carries the kind of thing it was made for, and these
  * are the live bytes, live blocks and blocks ever made of each. The kinds
@@ -1134,6 +1174,32 @@ os64_dom_handler_mask_t os64_dom_handler_bit(const char *type);
  * while any are, and fire runs them as its one task. */
 uint64_t os64_dom_timer_next(const os64_dom_t *dom);
 bool os64_dom_timer_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outcome);
+/* Timers by where they were set, for the host's record of what each costs.
+ * With the sites on, setTimeout and setInterval remember the function that
+ * called them, by its name and where it was defined (a script's address,
+ * or "the page" for an inline script's, or the engine's own name for code
+ * that has neither, such as eval's; a native caller is "[native]"; then the
+ * line and column): the first OS64_DOM_TIMER_SITES distinct ones each by
+ * itself, any after them as one past the table. Off (the default) they
+ * remember nothing and cost nothing. os64_dom_timer_site says the site of
+ * the timer os64_dom_timer_fire ran last, as text that lives until the
+ * sites are turned off or the table is let go (the dom freed, or its
+ * timers dropped at departure, which leaves the sites off): NULL when the
+ * last fire ran no timer (reactions, or nothing due), or ran one set while
+ * the sites were off, or one the binding set for itself. Owner thread,
+ * between tasks. */
+#define OS64_DOM_TIMER_SITES 64
+#define OS64_DOM_TIMER_SITE_TEXT 200
+bool os64_dom_timer_sites(os64_dom_t *dom, bool on);
+const char *os64_dom_timer_site(const os64_dom_t *dom);
+/* The timers live now, and the timers armed while the sites were on (each
+ * set, and each interval's re-arm before its callback) with the entries of
+ * the due-ordered list those arms walked past to find their place: what
+ * keeping the list in order costs as it grows. Zeroed for NULL. */
+typedef struct {
+    uint64_t live, arms, walked;
+} os64_dom_timer_counts_t;
+void os64_dom_timer_counts(const os64_dom_t *dom, os64_dom_timer_counts_t *out);
 
 /* CUSTOM ELEMENT REACTIONS AND MUTATION RECORDS OWED
  * (docs/design/pending/CUSTOM_ELEMENTS.md, decision 6). A change made
@@ -1535,8 +1601,8 @@ bool os64_dom_script_ended(os64_dom_t *dom, const char *name, os64_js_outcome_t 
  * rules (type, else language, the sixteen JavaScript MIME essences, module,
  * importmap);
  * it reads attributes only and works without a binding. start marks a script
- * ALREADY STARTED: 1 when it was not, 0 when it was, -1 when the binding
- * could not record it. A script parsed by innerHTML, or copied from a started
+ * ALREADY STARTED: 1 when it was not, 0 when it was, -1 for no binding or a
+ * node not of its document. A script parsed by innerHTML, or copied from a started
  * one, is born started; a started script never runs again wherever it moves. */
 os64_dom_script_kind_t os64_dom_script_kind(const os64_html_node_t *node);
 int os64_dom_script_start(os64_dom_t *dom, const os64_html_node_t *node);

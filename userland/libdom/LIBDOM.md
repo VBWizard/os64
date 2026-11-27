@@ -606,6 +606,19 @@ together fire in the order they were set. An interval is re-armed before its
 callback runs, so a callback that clears its own interval wins; a callback
 that clears the timer that is running finishes running.
 
+For the host's record of what each timer costs, `os64_dom_timer_sites` asks
+setTimeout and setInterval to remember the function that called them: its
+name and where it is defined (a script's address, `the page` for an inline
+one, or the engine's own name for code with neither, such as eval's; a
+native caller is `[native]`), the first `OS64_DOM_TIMER_SITES` distinct ones
+each by itself and any after them as one past the table.
+`os64_dom_timer_site` says the site of the timer the last fire ran. Off,
+the default, nothing is remembered; dropping the timers at departure lets
+the table go too, and leaves the sites off. `os64_dom_timer_counts` says the
+timers live and, while the sites are on, the timers armed (each set, and
+each interval's re-arm) with the entries of the due-ordered list those arms
+walked past: what keeping the list in order costs as it grows.
+
 Native hosts can opt into checked timer settings by creating the cluster with
 `os64_dom_cluster_create_with_timer_settings` before runtime execution. Callable
 conversion captures its incumbent before delay conversion; delivery separately

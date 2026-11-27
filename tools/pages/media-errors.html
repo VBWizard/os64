@@ -1,0 +1,26 @@
+<!doctype html><html><head><title>media errors</title><style>
+body{margin:0;font:14px sans-serif;background:#fff}
+video,audio{display:block;margin:6px;width:240px;height:60px;background:#222}
+</style></head><body>
+<!-- Each element fails in its own way, and the page's record and the
+     console say why (FAILED media). Serve with tools/pages_serve.py, which
+     answers ?status= and ?truncate=, and open from the guest as
+     http://10.0.2.2:8731/media-errors.html:
+     video 1: the server refuses it (403);
+     video 2: the server answers a page, not media;
+     video 3: an MP4 cut before its index (at its end), so it has none;
+     audio 1: an MP3 that is not there (404);
+     audio 2: a WAV cut inside its header. -->
+<video id=v1 src="video-tiny.mp4?status=403" preload=auto></video>
+<video id=v2 src="media-errors.html" preload=auto></video>
+<video id=v3 src="video-tiny.mp4?truncate=10000" preload=auto></video>
+<audio id=a1 src="audio-tone.mp3?status=404" preload=auto></audio>
+<audio id=a2 src="audio-tone.wav?truncate=30" preload=auto></audio>
+<p id=said></p>
+<script>
+for (const e of document.querySelectorAll('video,audio'))
+  e.addEventListener('error', () => {
+    document.getElementById('said').textContent += e.id + ' ' + e.error.code + ' ' + e.error.message + '; ';
+  });
+</script>
+</body></html>

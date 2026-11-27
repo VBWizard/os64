@@ -26,7 +26,8 @@ static const char *const kBoxes[] = {"content-box", "border-box", "device-pixel-
 typedef struct DRTarget {
     struct DRTarget *prev, *next, *bucket_next;
     struct DRObserver *observer;
-    const os64_html_node_t *node;   /* held */
+    const os64_html_node_t *node;   /* held, with its wrapper (HOLDERS) */
+    JSValue wrapper;
     uint8_t box;
     /* The last reported size of the observed box: (-1, -1) before the
      * first report. */
@@ -121,6 +122,7 @@ static void target_remove(os64_dom_t *dom, DRTarget *t)
     s->observed--;
     if (t->last[0] < 0) s->owed--;
     os64_html_release(dom->document, t->node);
+    JS_FreeValueRT(dom->engine, t->wrapper);
     d_free(dom, t);
 }
 
@@ -635,6 +637,7 @@ static JSValue observer_member(JSContext *ctx, JSValueConst self, int argc, JSVa
     }
     *t = (DRTarget){.observer = o, .node = target, .box = box, .last = {-1, -1}, .prev = o->targets_last};
     os64_html_hold(dom->document, target);
+    t->wrapper = d_holder_take(dom, target);
     size_t b = node_bucket(target);
     t->bucket_next = s->buckets[b];
     s->buckets[b] = t;
@@ -732,6 +735,12 @@ void d_resizes_drain(os64_dom_t *dom)
 {
     struct DResizes *s = dom->resizes;
     if (s == NULL) return;
+    /* The targets' wrappers go now: the records outlive the engine. */
+    for (DRObserver *o = s->observers; o != NULL; o = o->next)
+        for (DRTarget *t = o->targets; t != NULL; t = t->next) {
+            JS_FreeValueRT(dom->engine, t->wrapper);
+            t->wrapper = JS_UNDEFINED;
+        }
     for (DRObserver *o = s->observers; o != NULL; o = o->next)
         if (o->held) {
             o->held = false;

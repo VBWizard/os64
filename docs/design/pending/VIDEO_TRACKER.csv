@@ -29,4 +29,8 @@ V.6.2,"The poster",V.6.1,doing,,"VIDEO_V6_DESIGN.md § 3; VIDEO.md § 8 (poster,
 V.6.3,"Controls over the picture, hiding when idle",V.6.2,todo,,"VIDEO_V6_DESIGN.md § 2; Chris: the P5"
 V.6.4,"The video page: a link straight to a video plays it on a page of its own",V.6.3,todo,,"Chris: the P5, short"
 V.7,"V7. Visibility, the budget for many videos, the muted-clip debt",V.5 Q5 Q6 Q7,todo,,
-V.8,V8. Full screen,V.5 Q4,todo,,
+V.7.1,"A frame paints from the picture up: a paint wholly inside an opaque video picture drawn plain draws nothing beneath it",V.5,done,#698,"VIDEO.md § 5, The paint beneath the picture. Measured on the P5 2026-11-21: 157 of 183 paints were the video box, ~270 ms each, ~1 ms of it the frame. Before it, in the same branch: the record's paint effects, and the blur's columns in strips (bit-identical, 2.4x on the host)"
+V.8,V8. Full screen,V.5 Q4,review,,"VIDEO.md § 9; the design state is in the kit (FULL_SCREEN_DESIGN_STATE.md), Chris's four rulings 2026-11-26"
+V.8.1,"The window manager's full-screen call and Ctrl+Alt+F, the black edge, gplay's f, the converted frames given back",V.8,done,#758,"VIDEO.md § 9, As built (V8 slice 1); /tests/fullscreentest"
+V.8.2,"libdom's Fullscreen API and yonder obeying it",V.8.1,doing,#764,"VIDEO.md § 9, As built (V8 slice 2); tools/pages/fullscreen*.html"
+V.8.3,"The player widget's full-screen button, and what 1 and 2 booked",V.8.2,todo,,

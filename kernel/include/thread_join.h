@@ -44,11 +44,12 @@ typedef struct thread_join
 
 // Create a ring-3 thread in `task` that starts at `entry` with `arg` in
 // RDI, and whose function-return lands on `exit_stub` (a userland address
-// — libos64 supplies it; see the ABI note in syscall_numbers.h). Returns
+// — libos64 supplies it; see the ABI note in syscall_numbers.h), named
+// `name` (a kernel copy os64_thread_name_valid takes, or NULL). Returns
 // the join object, or NULL. The thread is submitted to the scheduler
 // before this returns, so it may already be running.
 thread_join_t* thread_join_create(void* task, uint64_t entry, uint64_t arg,
-                                  uint64_t exit_stub);
+                                  uint64_t exit_stub, const char* name);
 
 // Called by the exiting thread (from the thread_exit syscall): records the
 // answer, wakes any reader, and drops the thread's reference.

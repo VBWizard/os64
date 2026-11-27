@@ -1,0 +1,35 @@
+# WPT's css/selectors in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh css/selectors --update
+# rewrites [passing].
+[required]
+[excluded]
+[passing]
+has-matches-to-uninserted-elements.html	:has(*) matches expectedly
+has-matches-to-uninserted-elements.html	:has(+ *) matches expectedly
+has-matches-to-uninserted-elements.html	:has(+ direct_sibling) matches expectedly
+has-matches-to-uninserted-elements.html	:has(+ indirect_sibling) matches expectedly
+has-matches-to-uninserted-elements.html	:has(> *) matches expectedly
+has-matches-to-uninserted-elements.html	:has(> child) matches expectedly
+has-matches-to-uninserted-elements.html	:has(> descendant) matches expectedly
+has-matches-to-uninserted-elements.html	:has(child) matches expectedly
+has-matches-to-uninserted-elements.html	:has(descendant) matches expectedly
+has-matches-to-uninserted-elements.html	:has(~ *) matches expectedly
+has-matches-to-uninserted-elements.html	:has(~ direct_sibling) matches expectedly
+has-matches-to-uninserted-elements.html	:has(~ indirect_sibling) matches expectedly
+has-where-computed.html	getComputedStyle()
+invalidation/empty-pseudo-in-has-display-none.html	:not(:empty) - Hidden after clearing text from #child2
+invalidation/empty-pseudo-in-has-display-none.html	:not(:empty) - Hidden after removing all children from #child2
+invalidation/empty-pseudo-in-has-display-none.html	:not(:empty) - Initially hidden because #child2 is :empty
+invalidation/empty-pseudo-in-has-display-none.html	:not(:empty) - Visible after inserting element into #child2
+invalidation/empty-pseudo-in-has-display-none.html	:not(:empty) - Visible after inserting text into #child2
+invalidation/empty-pseudo-in-has-display-none.html	:not(:empty) - Visible again after inserting text into #child2
+invalidation/empty-pseudo-in-has-display-none.html	Hidden after inserting empty element into #child
+invalidation/empty-pseudo-in-has-display-none.html	Hidden again after clearing text from #child
+invalidation/empty-pseudo-in-has-display-none.html	Hidden again after removing all children from #child
+invalidation/empty-pseudo-in-has-display-none.html	Initially hidden because #child is :empty
+invalidation/empty-pseudo-in-has-display-none.html	Visible after inserting non-empty element into #child
+invalidation/empty-pseudo-in-has-display-none.html	Visible after inserting text into #child
+invalidation/empty-pseudo-in-has-display-none.html	Visible after inserting text into empty #child
+invalidation/empty-pseudo-in-has-display-none.html	Visible again after inserting text into empty #child
+parsing/parse-has-disallow-nesting-has-inside-has.html	CSS Selectors: The relational pseudo-class (disallow nesting :has() inside :has())

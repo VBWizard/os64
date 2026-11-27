@@ -1,0 +1,47 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>A video while the page's script holds its thread</title>
+<!--
+  VIDEO_PLANE.md § 5, P3's proof: yonder's page thread runs the page's
+  script and paints the page; a video on its plane is shown by its
+  player's own thread, so a script that holds the page's thread for
+  seconds holds the picture not at all. With `--plane=off` (or
+  `planes = off` in yonder.conf) the page paints the picture, and it stands
+  still for as long as the script holds.
+
+  The video plays muted and loops, with nothing drawn over it. Three
+  seconds after the page loads, and every ten seconds after that, a script
+  holds the thread for three seconds; the line under the video says when.
+  "Hold now" does it at once. Add `?every=0` to the address for no timed
+  holds.
+
+  What to read: `--video-rate=1` lines (on its plane `scr`, the pictures
+  that reached the screen a second, stays near 30 and `gap` near a frame
+  through a hold; with `--plane=off` the hold's line falls to a few a second
+  and a gap of three seconds), or the record's video line (Ctrl+Shift+D):
+  time placed, the moves, the page's paints of its clip while placed, and
+  what reached the screen.
+-->
+<style>
+  body { font: 16px sans-serif; margin: 16px; background: #223; color: #ddd; }
+  video { display: block; width: 480px; background: #000; }
+</style>
+<h1>A video while the page's script holds its thread</h1>
+<video id="v" src="bbb-480p-3s-av.mp4" autoplay muted loop></video>
+<p><input type="button" id="hold" value="Hold now"> <span id="state">free</span></p>
+<script>
+  const state = document.getElementById('state');
+  let holds = 0;
+  function hold() {
+    holds++;
+    state.textContent = 'holding (' + holds + ')';
+    const until = Date.now() + 3000;
+    while (Date.now() < until) { }
+    state.textContent = 'free after ' + holds + ' holds';
+  }
+  document.getElementById('hold').addEventListener('click', hold);
+  const every = Number(new URLSearchParams(location.search).get('every') ?? 10);
+  if (every > 0) {
+    setTimeout(function timed() { hold(); setTimeout(timed, every * 1000); }, 3000);
+  }
+</script>

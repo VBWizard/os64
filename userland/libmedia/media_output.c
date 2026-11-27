@@ -930,7 +930,7 @@ int os64_media_output_create(os64_media_output_t **out)
         os64_free(o);
         return OS64_MEDIA_NO_MEMORY;
     }
-    o->thread = os64_thread_or_nothing(audio_main, o);
+    o->thread = os64_thread_named(audio_main, o, "audio-out");
     if (o->thread < 0) {
         // audio_main never runs (os64/thread.h): nothing to wait for.
         os64_bell_close(&o->bell);
@@ -957,6 +957,7 @@ int os64_media_output_destroy(os64_media_output_t *o)
     (void)os64_bell_ring(&o->bell);
     os64_lock_release(&o->lock);
     (void)os64_thread_join((int32_t)o->thread, NULL);
+    os64_close((int32_t)o->thread);   // a join only reads the handle
     os64_bell_close(&o->bell);
     os64_free(o->buf);
     os64_free(o->carry);

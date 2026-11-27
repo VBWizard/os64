@@ -268,6 +268,19 @@ static inline bool f_anchors(const flow_style_t *s, bool root, bool fixed)
     return fixed ? f_contains_fixed(s) : f_contains_absolute(s);
 }
 
+// THE TOP LAYER (Fullscreen § 4, CSS Position 4 § 2): an element other
+// than the root that libhtml marks full screen. Its containing block is
+// the initial one whatever its ancestors are, so no transform, filter,
+// position or overflow of theirs anchors it, moves it or clips it: its box
+// is filed with the initial containing block's (boxes.c), and style.c's
+// user-agent rules make it fill the view. Nor does an ancestor's
+// `opacity: 0` leave it unpainted (FStyled.transparent).
+static inline bool f_top_layer(const os64_html_node_t *n)
+{
+    return n != NULL && n->kind == OS64_HTML_ELEMENT && (n->state & OS64_HTML_STATE_FULLSCREEN) != 0 &&
+           !(n->parent != NULL && n->parent->kind == OS64_HTML_DOCUMENT);
+}
+
 // ── Storage ─────────────────────────────────────────────────────────────
 //
 // Everything a layout builds lives until the layout is freed and is never
@@ -493,6 +506,19 @@ typedef struct {
     double edge, at;
 } FMotion;
 
+// Whether an animation is held: paused, or at a playback rate of 0, by a
+// script effect's own clock or a CSS animation's record, which its play
+// state and a script's pause() both set (motion.c).
+bool f_motion_held(const FAnimation *an);
+
+// `prop` of `style`, a style of `element`'s other than its own (a resolved
+// keyframe's), as getComputedStyle writes it (computed.c) — reading the
+// element's own laid-out box where CSSOM resolves a value from one (a
+// size, an auto margin or inset), so only a property that takes the box
+// as no more than a percentage's reference is `style`'s own.
+size_t f_computed_text_of(const flow_tree_t *tree, const flow_env_t *env, const os64_html_node_t *element,
+                          const flow_style_t *style, int32_t prop, char *out, size_t cap);
+
 // What the lists an animated value makes come from — a transform's, the
 // shadows', a background's positions: NULL when none is left.
 typedef void *(*FAlloc)(void *ctx, size_t bytes);
@@ -662,10 +688,13 @@ typedef struct {
     // containing block. An absolute element's own containing block is its
     // PARENT's anchor. `fixed_anchor` is the same for a FIXED box: the
     // nearest transformed or filtered one (f_contains_fixed), whose box is
-    // its containing block in place of the viewport.
+    // its containing block in place of the viewport, never one outside the
+    // top layer. The top layer's own containing block is the initial one,
+    // whatever its parent's anchors (f_top_layer).
     const os64_html_node_t *anchor, *fixed_anchor;
     // `opacity: 0` on this element or an ancestor whose opacity is not
-    // animated: nothing of it is painted (flow_box_t.unpainted).
+    // animated, none past the top layer's element (f_top_layer): nothing of
+    // it is painted (flow_box_t.unpainted).
     bool transparent;
     // Its in-flow children are flex or grid items: it is a flex or grid
     // container, or it makes no box (`display: contents`) inside one. Pass
@@ -727,6 +756,14 @@ typedef struct {
     const flow_env_t *env;
     flow_env_t inputs;
     uint64_t cascade_generation, cascade_updates, reused;
+    // When asked (f_style_build_reusing's `compare`), against the previous
+    // tree's styles of the same document (`compared` when there were any),
+    // reusable or not: of the elements whose style
+    // came out different, outside an animation, how many differ only in
+    // paint (f_style_paint_only) and how many otherwise; an element the
+    // previous tree had not styled counts with the second.
+    bool compared;
+    uint64_t changed_paint, changed_layout;
     bool lists_refused;
     FArena arena;
     FMap map;               // element node -> FStyled
@@ -753,8 +790,11 @@ typedef struct {
 // differently (LAYOUT.md § Proof, the prefix rule).
 FStyles *f_style_build(const os64_html_document_t *doc, const os64_page_t *model,
                        const flow_env_t *env);
+// `compare`: count what came out different from `previous` (FStyles.
+// changed_paint), which costs a comparison an element and is wanted only
+// by a profile.
 FStyles *f_style_build_reusing(const os64_html_document_t *doc, const os64_page_t *model,
-                              const flow_env_t *env, const FStyles *previous);
+                              const flow_env_t *env, const FStyles *previous, bool compare);
 // NULL for a node with no style: not an element, or inside a
 // `display: none` subtree, which pass 1 does not descend into.
 const FStyled *f_style_of(const FStyles *styles, const os64_html_node_t *node);
@@ -778,6 +818,28 @@ bool f_style_numeric(const flow_env_t *env, flow_unit_t font, flow_unit_t root_f
 uint32_t f_style_colour(garb_color_t color);
 // Compare scalar and pointed-to style values, independent of their arenas.
 bool f_style_equal(const flow_style_t *a, const flow_style_t *b);
+// Whether two styles differ only in what the painter reads and placement
+// does not: colours, backgrounds, borders' colours, shadows, opacity,
+// visibility, outlines, decorations, blending, masks, the cursor, and a
+// transform or a filter changed while present on both sides (one coming or
+// going makes a containing block, which is placement's). No box's place
+// reads any of them, but a transform's value moves a scroller's reach and
+// the page's extent (reach_stacked), which a layout skipped for paint alone
+// would still owe. A field it does not name counts as placement's: the
+// answer errs toward "it moves".
+bool f_style_paint_only(const flow_style_t *a, const flow_style_t *b);
+// Whether two styles that are not paint-only (above) differ, past what the
+// painter reads, in their insets (`top`, `right`, `bottom`, `left`) alone.
+bool f_style_insets_only(const flow_style_t *a, const flow_style_t *b);
+// Where f_style_paint_only finds two styles differ, for the record: the
+// offset of the first byte of a field placement reads that differs, -1
+// when every such flat field agrees and a list differs, -2 when a
+// transform or a filter came or went.
+int64_t f_style_placement_byte(const flow_style_t *a, const flow_style_t *b);
+// Every list `s` points into, copied into `arena`, so that `s` no longer
+// points into the build it came from; false when the room or the lists'
+// budget ran out (part of `s` may then point into either).
+bool f_style_copy_lists(flow_style_t *s, FArena *arena);
 void f_style_free(FStyles *styles);
 // The styles pass 1 made for a tree, which live as long as it does.
 const FStyles *f_tree_styles(const flow_tree_t *tree);
@@ -1004,10 +1066,13 @@ struct FBox {
     // every level above it, and without the memo that is exponential.
     bool intrinsic_known;
     int64_t intrinsic_min, intrinsic_max;
-    // The def_h they were measured against (-2 before it was found): an
-    // inline picture's percentage height is of it, so a layout reusing an
-    // earlier one's widths must have measured with the same.
-    int64_t intrinsic_def;
+    // The heights its measure read, which a copy of them must find the same
+    // (intrinsic_heights_same): the definite height its line's percentages
+    // are of, and a block-level picture's containing block's; and the
+    // measure's number in its layout and the last number of the boxes it
+    // measured (`intrinsic_seq`, `intrinsic_end`), which say which boxes a
+    // measure of it measured with it (intrinsic_copy).
+    int64_t intrinsic_def, intrinsic_cbh;
     // The same two from its content alone, before a width or limit the page
     // gave overrides them (a picture's, its own width: replaced_own),
     // border box: what a row flex item's automatic minimum and content
@@ -1020,6 +1085,7 @@ struct FBox {
     // and a column item's automatic minimum and `flex-basis: content`, read.
     int64_t content_h;
     uint32_t intrinsic_computed;    // how often; the fuzz asserts at most once
+    uint32_t intrinsic_seq, intrinsic_end;
     // An out-of-flow box's static position (CSS 2.1 § 10.3.7): among
     // blocks, `static_known` says x and y hold it until the box is laid
     // out; among inline content it is the placeholder `place` on a line.
@@ -1151,9 +1217,34 @@ typedef struct {
     FBox *box;
     const FBox *old;
     size_t parent, subtree_count;
-    bool equal, ordinary;
-    flow_reuse_reason_t reason;
+    // `inner`: every box of the subtree may stand inside a copy (RELAYOUT_
+    // GRAFT.md § Roles inside a copy); `ordinary`: this box is in the flow
+    // among blocks and its subtree holds no out-of-flow box whose
+    // containing block is outside it. A flex or grid item may be ordinary
+    // and is still no root (the match's `item`, graft_try's `sized_later`).
+    bool equal, ordinary, inner;
+    // Inside: an atom's content made a float query in the space its line
+    // stands in, which a copy cannot answer.
+    bool atom_floats;
+    uint8_t reason;     // flow_reuse_reason_t
+    // The out-of-flow boxes of the subtree whose containing block is not in
+    // it; and those whose containing block is this box, counted as they are
+    // met below it and taken off here.
+    uint32_t escapes, cb_held;
+    // The role counter's, kept only when the layout is profiled
+    // (FReuseMatch.clock): whether it is equal and refused for a role; its
+    // box's own roles (a bit for each flow_role_t: what keeps the box from
+    // being a copy's root, and being an item); the roles of the boxes under
+    // it that keep them from standing inside a copy; whether a box above it
+    // is a candidate for a copy (`in_copy`), which takes it in; and the
+    // boxes under it a candidate takes in, its own included (`cand_boxes`).
+    // A candidate whose copy then misses is placed fresh, and its boxes are
+    // counted neither as refused for a role nor as taken in.
+    bool role_refused, in_copy;
+    uint16_t roles, roles_below;
+    size_t cand_boxes;
 } FReusePair;
+_Static_assert(sizeof(FReusePair) == 64, "review the pair's fields when it grows: a pair per box, every match");
 typedef struct { const void *from; void *to; } FReusePointer;
 typedef struct {
     FReusePair *pairs;
@@ -1162,8 +1253,16 @@ typedef struct {
     size_t count, capacity, nslots, pointer_slots, bytes, staging_left;
     flow_tree_t *tree;
     const flow_tree_t *previous;
+    // The layout profile's clock, given only when the layout is profiled:
+    // the role counter counts only then, and times its roots with it
+    // (block_at).
+    int64_t (*clock)(void *);
+    void *clock_ctx;
 } FReuseMatch;
 FReusePair *f_reuse_pair(const FReuseMatch *match, const FBox *box);
+// Whether `p` is a root of the role counter's: equal, refused for a role,
+// and its parent not (the outermost such); `*role` its class.
+bool f_reuse_role_root(const FReuseMatch *match, const FReusePair *p, flow_role_t *role);
 void *f_reuse_pointer(const FReuseMatch *match, const void *old);
 
 // ── Pass 3: lines and fragments (layout.c) ──────────────────────────────
@@ -1239,6 +1338,9 @@ typedef struct {
     os64_text_run_t **runs;
     size_t nruns, cap_runs;
     int64_t width, height;          // the page's, 26.6
+    // The page's extent from the flow alone, before the positioned boxes
+    // reached past it (page_extent): what f_layout_extent starts from.
+    int64_t flow_width, flow_height;
     // How many times an inline formatting context was measured: the cost
     // the harness holds to a linear bound (LAYOUT.md § Bounds).
     uint64_t measures, reused;
@@ -1285,6 +1387,18 @@ FLayout *f_layout_reusing(FBoxes *boxes, const os64_html_document_t *doc, const 
                           const flow_env_t *env, int32_t width, FReuseMatch *match,
                           flow_reuse_stats_t *stats);
 void f_layout_free(FLayout *layout);
+// What a box a kept restyle moved has moved since the layout, in 26.6
+// (flow.c's move, restyle.inc's keep_move).
+typedef struct {
+    int64_t dx, dy;
+} FMoved;
+// The page's extent worked out again from the layout's records with the
+// moved boxes where they moved to: the flow's extent, and each positioned
+// box's reach at its offset and its positioned ancestors' (`moved` answers
+// a node's, NULL for one that did not move). Written to the layout's
+// width and height. A moved box clips nothing and holds no clip, so the
+// clips that cut a positioned box's reach did not move.
+void f_layout_extent(FLayout *layout, const FMoved *(*moved)(void *ctx, const os64_html_node_t *node), void *ctx);
 
 // The most frames one sticky box's push may be worked from, itself, the
 // ones outside it and their scrollports' included. A sticky box past it is

@@ -145,7 +145,7 @@ hosts, read 11/07).*
 
 - **Threads.** `os64_thread(fn, arg)` (libos64 thread.c) is the one
   verb; a thread's stack is `THREAD_USER_STACK_SIZE`, 1 MiB, always:
-  the kernel's `user_stack` takes an `asked` size but the thread syscall
+  the kernel's `user_stack_frames` takes an `asked` size but the thread syscall
   passes 0 (thread_join.c `createThread(task, false, 0)`). yonder runs
   the window thread, the pool's workers (`os64_work`, work.c, started
   with `os64_thread`) and the ticker (ticker.c). SCRIPT_STACK.md gave the
@@ -211,7 +211,7 @@ SCRIPT_STACK.md measured. Two ways, in order of preference:
 
 - **The kernel lets a thread ask for its stack.** `SYSCALL_THREAD` gains a
   fourth argument, the stack size in bytes (0 = the default), carried to
-  `createThread`'s `userStack`, which `user_stack` already clamps to
+  `createThread`'s `userStack`, which `user_stack_frames` already clamps to
   [1 MiB, `THREAD_USER_STACK_MAX` 16 MiB] and falls back from when the
   allocation is refused, logging both sizes; libos64 gains
   `os64_thread_sized(fn, arg, stack_bytes)` beside `os64_thread`, which
@@ -232,7 +232,7 @@ SCRIPT_STACK.md measured. Two ways, in order of preference:
 
 The shipped build takes the first when the kernel has it and the second
 when it does not (an old kernel, a refused allocation): `os64_thread_sized`
-reports what the thread was given, as `user_stack` logs it.
+reports what the thread was given, as `user_stack_frames` logs it.
 
 ## Threads (yonder `worker.c`)
 
@@ -549,7 +549,7 @@ semantics, decided and told.
 
 1. **The kernel lets a thread ask for its stack** (§ The thread's stack):
    a fourth argument on `SYSCALL_THREAD`, `os64_thread_sized` in libos64,
-   `user_stack`'s existing clamp and fallback doing the rest. **Lean:
+   `user_stack_frames`'s existing clamp and fallback doing the rest. **Lean:
    yes, as W0's companion PR.** It is a dozen lines in a function that
    already has the parameter, it gives a worker the page's 2 MiB instead
    of half a megabyte, and it pays SCRIPT_STACK.md's "a spawned thread

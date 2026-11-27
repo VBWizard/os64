@@ -6,6 +6,8 @@
 #include "dlist.h"
 #include "thread.h"
 #include "spinlock.h"   // spinlock_t — the per-task signal-delivery lock
+#include "counted_lock.h"     // the mappings' lock (mapLock)
+#include "memory/maplist.h"   // the mappings' list (mmaps)
 #include "time.h"
 #include "env.h"
 #include "handle.h"
@@ -91,9 +93,9 @@
 // deleted here 2026-08-13: defined since the first OS, referenced by nothing
 // in the kernel or userland, and sitting squarely in the middle of the window
 // argv needed. A constant nobody reads is not an ABI, it is furniture.)
-// Task-specific memory allocation base addresses (lower half)
-#define USER_TASK_MEMORY_BASE   0x10000000  // 256MB - for user task allocations
-#define KERNEL_TASK_MEMORY_BASE 0x40000000  // 1GB - for kernel task allocations
+// Where ktask's lower-half draws begin (ktask_reserve_virt); they end below
+// TASK_ARGV_VIRT. Every other task's stacks come from its heap range.
+#define KERNEL_TASK_MEMORY_BASE 0x40000000
 #define STDIN (void*)0
 #define STDOUT (void*)1
 #define STDERR (void*)2
@@ -222,7 +224,23 @@
         // name, but two of the three sites already held this one and a second
         // lock is a second ordering to get wrong.
         spinlock_t signalLock;
+        // The heap range's bounds. heapEnd is the next address the range
+        // hands out and only ever advances; task_va_reserve is the one door
+        // that moves it, so two threads never claim one range. The range
+        // holds the task's mappings and its threads' stacks: stackBytes and
+        // stackRanges count the ranges taken for stacks, guards included (a
+        // range taken for a thread then refused still counts: it is never
+        // handed out again).
         uint64_t heapStart, heapEnd;
+        uint64_t stackBytes, stackRanges;
+        // Its threads handed to the reap list and not yet released
+        // (reaplist.h): a hint read without the list's lock, which
+        // syscall_thread waits on (thread_reap.c).
+        reap_owner_t reaps;
+        // The task's planes' pairs of stores, in use or kept (gui/plane.c,
+        // the GUI's own type): written only by the GUI under kGuiLock, given
+        // back at the task's death with its windows.
+        struct plane_store *planeStores;
         // WHERE THIS TASK'S malloc PUBLISHES ITS REPORT (SYSCALL_HEAP_REPORT,
         // 2026-08-15). A USER virtual address, valid only under this task's own
         // page tables — the kernel stores it and touches it in exactly one
@@ -318,7 +336,34 @@
         uint32_t argvPages;
         struct rusage usage;
         void* stdin, *stdout, *stderr;        //standard input/output/error pointers
-        dlist_t* mmaps;
+        // The task's mappings (memory/vma.h's doors; MAPPING_LIST.md), and
+        // the lock every read and write of them takes: a leaf, irqsave,
+        // held for a walk, counted for /proc/<id>/status. A mapping handed
+        // out of the lock carries a hold and is freed at its last release
+        // once delisted; burial takes them all at once.
+        maplist_t mmaps;
+        counted_lock_t mapLock;
+        // Pages of syscall ranges the page table vouched for without a walk
+        // of the list (user_range_accessible), counted atomically; where the
+        // last /proc read left the count, written under mapLock.
+        uint64_t tableAnswers, tableAnswersRead;
+        // THE TASK'S PAGE LOCK: what serializes writes to this task's leaf
+        // page-table entries inside its mappings and its threads' stacks
+        // (task_stack_map and task_stack_unmap, a page a hold). A fault installs a page
+        // under it, after rechecking that its mapping is still listed;
+        // unmap, having delisted the mapping first, walks and removes each
+        // page under it. So a page is either installed before unmap's walk
+        // of it (and unmap frees it) or not at all. Irqsave, as mapLock is:
+        // a holder preempted with a sibling spinning on it from a fault on
+        // the same CPU would never get the CPU back. Its hold is one page's
+        // walk and one store, plus whatever table pages the store draws
+        // (the allocator's locks, taken under it). Order: signalLock, then
+        // pageLock, then mapLock. Nothing under it touches user memory
+        // through a user address.
+        // IT RESTS ON ONE TASK, ONE ADDRESS SPACE: the lock is per task
+        // because the page tables are. The day two tasks share a PML4, this
+        // lock no longer serializes that PML4's writers and is wrong.
+        counted_lock_t pageLock;
         int errno;
         char* cwd;                              //Current working directory for the process
         void* startHandler[TASK_MAX_EXIT_HANDLERS];
@@ -347,18 +392,23 @@
 		// Set in task_initialize, cleared at task_create's every exit.
 		uint64_t *pta_buildingChildPml4v;
 		struct arena *pta_buildingChildArena;
-		uintptr_t taskMemoryNextVirt;  // Next available virtual address for task-specific allocations
 		dlist_t* shared_objects;       // shared_object_t* this task depends on (dynamic linking, bookkeeping only — see shared_object.c)
-		// The per-task handle table (handle.h). Handles 0/1/2 are stdin/stdout/
-		// stderr and start out wired to the console; the shell redirects them to
-		// pipe ends when it builds a pipeline. The legacy void* stdin/stdout/
-		// stderr fields above are the OLD (unused) placeholders from the first
-		// OS — this array is the real thing.
-		handle_t handles[TASK_MAX_HANDLES];
+		// The per-task handle table (handle.h; handle_blocks.h says how a
+		// number finds its entry). Handles 0/1/2 are stdin/stdout/stderr and
+		// start out wired to the console; the shell redirects them to pipe
+		// ends when it builds a pipeline. The legacy void* stdin/stdout/stderr
+		// fields above are the OLD (unused) placeholders from the first OS.
+		// `handles` is block 0, the task's own; `handleBlocks` are the blocks
+		// added as the task needed them, NULL until then, each installed once
+		// under handleLock and freed only by task_destroy.
+		handle_t handles[OS64_TASK_HANDLES];
+		handle_t *handleBlocks[TASK_HANDLE_BLOCKS];
+		handle_counts_t handleCounts;
 		// Makes a handle's resolve-and-reference one operation against a
-		// sibling's close (handle.c § The pin). Held for a few instructions
-		// by handle_pin and by handle_close's claim, never across a park or
-		// a release; the object's own lock nests INSIDE it, never outside.
+		// sibling's close (handle.c § The pin), and orders a block's install
+		// against teardown's walk (handle.c § The blocks). Held for a few
+		// instructions, never across a park, a release or an allocation; the
+		// object's own lock nests INSIDE it, never outside.
 		spinlock_t handleLock;
 		// The controlling terminal (tty.h): which virtual terminal this task
 		// reads, writes, and answers Ctrl+C on. Inherited from the parent at
@@ -420,6 +470,15 @@
     void task_hold(task_t *task);
     void task_release(task_t *task);
 
+    // THE ONE DOOR FOR A TASK'S HEAP ADDRESS RANGE: claims `bytes` (whole
+    // pages) at the task's heapEnd and one guard page past them, atomically,
+    // so threads of one task mapping and creating windows at once never get
+    // the same range. Addresses are never handed out twice (a stale pointer
+    // into a released range always faults). False, with nothing claimed,
+    // for a size that is zero or not whole pages, or a range that would
+    // reach TASK_HEAP_END.
+    bool task_va_reserve(task_t *task, uint64_t bytes, uintptr_t *base);
+
 		task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bool isKernelTask, uint64_t pinnedCPU);
 	// Like task_create, with a failure verdict: -1 or OS64_SPAWN_TOO_LONG.
 	// The verdict covers interpreter-rewritten arguments before construction.
@@ -465,12 +524,26 @@
 	// unburied. Returns how many were written.
 	uint32_t task_lineage(task_t* task, uint64_t* out, uint32_t cap);
 	int task_reap_eligible_zombies(size_t max_to_reap);
-	void* task_alloc_aligned(task_t* task, size_t size);
-	void* task_alloc_guarded_stack(task_t* task, size_t stackSize, bool isRing3);
-	// The same, for a stack the caller can do without: NULL when the frames
-	// are not there, where task_alloc_guarded_stack panics (SCRIPT_STACK.md).
-	void* task_try_guarded_stack(task_t* task, size_t stackSize, bool isRing3);
-	uintptr_t task_reserve_task_virt(task_t* task, size_t size);
+	// A stack, in three steps (task.c § Stacks), so that a thread that cannot
+	// be made leaves nothing mapped behind it.
+	// The frames for `usable` bytes (whole pages): their physical address, or
+	// 0 with `mayRefuse` when they are not there (without it, a panic).
+	uintptr_t task_stack_frames(size_t usable, bool mayRefuse);
+	// A range for the stack and its guards, from task_va_reserve (from
+	// ktask_reserve_virt for ktask), counted in the task's stack totals.
+	// `base` is the stack's lowest usable byte. False, with nothing taken,
+	// when the range is out of addresses.
+	bool task_stack_reserve(task_t* task, size_t usable, uintptr_t* base);
+	// The frames mapped at `base`, under the task's page lock.
+	void task_stack_map(task_t* task, uintptr_t base, uintptr_t phys, size_t usable, bool ring3);
+	// Out of the task's tables, under its page lock. The frames stay
+	// allocated: the caller frees them once no CPU can hold a translation.
+	void task_stack_unmap(task_t* task, uintptr_t base, size_t usable);
+	// ktask's lower-half addresses: ktask runs on kKernelPML4, which has no
+	// heap range of its own. Whole pages below TASK_ARGV_VIRT, never handed
+	// out twice; 0 for any other task, a size that is not whole pages, or a
+	// range that would reach TASK_ARGV_VIRT.
+	uintptr_t ktask_reserve_virt(task_t* task, size_t size);
 
 	// OR a signal bit into EVERY thread this task owns — unless the signal's
 	// default is IGNORE and the task has no handler for it, in which case

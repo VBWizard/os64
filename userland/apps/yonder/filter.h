@@ -31,18 +31,33 @@ void yonder_layer_recover(const yonder_sheets_t *s, uint32_t *out);
 // list `f` of `n`.
 size_t yonder_filter_work_bytes(int32_t w, int32_t h, const flow_filter_t *f, int32_t n);
 
+// How much farther than flow_filter_list_reach the list's blurs read
+// round a pixel, on every side: a blur made on a reduced copy (filter.c
+// § A large blur) reads past three boxes' reach. A layer cut to what is
+// painted is cut this much wider, so each pixel shown reads only pixels
+// painted. 0 for a list holding a URL.
+int32_t yonder_filter_reads_more(const flow_filter_t *f, int32_t n);
+
+// The reduction a shadow blur radius `blur` (flow.h's) is made at: 1 for
+// full size, else 2, 4 or 8 — for the record.
+int32_t yonder_filter_reduction(int32_t blur);
+
 // Each function of `f` (n of them) over the layer in order (Filter Effects
 // 1 § 13), each result clamped before the next, as each is its own filter
 // primitive. The colour functions work on the colour unpremultiplied; a
 // blur and a drop shadow's blur are three box blurs of radius blur / 2
-// each (flow_filter_t.shadow), as a box shadow's are, held at
-// FLOW_FILTER_BLUR_MAX, reading nothing past the layer; a drop shadow is
-// the layer's coverage blurred, moved by its offsets and laid under the
+// each (flow_filter_t.shadow), held at FLOW_FILTER_BLUR_MAX, reading
+// nothing past the layer — a large one made on a reduced copy to within
+// filter.c § A large blur's contract of them (2 of 255 where the content
+// stays a reach inside the layer, 6 beside a cut edge), its squares counted from
+// `grid`, where the layer's first pixel lies from the group's own origin,
+// so the result does not depend on where the layer was cut; a drop shadow
+// is the layer's coverage blurred, moved by its offsets and laid under the
 // layer in its colour — `current` for one in currentColor. `work` holds
 // yonder_filter_work_bytes. A URL draws the list unfiltered: the caller's
 // to have refused (FILTER.md § 2).
 void yonder_filter_run(uint32_t *px, int32_t w, int32_t h, const flow_filter_t *f, int32_t n,
-                       uint32_t current, void *work);
+                       uint32_t current, flow_point_t grid, void *work);
 
 // The layer laid over `dst` (`pitch` pixels a row, 0x..RRGGBB, opaque):
 // layer pixel (i, j) onto dst's (i + dx, j + dy), only inside `clip`

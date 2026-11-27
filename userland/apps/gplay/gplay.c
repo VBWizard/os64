@@ -1,22 +1,29 @@
 // gplay — play a video file in a window, picture and sound in step.
 //
-//     gplay film.mp4                 play it; q or Escape leaves
+//     gplay film.mp4                 play it; q leaves, and so does Escape
+//                                    when the window is not full screen
 //     gplay --exit-at-end film.mp4   and leave when it has played
 //     gplay --maximized film.mp4     start with the window maximised
+//     gplay --full-screen film.mp4   start full screen
+//     gplay --no-plane film.mp4      paint every picture in the window,
+//                                    asking the player for no plane
 //
 // For tests (/tests/gplaytest): --check plays to the end and judges the
-// counts (exit 3 when one is wrong), and with --expect-refusal also that the
+// counts (exit 3 when one is wrong), the plane among them (on to the end, or
+// none with --no-plane), and with --expect-refusal also that the
 // device was refused and then regained; --cover opens a window of its own over
 // the whole screen, so gplay's is answered no frames; --script "ms:action,..."
 // performs keys at times from the start (pause, back, forward, backfar,
-// forwardfar, mute, louder, softer, later, earlier, readout, quit, or
-// resize=WxH).
+// forwardfar, mute, louder, softer, later, earlier, readout, fullscreen,
+// escape, quit, or resize=WxH).
 //
 // Keys: space pauses and resumes; left and right seek five seconds, with
 // Shift a minute (presses while a seek is under way count from its target);
 // m mutes; up and down move /dev/volume; [ and ] move the sound against the
 // picture by 10 ms (the sync dial, shown in the readout, not saved); i
-// shows the readout over the picture; q or Escape leaves. The headphones'
+// shows the readout over the picture; f, or a double-click on the picture,
+// goes full screen and back; Escape leaves full screen, and gplay when it is
+// not full screen; q leaves. The headphones'
 // buttons (/dev/mediakeys): Play and Pause toggle, Previous goes to the
 // start, Stop leaves. Every number the readout shows prints at exit.
 //
@@ -26,11 +33,22 @@
 // the canvas, the keys, the title and the readout. VIDEO.md § 3 is the
 // design.
 //
-// THE THREADS. main: the window, the frame requests, and at each frame
-// answer the player's picture for that blank; every player call. keys: the
-// media-key session and a --script's timed actions, handed to main through
-// the window's doorbell. The app's lock guards only what the two share (the
-// actions, whether it is playing).
+// ON A PLANE (VIDEO_PLANE.md § 6), which gplay asks the player for first
+// unless given --no-plane: the player's show thread publishes every picture
+// to a plane of the window, and main paints the window only when something
+// but the picture changes: black bars opaque and the picture's rectangle
+// see-through, placed with the plane in one publish once the plane is READY
+// for that size; the readout an overlay rectangle over it; a new size by
+// painting the video itself (`shown`) and hiding the plane until it is
+// ready again. With no plane (not asked, refused, or ended) it is the
+// window that paints every picture, as below.
+//
+// THE THREADS. main: the window, and without a plane the frame requests and
+// at each frame answer the player's picture for that blank (on a plane it
+// asks for frames only while the readout shows, to refresh it); every player
+// call. keys: the media-key session and a --script's timed actions, handed
+// to main through the window's doorbell. The app's lock guards only what
+// the two share (the actions, whether it is playing).
 //
 // Exit codes: 0 played (or left); 1 usage, or no desktop on this boot; 2 the
 // file would not open, has no picture, or is not media; 3 the media failed
@@ -55,6 +73,18 @@
 #define SYNC_STEP ((int64_t)RATE / 100)   // 10 ms (signed: it is negated)
 #define MARGIN 48                         // the first window leaves this much of the screen
 #define ACTIONS 16
+#define DOUBLE_CLICK_US 400000            // two left presses this close are a double-click
+#define READOUT_LINES 9                   // what readout_lines writes at most
+#define READOUT_CHARS 96                  // a line's buffer, its NUL included
+// Over a placed plane the readout is an overlay rectangle, and the kernel
+// refuses a publish whose overlays blend more than GUI_PLANE_OVERLAY_PIXELS
+// (kernel/include/gui/plane.h, VIDEO_PLANE.md § 3.3): the widest box the
+// readout can make must stay inside it, or every refresh would be refused.
+// This is the readout's own bound, well under the kernel's, which it does
+// not need to follow up.
+#define READOUT_OVERLAY_BUDGET 131072u
+_Static_assert((READOUT_CHARS - 1) * 8 * READOUT_LINES * 16 <= READOUT_OVERLAY_BUDGET,
+               "the readout's widest box outgrows a plane's overlay budget");
 #define OPEN_WAIT_MS 30000                // a probe that says nothing for this long fails the open
 #define TAIL_WAIT_MS 1000                 // at the end, the sound still in the device plays out this long
 
@@ -85,7 +115,7 @@ typedef struct {
     uint64_t display_missed, last_frame_number;
 } app_t;
 
-static bool s_exit_at_end, s_check, s_cover, s_maximized, s_expect_refusal;
+static bool s_exit_at_end, s_check, s_cover, s_maximized, s_full_screen, s_expect_refusal, s_no_plane;
 static const char *s_script;
 
 static int64_t now_us(void)
@@ -147,6 +177,7 @@ static bool script_step(const char **cursor, int64_t *ms, action_t *a)
         {"backfar", GPLAY_KEY_BACK_FAR}, {"forwardfar", GPLAY_KEY_FORWARD_FAR}, {"mute", GPLAY_KEY_MUTE},
         {"louder", GPLAY_KEY_LOUDER}, {"softer", GPLAY_KEY_SOFTER}, {"later", GPLAY_KEY_SOUND_LATER},
         {"earlier", GPLAY_KEY_SOUND_EARLIER}, {"readout", GPLAY_KEY_READOUT}, {"quit", GPLAY_KEY_QUIT},
+        {"fullscreen", GPLAY_KEY_FULL_SCREEN}, {"escape", GPLAY_KEY_ESCAPE},
     };
     *a = (action_t){GPLAY_KEY_NONE, 0, 0};
     if (len > 7 && os64_memcmp(word, "resize=", 7) == 0) {
@@ -227,10 +258,37 @@ typedef struct {
     bool dirty;                           // the canvas needs drawing and publishing
     bool poked;                           // the player said look: ask for a frame even while not playing
     uint8_t key_seq;                      // an arrow's burst, part read (gplay_key)
+    uint64_t click_us;                    // the last left press, for a double-click (0: none)
     os64_media_player_frame_t shown;      // the picture on the canvas (the player's pixels)
+    // On a plane: the show thread paces and main does no per-picture work.
+    bool plane;
+    bool placed;                          // the plane is placed in the last publish
+    gplay_rect_t hole;                    // the picture's rectangle in the content: the plane's place
+    uint32_t refresh;                     // frames since the readout was last painted over a plane
 } view_t;
 
-static void readout_lines(app_t *a, const os64_media_player_facts_t *f, char lines[][96], uint32_t *count)
+// The scaler's way for a readout (os64/media.h's OS64_MEDIA_SCALED_*).
+static const char *scaled_name(int way)
+{
+    switch (way) {
+    case OS64_MEDIA_SCALED_UNSCALED:      return "unscaled";
+    case OS64_MEDIA_SCALED_BILINEAR:      return "bilinear";
+    case OS64_MEDIA_SCALED_FAST_BILINEAR: return "fast bilinear";
+    default:                              return "none yet";
+    }
+}
+
+// A conversion's cost as "average/worst ms a picture", hundredths shown.
+static void conversion_text(const os64_media_player_conversion_t *c, char *out, size_t cap)
+{
+    uint64_t avg = c->count ? c->total_us / c->count : 0;
+    os64_snprintf(out, cap, "%lu.%02lu/%lu.%02lu ms", (unsigned long)(avg / 1000), (unsigned long)(avg % 1000 / 10),
+                  (unsigned long)(c->worst_us / 1000), (unsigned long)(c->worst_us % 1000 / 10));
+}
+
+// `placed`: whether gplay's last publish placed the plane.
+static void readout_lines(app_t *a, const os64_media_player_facts_t *f, bool placed, char lines[][READOUT_CHARS],
+                          uint32_t *count)
 {
     char t[16], len[16];
     gplay_time_text(f->position, t, sizeof(t));
@@ -239,23 +297,34 @@ static void readout_lines(app_t *a, const os64_media_player_facts_t *f, char lin
                                              "following", "starved", "still"};
     static const char *const pace_name[] = {"on time", "decoding late", "far behind"};
     uint32_t n = 0;
-    os64_snprintf(lines[n++], 96, "%s / %s  %s  clock %s, drift %ld ms", t, f->length >= 0 ? len : "?",
+    os64_snprintf(lines[n++], READOUT_CHARS, "%s / %s  %s  clock %s, drift %ld ms", t, f->length >= 0 ? len : "?",
                   kStateName[f->state], clock_name[f->clock_state], (long)(f->drift * 1000 / RATE));
-    os64_snprintf(lines[n++], 96, "pace %s, lead %ld ms", pace_name[f->pace.state],
+    os64_snprintf(lines[n++], READOUT_CHARS, "pace %s, lead %ld ms", pace_name[f->pace.state],
                   (long)(f->pace.lead * 1000 / RATE));
-    os64_snprintf(lines[n++], 96, "shown %lu dropped %lu skipped %lu starved %lu", (unsigned long)f->pace.shown,
+    os64_snprintf(lines[n++], READOUT_CHARS, "shown %lu dropped %lu skipped %lu starved %lu", (unsigned long)f->pace.shown,
                   (unsigned long)f->pace.dropped, (unsigned long)f->pace.skipped, (unsigned long)f->pace.starved);
-    os64_snprintf(lines[n++], 96, "resyncs %lu (%lu ms holding), display missed %lu",
+    os64_snprintf(lines[n++], READOUT_CHARS, "resyncs %lu (%lu ms holding), display missed %lu",
                   (unsigned long)f->pace.resyncs, (unsigned long)(f->pace.far_behind_us / 1000),
-                  (unsigned long)a->display_missed);
-    os64_snprintf(lines[n++], 96, "queues: decoded %u/%u ready %u/%u sound %lu ms", f->decoded, f->decoded_depth,
-                  f->ready, f->ready_depth, (unsigned long)(f->sound_queued * 1000ull / RATE));
-    os64_snprintf(lines[n++], 96, "ear: stills %lu, held ahead %lu, stepped behind %lu",
+                  (unsigned long)(f->plane_state == OS64_MEDIA_PLANE_ON ? f->frames_missed : a->display_missed));
+    os64_snprintf(lines[n++], READOUT_CHARS, "queues: decoded %u/%u ready %u/%u sound %lu ms; frames %u, %lu KB",
+                  f->decoded, f->decoded_depth, f->ready, f->ready_depth,
+                  (unsigned long)(f->sound_queued * 1000ull / RATE), f->frames_held,
+                  (unsigned long)(f->frames_bytes / 1024));
+    os64_snprintf(lines[n++], READOUT_CHARS, "ear: stills %lu, held ahead %lu, stepped behind %lu",
                   (unsigned long)f->clock.stills, (unsigned long)f->clock.held_ahead,
                   (unsigned long)f->clock.jumped_behind);
-    os64_snprintf(lines[n++], 96, "sync %ld ms  sink delay %u ms%s%s%s", (long)(f->sync * 1000 / RATE),
+    char cost[48];
+    conversion_text(&f->convert, cost, sizeof(cost));
+    os64_snprintf(lines[n++], READOUT_CHARS, "convert %ux%u from %ux%u, %s, %s", f->convert.w, f->convert.h,
+                  f->convert.src_w, f->convert.src_h, scaled_name(f->convert.way), cost);
+    os64_snprintf(lines[n++], READOUT_CHARS, "sync %ld ms  sink delay %u ms%s%s%s", (long)(f->sync * 1000 / RATE),
                   f->delay_us / 1000, f->muted ? "  muted" : "", f->refused ? "  sound: " : "",
                   f->refused && f->refused_why ? f->refused_why : "");
+    if (f->plane_state == OS64_MEDIA_PLANE_ON)
+        os64_snprintf(lines[n++], READOUT_CHARS, "plane %u %ux%u: published %lu, waits %lu, %s, %s", f->plane_name,
+                      f->plane_cap_w, f->plane_cap_h, (unsigned long)f->plane_published,
+                      (unsigned long)f->waits_patience, f->plane_stale ? "stale" : f->plane_ready ? "ready" : "not ready",
+                      placed ? "placed" : "hidden");
     *count = n;
 }
 
@@ -275,13 +344,121 @@ static void draw_canvas(app_t *a, view_t *v)
     if (v->readout) {
         os64_media_player_facts_t f;
         os64_media_player_facts(a->player, &f);
-        char lines[8][96];
+        char lines[READOUT_LINES][READOUT_CHARS];
         uint32_t count = 0;
-        readout_lines(a, &f, lines, &count);
+        readout_lines(a, &f, v->placed, lines, &count);
         for (uint32_t i = 0; i < count; i++)
             os64_draw_text(s, 8, 8 + 16 * (int32_t)i, lines[i], os64_strlen(lines[i]), 0xFFFFFFFFu, 0xFF000000u);
     }
     os64_draw_publish(&v->ctx, 0);
+}
+
+// ---------------------------------------------------------------- main: on a plane
+
+// The readout's box (content coordinates) as painted at (8, 8).
+static os64_gui_rect_t readout_box(char lines[][READOUT_CHARS], uint32_t count)
+{
+    uint32_t widest = 0;
+    for (uint32_t i = 0; i < count; i++) {
+        uint32_t n = (uint32_t)os64_strlen(lines[i]);
+        widest = n > widest ? n : widest;
+    }
+    return (os64_gui_rect_t){8, 8, (int32_t)widest * 8, 16 * (int32_t)count};
+}
+
+// The window over a plane: black (opaque) everywhere, the picture's
+// rectangle see-through when the plane is placed (`hole`) or the video
+// itself painted there from `shown` when it is not, and the readout over
+// both, opaque, in a box the publish names as an overlay. The box, cut to
+// the hole, is returned in *overlay (empty when there is none).
+static void paint_plane_window(app_t *a, view_t *v, bool hole, os64_gui_rect_t *overlay)
+{
+    os64_gui_surface_t *s = &v->ctx.surf;
+    os64_draw_fill_rect(s, (os64_gui_rect_t){0, 0, (int32_t)s->width, (int32_t)s->height}, 0xFF000000u);
+    os64_gui_rect_t r = {v->hole.x, v->hole.y, (int32_t)v->hole.w, (int32_t)v->hole.h};
+    if (hole) {
+        for (int32_t y = 0; y < r.h; y++)
+            for (int32_t x = 0; x < r.w; x++)
+                s->pixels[(size_t)(r.y + y) * s->pitch_px + (size_t)(r.x + x)] = 0;
+    } else {
+        os64_media_player_view_t view;
+        if (os64_media_player_shown(a->player, &view) == 0) {
+            int32_t x = r.x + (r.w - (int32_t)view.w) / 2, y = r.y + (r.h - (int32_t)view.h) / 2;
+            os64_draw_blit(s, x, y, view.pixels, view.w, view.h, view.w);
+            os64_media_player_shown_done(a->player, &view);
+        }
+    }
+    *overlay = (os64_gui_rect_t){0, 0, 0, 0};
+    if (v->readout) {
+        os64_media_player_facts_t f;
+        os64_media_player_facts(a->player, &f);
+        char lines[READOUT_LINES][READOUT_CHARS];
+        uint32_t count = 0;
+        readout_lines(a, &f, v->placed, lines, &count);
+        for (uint32_t i = 0; i < count; i++)
+            os64_draw_text(s, 8, 8 + 16 * (int32_t)i, lines[i], os64_strlen(lines[i]), 0xFFFFFFFFu, 0xFF000000u);
+        os64_gui_rect_t box = readout_box(lines, count);
+        int32_t x0 = box.x > r.x ? box.x : r.x, y0 = box.y > r.y ? box.y : r.y;
+        int32_t x1 = box.x + box.w < r.x + r.w ? box.x + box.w : r.x + r.w;
+        int32_t y1 = box.y + box.h < r.y + r.h ? box.y + box.h : r.y + r.h;
+        if (x1 > x0 && y1 > y0)
+            *overlay = (os64_gui_rect_t){x0, y0, x1 - x0, y1 - y0};
+    }
+}
+
+// The window's publish with the plane placed in the hole (the readout its
+// overlay) or hidden. False when the kernel refused it.
+static bool plane_publish(app_t *a, view_t *v, bool place)
+{
+    os64_media_player_facts_t f;
+    os64_media_player_facts(a->player, &f);
+    os64_gui_rect_t overlay;
+    paint_plane_window(a, v, place, &overlay);
+    os64_gui_plane_edit_t e = {0};
+    e.plane = f.plane_name;
+    if (place) {
+        e.origin = (os64_gui_rect_t){v->hole.x, v->hole.y, (int32_t)v->hole.w, (int32_t)v->hole.h};
+        e.clip = e.origin;
+        if (overlay.w > 0) {
+            e.noverlays = 1;
+            e.overlay[0] = overlay;
+        }
+    } else if (!v->placed) {
+        // Nothing to hide: a plain publish, which no recreate on the show
+        // thread can refuse by retiring the plane's name under it.
+        return os64_draw_publish(&v->ctx, 0) == 0;
+    } else {
+        e.hide = 1;
+    }
+    bool done = os64_gui_window_publish_edits(a->win, NULL, &e, 1) == 0;
+    if (done)
+        v->placed = place;
+    return done;
+}
+
+// What the facts say to do with the plane (VIDEO_PLANE.md § 4.4): place it
+// once it is ready for the hole's size; hide it, painting the video itself,
+// when it has gone stale; fall back to painting every picture when it has
+// gone.
+static void plane_step(app_t *a, view_t *v)
+{
+    os64_media_player_facts_t f;
+    os64_media_player_facts(a->player, &f);
+    if (f.plane_state != OS64_MEDIA_PLANE_ON) {
+        // Refused at a new size, or ended: every picture is main's again.
+        v->plane = false;
+        v->placed = false;
+        v->dirty = true;
+        return;
+    }
+    if (v->placed && f.plane_stale) {
+        (void)plane_publish(a, v, false);
+        return;
+    }
+    if (!v->placed && f.plane_ready && f.plane_pic_w == v->hole.w && f.plane_pic_h == v->hole.h) {
+        os64_media_player_plane_want(a->player, true);
+        (void)plane_publish(a, v, true);
+    }
 }
 
 static void set_title(app_t *a, const os64_media_player_facts_t *f, const char *name)
@@ -298,10 +475,11 @@ static void set_title(app_t *a, const os64_media_player_facts_t *f, const char *
 
 // The picture's size inside the window's content: the letterbox, to the
 // player.
-static void layout(app_t *a, const os64_media_info_t *info, uint32_t content_w, uint32_t content_h)
+static void layout(app_t *a, view_t *v, const os64_media_info_t *info, uint32_t content_w, uint32_t content_h)
 {
     gplay_rect_t r = gplay_letterbox(info->width, info->height, content_w, content_h);
-    os64_media_player_size(a->player, r.w > 0 ? r.w : 1, r.h > 0 ? r.h : 1);
+    v->hole = (gplay_rect_t){r.x, r.y, r.w > 0 ? r.w : 1, r.h > 0 ? r.h : 1};
+    os64_media_player_size(a->player, v->hole.w, v->hole.h);
 }
 
 static void volume_step(int delta)
@@ -327,6 +505,23 @@ static void volume_step(int delta)
     }
 }
 
+// Full screen (os64_gui_window_set_full_screen): what the window manager says
+// it is, and a change asked of it. The window manager tells the answer back
+// as WINDOW_FULL_SCREEN and WINDOW_RESIZE, which lay the picture out again;
+// a refusal (another window has focus) is said once, and nothing changes.
+static bool full_screen_now(const app_t *a)
+{
+    os64_gui_window_state_t st;
+    return os64_gui_window_get_state(a->win, &st) == 0 && (st.flags & OS64_GUI_WINDOW_FULL_SCREEN) != 0;
+}
+
+static void full_screen_set(const app_t *a, bool on)
+{
+    int64_t rc = os64_gui_window_set_full_screen(a->win, on);
+    if (rc != 0)
+        os64_printf("gplay: full screen %s refused (%ld)\n", on ? "entering" : "leaving", (long)rc);
+}
+
 // One key's ask, as a player call.
 static void do_key(app_t *a, view_t *v, gplay_key_t key, bool to_start, int state)
 {
@@ -334,9 +529,21 @@ static void do_key(app_t *a, view_t *v, gplay_key_t key, bool to_start, int stat
     case GPLAY_KEY_QUIT:
         a->quit = true;
         break;
+    case GPLAY_KEY_FULL_SCREEN:
+        full_screen_set(a, !full_screen_now(a));
+        break;
+    case GPLAY_KEY_ESCAPE:
+        // Every player's Escape: out of full screen first, then out.
+        if (full_screen_now(a))
+            full_screen_set(a, false);
+        else
+            a->quit = true;
+        break;
     case GPLAY_KEY_READOUT:
         v->readout = !v->readout;
         v->dirty = true;
+        if (v->plane)
+            (void)plane_publish(a, v, v->placed);
         break;
     case GPLAY_KEY_LOUDER:
     case GPLAY_KEY_SOFTER:
@@ -399,7 +606,9 @@ static void run(app_t *a, view_t *v, const os64_media_info_t *info, const char *
         }
         if (quit)
             break;
-        bool want_frame = f.state == OS64_MEDIA_PLAYER_PLAYING || v->poked || v->dirty;
+        // On a plane only the readout asks for frames (to refresh it).
+        bool want_frame = v->plane ? v->readout
+                                   : f.state == OS64_MEDIA_PLAYER_PLAYING || v->poked || v->dirty;
         if (want_frame && !v->frame_asked) {
             if (os64_gui_frame_request(a->win, 0) == 0)
                 v->frame_asked = true;
@@ -411,6 +620,13 @@ static void run(app_t *a, view_t *v, const os64_media_info_t *info, const char *
         case OS64_GUI_EVENT_FRAME: {
             v->frame_asked = false;
             v->poked = false;
+            if (v->plane) {
+                if (v->readout && ++v->refresh >= 15) {
+                    v->refresh = 0;
+                    (void)plane_publish(a, v, v->placed);
+                }
+                break;
+            }
             uint64_t number = os64_gui_frame_number(&ev);
             int64_t period = (int64_t)ev.frame.period_ns / 1000;
             // A publish reaches the glass one refresh after the answer's blank.
@@ -430,8 +646,11 @@ static void run(app_t *a, view_t *v, const os64_media_info_t *info, const char *
             break;
         }
         case OS64_GUI_EVENT_DOORBELL:
-            if (ev.doorbell.mask & RING_LOOK)
+            if (ev.doorbell.mask & RING_LOOK) {
                 v->poked = true;
+                if (v->plane)
+                    plane_step(a, v);
+            }
             if (ev.doorbell.mask & RING_ACTION) {
                 action_t act[ACTIONS];
                 os64_lock_acquire(&a->lock);
@@ -456,9 +675,39 @@ static void run(app_t *a, view_t *v, const os64_media_info_t *info, const char *
                              (ev.key.modifiers & OS64_GUI_MOD_SHIFT) != 0),
                    false, f.state);
             break;
+        case OS64_GUI_EVENT_MOUSE_BUTTON_DOWN:
+            // A double-click on the picture: full screen, or back.
+            if (ev.mouse.button == OS64_GUI_MOUSE_LEFT) {
+                uint64_t now = os64_micros();
+                if (v->click_us != 0 && now - v->click_us <= DOUBLE_CLICK_US) {
+                    full_screen_set(a, !full_screen_now(a));
+                    v->click_us = 0;
+                } else {
+                    v->click_us = now;
+                }
+            }
+            break;
+        // Entering or leaving full screen is a resize as far as the picture
+        // goes, and the window manager shows the window black until it
+        // publishes again (os64_gui_window_set_full_screen), so it is laid
+        // out here whether or not the size changed. The WINDOW_RESIZE that
+        // follows a size change lays it out again: an edge is rare, and that
+        // event, in the ring, is the one a full queue can drop.
+        case OS64_GUI_EVENT_WINDOW_FULL_SCREEN:
         case OS64_GUI_EVENT_WINDOW_RESIZE:
             os64_draw_ctx_refresh(&v->ctx);
-            layout(a, info, v->ctx.surf.width, v->ctx.surf.height);
+            if (v->plane) {
+                // The video painted by main in the new hole, the plane hidden,
+                // until it is ready at the new size (plane_step places it).
+                layout(a, v, info, v->ctx.surf.width, v->ctx.surf.height);
+                (void)plane_publish(a, v, false);
+                // A hole the same size as the plane's picture (a window made
+                // wider than its video) changes neither ready nor stale, so the
+                // show thread rings no look for it: place it now if it is ready.
+                plane_step(a, v);
+                break;
+            }
+            layout(a, v, info, v->ctx.surf.width, v->ctx.surf.height);
             v->dirty = true;
             break;
         case OS64_GUI_EVENT_WINDOW_CLOSE:
@@ -472,7 +721,8 @@ static void run(app_t *a, view_t *v, const os64_media_info_t *info, const char *
 
 // ---------------------------------------------------------------- start and end
 
-static void say_counts(app_t *a, const os64_media_player_facts_t *f, const char *name)
+// `placed`: whether gplay's last publish placed the plane.
+static void say_counts(app_t *a, const os64_media_player_facts_t *f, bool placed, const char *name)
 {
     char at[16];
     gplay_time_text(f->position, at, sizeof(at));
@@ -486,7 +736,17 @@ static void say_counts(app_t *a, const os64_media_player_facts_t *f, const char 
                 "%lu\n",
                 (unsigned long)f->pace.resyncs, (unsigned long)(f->pace.far_behind_us / 1000),
                 (unsigned long)f->pace.entered[OS64_MEDIA_PACE_DECODING_LATE], (unsigned long)f->pace.far_by_sound,
-                (unsigned long)a->display_missed);
+                (unsigned long)(f->plane_state == OS64_MEDIA_PLANE_ON || f->plane_published > 0 ? f->frames_missed
+                                                                                               : a->display_missed));
+    if (f->plane_published > 0 || f->plane_state != OS64_MEDIA_PLANE_NONE)
+        os64_printf("  plane: %s %u (%ux%u), %s at the end, published %lu, recreates %lu, waits ended by patience "
+                    "%lu, frame calls refused %lu, closes ended placed %lu, refusal %d\n",
+                    f->plane_state == OS64_MEDIA_PLANE_ON ? "on" : f->plane_state == OS64_MEDIA_PLANE_REFUSED ? "refused"
+                    : f->plane_state == OS64_MEDIA_PLANE_ENDED ? "ended" : "starting",
+                    f->plane_name, f->plane_cap_w, f->plane_cap_h, placed ? "placed" : "hidden",
+                    (unsigned long)f->plane_published,
+                    (unsigned long)f->plane_recreates, (unsigned long)f->waits_patience,
+                    (unsigned long)f->frame_refused, (unsigned long)f->plane_ended_placed, f->plane_refusal);
     os64_printf("  sound: decoded %lu frames, written %lu, let go unheard %lu; buffering %lu, stalls %lu, "
                 "refusals %lu\n",
                 (unsigned long)f->sound_decoded, (unsigned long)f->sound_written, (unsigned long)f->sound_dropped,
@@ -503,6 +763,12 @@ static void say_counts(app_t *a, const os64_media_player_facts_t *f, const char 
     os64_printf("  report ages: to 20 ms %lu, 40 %lu, 60 %lu, 80 %lu, 120 %lu, over %lu\n", (unsigned long)age[0],
                 (unsigned long)age[1], (unsigned long)age[2], (unsigned long)age[3], (unsigned long)age[4],
                 (unsigned long)age[5]);
+    char cost[48];
+    conversion_text(&f->convert, cost, sizeof(cost));
+    os64_printf("  conversion: %lu pictures, the last %ux%u from %ux%u, %s; average/worst %s\n",
+                (unsigned long)f->convert.count, f->convert.w, f->convert.h, f->convert.src_w, f->convert.src_h,
+                scaled_name(f->convert.way), cost);
+    os64_printf("  converted frames: %u held, %lu bytes\n", f->frames_held, (unsigned long)f->frames_bytes);
     os64_printf("  media: picture packets %lu, run-in %lu, resync-dropped %lu\n",
                 (unsigned long)f->media.picture_packets, (unsigned long)f->media.pictures_run_in,
                 (unsigned long)f->media.pictures_resync);
@@ -517,9 +783,11 @@ static bool counts_hold(const os64_media_player_facts_t *f, const char *name)
         ok = false;
     }
     if (s_cover) {
-        // Covered, nobody asks for a frame and none is shown: the player
-        // retires every picture by the clock, so each decoded one was shown,
-        // dropped or skipped, and the end came all the same.
+        // Covered, the window is answered no frames: without a plane the
+        // player retires every picture by the clock, and on one the show
+        // thread picks at each wait its patience ends. Either way each
+        // decoded picture was shown, dropped or skipped, and the end came
+        // all the same.
         uint64_t gone = f->pace.shown + f->pace.dropped + f->pace.skipped;
         if (gone != f->pictures_decoded) {
             os64_printf("gplay: check: covered, %lu pictures decoded and %lu shown, dropped or skipped\n",
@@ -553,6 +821,21 @@ static bool counts_hold(const os64_media_player_facts_t *f, const char *name)
                     (unsigned long)f->refusals, f->refused, (unsigned long)f->sound_written);
         ok = false;
     }
+    // The path asked for is the one that ran: with --no-plane no plane at
+    // all; otherwise a plane on to the end, main never asking the player
+    // for a picture, and (when the window can be seen) pictures published
+    // to the plane.
+    if (s_no_plane && f->plane_state != OS64_MEDIA_PLANE_NONE) {
+        os64_printf("gplay: check: --no-plane, yet the plane's state is %d\n", f->plane_state);
+        ok = false;
+    } else if (!s_no_plane && (f->plane_state != OS64_MEDIA_PLANE_ON || f->frame_refused != 0 ||
+                               (!s_cover && f->plane_published == 0))) {
+        os64_printf("gplay: check: wanted a plane on to the end (state %d, refusal %d, published %lu, frame calls "
+                    "refused %lu)\n",
+                    f->plane_state, f->plane_refusal, (unsigned long)f->plane_published,
+                    (unsigned long)f->frame_refused);
+        ok = false;
+    }
     return ok;
 }
 
@@ -584,8 +867,12 @@ int main(int argc, char **argv)
             s_expect_refusal = true;
         else if (os64_strcmp(argv[first], "--maximized") == 0)
             s_maximized = true;
+        else if (os64_strcmp(argv[first], "--full-screen") == 0)
+            s_full_screen = true;
         else if (os64_strcmp(argv[first], "--cover") == 0)
             s_cover = true;
+        else if (os64_strcmp(argv[first], "--no-plane") == 0)
+            s_no_plane = true;
         else if (os64_strcmp(argv[first], "--script") == 0 && first + 1 < argc)
             s_script = argv[++first];
         else
@@ -593,8 +880,8 @@ int main(int argc, char **argv)
         first++;
     }
     if (first != argc - 1) {
-        os64_printf("usage: gplay [--exit-at-end] [--maximized] [--check [--expect-refusal]] [--cover] "
-                    "[--script steps] file\n");
+        os64_printf("usage: gplay [--exit-at-end] [--maximized] [--full-screen] [--no-plane] [--check [--expect-refusal]] "
+                    "[--cover] [--script steps] file\n");
         return 1;
     }
     const char *path = argv[first];
@@ -683,10 +970,22 @@ int main(int argc, char **argv)
             os64_draw_publish(&cc, 0);
         }
     }
-    layout(a, &info, v.ctx.surf.width, v.ctx.surf.height);
-    draw_canvas(a, &v);
+    layout(a, &v, &info, v.ctx.surf.width, v.ctx.surf.height);
+    // A plane first (unless --no-plane); refused, the window paints every
+    // picture.
+    v.plane = !s_no_plane && os64_media_player_plane(a->player, win) == 0;
+    if (v.plane) {
+        (void)plane_publish(a, &v, false);   // black, the video painted from `shown` once there is one
+        plane_step(a, &v);
+    } else {
+        draw_canvas(a, &v);
+    }
+    // Born focused, so the window manager takes the ask; its answer arrives
+    // as events, which run() lays out.
+    if (s_full_screen)
+        full_screen_set(a, true);
 
-    int64_t keys = os64_thread(keys_thread, a);
+    int64_t keys = os64_thread_named(keys_thread, a, "keys");
     run(a, &v, &info, name);
 
     // At the end the sound still in the device plays out (up to a second),
@@ -705,10 +1004,14 @@ int main(int argc, char **argv)
         os64_thread_join((int32_t)keys, 0);
     if (f.failure != 0)
         os64_printf("gplay: %s: %s\n", path, os64_media_strerror(f.failure));
-    say_counts(a, &f, name);
+    say_counts(a, &f, v.placed, name);
     bool checked = !s_check || counts_hold(&f, name);
     int code = f.failure != 0 || !checked ? 3 : 0;
 
+    // A plane leaves the window first (the show thread then destroys it and
+    // ends at once, not at the closing bound).
+    if (v.plane && v.placed)
+        (void)plane_publish(a, &v, false);
     bool closed = close_player(a);
     if (cover > 0)
         os64_gui_window_destroy(cover);

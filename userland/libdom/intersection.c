@@ -31,7 +31,8 @@ typedef struct DTarget {
      * and the chain of the node's bucket. */
     struct DTarget *prev, *next, *bucket_next;
     struct DIObserver *observer;
-    const os64_html_node_t *node;   /* held */
+    const os64_html_node_t *node;   /* held, with its wrapper (HOLDERS) */
+    JSValue wrapper;
     /* The registration's state: -1 before the first observation. */
     int32_t previous_index;
     bool previous_intersecting;
@@ -42,7 +43,8 @@ typedef struct DTarget {
 
 typedef struct DEntry {
     struct DEntry *next;
-    const os64_html_node_t *target; /* held */
+    const os64_html_node_t *target; /* held, with its wrapper (HOLDERS) */
+    JSValue wrapper;
     double time, ratio;
     double root[4], rect[4], inter[4];
     bool intersecting;
@@ -60,8 +62,9 @@ typedef struct DIObserver {
     uint32_t script;
     os64_dom_t *report_owner;
     /* The root as given: NULL for none, else an element or a document,
-     * held. */
+     * held, with its wrapper (HOLDERS) until the observer is freed. */
     const os64_html_node_t *root;
+    JSValue root_wrapper;
     /* rootMargin and scrollMargin: top, right, bottom, left, each pixels or
      * a percentage. The scroll margin is kept and reported; its clipping
      * is booked (INTERSECTION_OBSERVER.md § 6). */
@@ -138,6 +141,7 @@ static void entries_clear(os64_dom_t *dom, DIObserver *o)
     while (o->first != NULL) {
         DEntry *next = o->first->next;
         os64_html_release(dom->document, o->first->target);
+        JS_FreeValueRT(dom->engine, o->first->wrapper);
         d_free(dom, o->first);
         o->first = next;
     }
@@ -172,6 +176,7 @@ static void target_remove(os64_dom_t *dom, DTarget *t)
     /* With nothing observed no step runs, so no delay can be owed one. */
     if (s->observed == 0) s->delayed_due = UINT64_MAX;
     os64_html_release(dom->document, t->node);
+    JS_FreeValueRT(dom->engine, t->wrapper);
     d_free(dom, t);
 }
 
@@ -188,6 +193,8 @@ static void observer_unlink_free(os64_dom_t *dom, DIObserver *o)
     targets_clear(dom, o);
     entries_clear(dom, o);
     if (o->root != NULL) os64_html_release(dom->document, o->root);
+    JS_FreeValueRT(dom->engine, o->root_wrapper);
+    o->root_wrapper = JS_UNDEFINED;
     if (o->prev != NULL) o->prev->next = o->next;
     else s->observers = o->next;
     if (o->next != NULL) o->next->prev = o->prev;
@@ -340,6 +347,7 @@ static void queue_entry(os64_dom_t *dom, DIObserver *o, const DTarget *t, double
         e->inter[i] = inter[i];
     }
     os64_html_hold(dom->document, t->node);
+    e->wrapper = d_holder_take(dom, t->node);
     if (o->last != NULL) o->last->next = e;
     else o->first = e;
     o->last = e;
@@ -1060,6 +1068,7 @@ static JSValue observer_constructor(JSContext *ctx, JSValueConst new_target, int
     o->report_owner = report_owner;
     o->root = root;
     if (root != NULL) os64_html_hold(dom->document, root);
+    o->root_wrapper = d_holder_take(dom, root);
     for (int i = 0; i < 4; i++) {
         o->margin[i] = margins[0][i];
         o->percent[i] = percents[0][i];
@@ -1099,6 +1108,7 @@ static JSValue observe(os64_dom_t *dom, JSContext *ctx, DIObserver *o, int argc,
     if (t == NULL) return d_error(ctx, "QuotaExceededError", "IntersectionObserver quota exceeded");
     *t = (DTarget){.observer = o, .node = target, .previous_index = -1, .prev = o->targets_last};
     os64_html_hold(dom->document, target);
+    t->wrapper = d_holder_take(dom, target);
     size_t b = node_bucket(target);
     t->bucket_next = s->buckets[b];
     s->buckets[b] = t;
@@ -1328,6 +1338,19 @@ void d_intersections_drain(os64_dom_t *dom)
 {
     struct DIntersections *s = dom->intersections;
     if (s == NULL) return;
+    /* The holders' wrappers go now: the records outlive the engine. */
+    for (DIObserver *o = s->observers; o != NULL; o = o->next) {
+        for (DTarget *t = o->targets; t != NULL; t = t->next) {
+            JS_FreeValueRT(dom->engine, t->wrapper);
+            t->wrapper = JS_UNDEFINED;
+        }
+        for (DEntry *e = o->first; e != NULL; e = e->next) {
+            JS_FreeValueRT(dom->engine, e->wrapper);
+            e->wrapper = JS_UNDEFINED;
+        }
+        JS_FreeValueRT(dom->engine, o->root_wrapper);
+        o->root_wrapper = JS_UNDEFINED;
+    }
     for (DIObserver *o = s->observers; o != NULL; o = o->next)
         if (o->held) {
             o->held = false;

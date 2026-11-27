@@ -153,6 +153,9 @@ struct yonder_scripts {
     // HTML's sticky activation: a person's key, press or click has reached
     // the page (yonder_scripts_activated).
     bool activated;
+    // When the last of those arrived (yonder_now_us), for the transient
+    // activation the Fullscreen API uses up; -1 for none since the last use.
+    int64_t activated_us;
     // Whether the document holds a media element, as of the tree version
     // it was last looked at (media_in_document): a page with no script
     // gets its runtime for one.
@@ -658,11 +661,15 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
     os64_dom_set_text_style(s->dom, s->options.text_style, s->options.opaque);
     os64_dom_set_images(s->dom,&s->options.images);
     os64_dom_set_media(s->dom, &s->options.media);
+    if (s->options.fullscreen.enter != NULL)
+        os64_dom_set_fullscreen(s->dom, &s->options.fullscreen);
     os64_dom_set_text(s->dom,&s->options.canvas_text);
     if (s->options.history.update != NULL)
         os64_dom_set_history(s->dom, &s->options.history);
     if (s->options.css_animations.count != NULL)
         os64_dom_set_css_animations(s->dom, &s->options.css_animations);
+    if (s->options.timer_sites)
+        (void)os64_dom_timer_sites(s->dom, true);
     // The state the session gave the document before there was a binding
     // to tell (a traversal's or a reload's entry): a binding that cannot
     // take it is not built, so the page never reads a state the window
@@ -720,6 +727,7 @@ yonder_scripts_t *yonder_scripts_new(os64_html_document_t *doc, os64_page_state_
         return NULL;
     s->doc = doc;
     s->state = state;
+    s->activated_us = -1;
     s->living_next = s_living;
     s_living = s;
     s->options = *options;
@@ -1772,8 +1780,10 @@ os64_js_status_t yonder_scripts_pointer(yonder_scripts_t *s, const os64_dom_poin
     // A press is the mousedown and the mouse's pointerdown HTML counts as
     // activation, whether or not the page listens. The sample carries only
     // where and which button: the event types are libdom's to give.
-    if (s != NULL && sample->action == OS64_DOM_POINTER_DOWN)
+    if (s != NULL && sample->action == OS64_DOM_POINTER_DOWN) {
         s->activated = true;
+        s->activated_us = yonder_now_us();
+    }
     if (!s || s->dead || !s->options.modern) return OS64_JS_OK;
     s->task_address = NULL; s->task_us = -1; s->written = 0;
     if (!ensure_runtime(s, out)) { retire(s); return out->status; }
@@ -1937,6 +1947,26 @@ bool yonder_scripts_finalization_fire(yonder_scripts_t *s, bool idle, os64_js_ou
 uint64_t yonder_scripts_timer_next(const yonder_scripts_t *s)
 {
     return s != NULL && !s->dead ? os64_dom_timer_next(s->dom) : UINT64_MAX;
+}
+
+const char *yonder_scripts_timer_site(const yonder_scripts_t *s)
+{
+    return s != NULL ? os64_dom_timer_site(s->dom) : NULL;
+}
+
+void yonder_scripts_timer_counts(const yonder_scripts_t *s, os64_dom_timer_counts_t *out)
+{
+    os64_dom_timer_counts(s != NULL ? s->dom : NULL, out);
+}
+
+size_t yonder_scripts_held(const yonder_scripts_t *s)
+{
+    return s != NULL ? os64_dom_registry_count(s->dom) : 0;
+}
+
+uint64_t yonder_scripts_checks_visited(const yonder_scripts_t *s)
+{
+    return s != NULL ? os64_dom_checks_visited(s->dom) : 0;
 }
 
 bool yonder_scripts_timer_fire(yonder_scripts_t *s, uint64_t now, os64_js_outcome_t *out)
@@ -2202,6 +2232,18 @@ size_t yonder_scripts_heap_peak(const yonder_scripts_t *s)
     return s->runtime != NULL ? os64_js_heap_peak(s->runtime) : s->heap_peak;
 }
 
+size_t yonder_scripts_heap_bytes(const yonder_scripts_t *s)
+{
+    return s != NULL && s->runtime != NULL ? os64_js_heap_bytes(s->runtime) : 0;
+}
+
+size_t yonder_scripts_wrappers(const yonder_scripts_t *s, const os64_html_node_t **out, size_t cap,
+                               os64_dom_wrappers_t *counts)
+{
+    *counts = (os64_dom_wrappers_t){0};
+    return s != NULL && s->dom != NULL ? os64_dom_wrappers(s->dom, out, cap, counts) : 0;
+}
+
 void yonder_scripts_census(yonder_scripts_t *s, yonder_census_sheet_t *sheet, bool detail)
 {
     if (s == NULL || sheet == NULL || s->runtime == NULL || s->dom == NULL) return;
@@ -2260,6 +2302,11 @@ const os64_js_runtime_t *yonder_scripts_ledger(const yonder_scripts_t *s)
 {
     os64_js_ledger_totals_t totals;
     return s != NULL && s->runtime != NULL && os64_js_ledger_totals(s->runtime, &totals) ? s->runtime : NULL;
+}
+
+void yonder_scripts_collector(const yonder_scripts_t *s, os64_js_collector_t *out)
+{
+    os64_js_collector(s != NULL ? s->runtime : NULL, out);
 }
 
 bool yonder_scripts_alive(const yonder_scripts_t *s)
@@ -2732,21 +2779,54 @@ bool yonder_scripts_activated(const yonder_scripts_t *s)
 
 void yonder_scripts_activate(yonder_scripts_t *s)
 {
-    if (s != NULL)
+    if (s != NULL) {
         s->activated = true;
+        s->activated_us = yonder_now_us();
+    }
+}
+
+bool yonder_scripts_activation_consume(yonder_scripts_t *s, int64_t now_us)
+{
+    if (s == NULL || s->activated_us < 0 || now_us - s->activated_us > YONDER_ACTIVATION_US)
+        return false;
+    s->activated_us = -1;
+    return true;
+}
+
+void yonder_scripts_fullscreen_settled(yonder_scripts_t *s, bool entered)
+{
+    if (s != NULL && !s->dead)
+        os64_dom_fullscreen_settled(s->dom, entered);
+}
+
+void yonder_scripts_fullscreen_exit(yonder_scripts_t *s)
+{
+    if (s != NULL && !s->dead)
+        os64_dom_fullscreen_exit(s->dom);
+}
+
+const os64_html_node_t *yonder_scripts_fullscreen_element(const yonder_scripts_t *s)
+{
+    return s != NULL && !s->dead ? os64_dom_fullscreen_element(s->dom) : NULL;
 }
 
 // HTML's activation-triggering input events: a key other than Escape
-// pressed, a button pressed, a click.
+// pressed, a button pressed, a click. Each one is also the moment of the
+// transient activation (activated_us).
 static void activation_note(yonder_scripts_t *s, const os64_dom_event_t *event)
 {
     if (event->type == NULL)
         return;
+    bool now = false;
     if (event->kind == OS64_DOM_EVENT_KEY)
-        s->activated |= os64_streq(event->type, "keydown") && !(event->key != NULL && os64_streq(event->key, "Escape"));
+        now = os64_streq(event->type, "keydown") && !(event->key != NULL && os64_streq(event->key, "Escape"));
     else if (event->kind == OS64_DOM_EVENT_MOUSE || event->kind == OS64_DOM_EVENT_POINTER)
-        s->activated |= os64_streq(event->type, "mousedown") || os64_streq(event->type, "pointerdown") ||
-                        os64_streq(event->type, "click");
+        now = os64_streq(event->type, "mousedown") || os64_streq(event->type, "pointerdown") ||
+              os64_streq(event->type, "click");
+    if (now) {
+        s->activated = true;
+        s->activated_us = yonder_now_us();
+    }
 }
 
 bool yonder_scripts_images_pending(const yonder_scripts_t *s)

@@ -1,4 +1,5 @@
 #include "internal.h"
+static void c_revised(canvas_context_t *c);
 static canvas_state_t defaults(void) { return (canvas_state_t){.fill_argb=0xff000000,.global_alpha=1,.fill_alpha=1,
     .stroke_argb=0xff000000,.stroke_alpha=1,.transform={1,0,0,1,0,0},
     .line={1,10,OS64_GEOMETRY_BUTT,OS64_GEOMETRY_MITER},.text={.font="10px sans-serif",.size=10},.image_smoothing=true}; }
@@ -109,6 +110,7 @@ static canvas_status_t reset(canvas_context_t *c, uint32_t w, uint32_t h)
     c->state = defaults();
     c->origin_clean = true;
     c->damage = w && h ? (draw2d_damage_t){0, 0, w, h} : (draw2d_damage_t){0};
+    c_revised(c);
     return CANVAS_OK;
 }
 canvas_status_t canvas_create(const canvas_options_t *o, uint32_t w, uint32_t h,
@@ -212,9 +214,17 @@ canvas_status_t canvas_set_alpha(canvas_context_t *c, double a)
         c->state.global_alpha = a;
     return c_leave(c, CANVAS_OK);
 }
+// A canvas's pixels changed: a revision no canvas has had, counted across
+// them all (a canvas may live on any thread).
+static uint64_t s_revisions;
+static void c_revised(canvas_context_t *c)
+{
+    c->revision = __atomic_add_fetch(&s_revisions, 1, __ATOMIC_RELAXED);
+}
 void c_damage_union(canvas_context_t *c, draw2d_damage_t d)
 {
     if (d.x1 <= d.x0 || d.y1 <= d.y0) return;
+    c_revised(c);
     if (c->damage.x1 <= c->damage.x0 || c->damage.y1 <= c->damage.y0) c->damage = d;
     else {
         if (d.x0 < c->damage.x0) c->damage.x0 = d.x0;
@@ -241,7 +251,7 @@ canvas_status_t canvas_bitmap(const canvas_context_t *c, canvas_bitmap_t *out)
     if (!c || !out) return CANVAS_BAD_ARGUMENT;
     if (c->busy) return CANVAS_BUSY;
     *out = (canvas_bitmap_t){c->surface.pixels, c->surface.width, c->surface.height,
-                              c->surface.stride, c->surface.capacity};
+                              c->surface.stride, c->surface.capacity, c->revision};
     return CANVAS_OK;
 }
 canvas_status_t canvas_stats(const canvas_context_t *c, canvas_stats_t *out)

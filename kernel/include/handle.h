@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "os64/file.h"
+#include "handle_blocks.h"
 
 // handle.h — the per-task handle table.
 //
@@ -21,11 +22,9 @@
 // ONE handle type for everything (files, pipes, later windows) — a handle is a
 // tagged reference to a kernel object, and read/write dispatch on the tag.
 
-// Room for a program that works in parallel: a work pool's pipes and
-// threads, and then a socket per fetch in flight, is well past sixteen
-// before much has been fetched. A slot costs 16 bytes of task_t. The size
-// is the ABI's, because userland derives limits from it.
-#define TASK_MAX_HANDLES OS64_TASK_HANDLES
+// THE TABLE GROWS (handle_blocks.h): block 0 is inside the task, the rest
+// are added as the task needs them, up to TASK_HANDLES_CEILING. A number,
+// once handed out, names the same entry for the task's whole life.
 
 typedef enum handle_type
 {
@@ -67,9 +66,10 @@ typedef enum handle_type
 
 	// A slot reserved before an operation that may publish external state.
 	// Exclusive file creation uses it so a full handle table is discovered
-	// BEFORE the filesystem creates the name. It is not operable; commit turns
-	// it into a live type, while close/task teardown cancels it like any other
-	// handle claim.
+	// BEFORE the filesystem creates the name. It is not operable, and only
+	// its owner moves it: commit turns it into a live type, cancel gives it
+	// back. A close refuses it, and teardown's sweep passes it by; the
+	// owner's commit after a teardown closes what it published.
 	HANDLE_RESERVED,
 
 	// A slot mid-CLOSE (2026-08-24). Distinct from NONE so handle_alloc — which
@@ -91,14 +91,20 @@ struct task;
 // Seed a task's table: 0/1/2 = console in/out/err, everything else free.
 void handle_table_init(struct task *t);
 
-// Claim the lowest free slot. Returns the handle, or -1 if the table is full.
+// Claim the lowest free slot, adding a block when every one is taken.
+// Returns the handle, or -1 when no block can be added — at the ceiling, a
+// block that could not be had, or a task tearing down — counted as a
+// refusal.
 int handle_alloc(struct task *t, handle_type_t type, void *object);
 
 // Two-phase allocation for operations that must know a return slot exists
-// before they mutate external state. reserve returns a slot or -1; commit
-// publishes its object, and cancel gives an unused reservation back. A task
-// teardown may cancel the reservation first, in which case commit is false
-// and the caller still owns `object`.
+// before they mutate external state. reserve returns a slot or -1 (as
+// handle_alloc refuses); commit publishes its object, and cancel gives an
+// unused reservation back. Only the owner moves a reservation (a close
+// refuses one, teardown's sweep passes it by), so commit refuses only a slot
+// that is not the caller's reservation; the caller then still owns
+// `object`. A commit that lands after the task's teardown began closes the
+// handle it published, and still answers true.
 int  handle_reserve(struct task *t);
 bool handle_commit_reserved(struct task *t, int slot, handle_type_t type, void *object);
 bool handle_cancel_reserved(struct task *t, int slot);
@@ -147,14 +153,23 @@ void handle_unshare(const handle_t *shared);
 // pipe, that is the refcount that decides EOF/EPIPE) and frees the slot.
 bool handle_close(struct task *t, int h);
 // The same close, with the verdict kept apart from the bookkeeping: returns
-// whether there was a handle to close (false: an empty slot, or one another
-// closer owns), and *rc receives the filesystem's own answer for the last
+// whether there was a handle to close (false: an empty slot, a reservation,
+// or one another closer owns — none of which a close writes), and *rc receives the filesystem's own answer for the last
 // close of a file — 0, or its nonzero code when what was written could not
 // be committed. Two facts in two places, because a filesystem's -1 and "no
 // such handle" must never be one number (os64/file.h). *deferred: the
 // verdict belongs to an operation still in flight on another thread, and
 // this close does not have it.
 bool handle_close_rc(struct task *t, int h, int *rc, bool *deferred);
+
+// Where handle `n` of `t` lives, or NULL for a number no entry of the table
+// has room for. The entry may be free: the caller reads its type.
+handle_t *handle_entry(struct task *t, int n);
+// The numbers the table has room for now (block 0 and every block added).
+uint32_t handle_table_room(struct task *t);
+// The blocks added past block 0, freed with the task (task_destroy). Nothing
+// may look in the table afterwards.
+void handle_table_free(struct task *t);
 
 // Close every handle a task holds. Called on task exit — WITHOUT this, a task
 // that dies holding a pipe end keeps that end open forever, and the process on

@@ -422,15 +422,246 @@ was shown, or since its record was last written on asking:
   counts without the times.
   An interval whose counter stepped back (the thread moved to a core whose
   counter is behind) counts as nothing, and the line says how many.
-- **`d` in the page writes the record now** (`written: when asked`),
-  keeping the counts since the last `d` as a numbered reading with where
+- **Ctrl+Shift+D writes the record now** (`written: when asked`),
+  wherever the keys are: no page script and no focused field can keep it,
+  and it is the only reading key (a bare `d` is the page's, like any other
+  key). (Not Ctrl+Alt: with a letter that is the window manager's, and
+  never reaches yonder.) The record's `reading key` line says how often the
+  chord was pressed against the readings kept, each reading
+  keeping the counts since the last one as a numbered reading with where
   the page was scrolled — `paint reading 2: at y 2140: 96 paints in 10.1 s
   ... | ms a paint (most): render ...` — and starts them again. So each
   part of a page is measured on its own and every reading stays: scroll
-  there, `d`, wait, `d`, scroll on, wait, `d`. The status line names the
-  reading it wrote. `paint` and `paint stages` are the counts since the
-  last `d` that reached its file: one that did not keeps its reading in
+  there, the chord, wait, the chord, scroll on, wait, the chord. The
+  status line names the reading it wrote. `paint` and `paint stages` are
+  the counts since the last reading that reached its file: one that did
+  not keeps its reading in
   the record, lets the counts run on, and says so on the status line.
+- **With `ledger = profile`, each reading also writes `script profile
+  reading N`**: the sampled functions of that reading's span, in the
+  `script profile` line's form (the costliest twenty, each where it is
+  defined and what called it, its milliseconds and samples), so a quiet
+  minute is read apart from the load before it. The first reading's span
+  begins with the page's script and says `since the page's script began`;
+  `script profile` itself is the span since the last reading. A reading
+  with no memory to sort its samples says `not written` and marks the
+  record short of memory, since its samples go with the reset.
+
+### The load's timeline (load_timeline.h)
+
+The lines above say how much each kind of work cost over a span; none says
+WHEN. A page that takes a minute to load needs the order: the parse in the
+first seconds, the scripts after, the layouts they forced, the first paint,
+the video's first picture. So while yonder.conf names a `diagnostics`
+directory, the latest navigation keeps a timeline for its first three
+minutes, from the moment its record begins:
+
+    timeline: from the navigation's start, in slices of 5 s, the window thread's steps; arrived 3.8 s, first paint 3.8 s, the video's first picture -; 39 parser calls in 690.7 ms; updates refused as broad: 1; 3 steps of 200 ms or more
+    timeline layouts: by who asked, in the step they ran in, the costliest first: a script's read in the stream 30 in 971.9 ms, a script's read in scripts 1 in 53.8 ms, a page arriving in the stream 1 in 44.6 ms, after a script's changes in scripts 2 in 35.0 ms; fresh cascades by part: a script's read 2 in 36.9 ms (reading the sheets 11.0, the table 0.9, matching 25.0; 2 rules and 310 elements a build), a page arriving 1 in 12.3 ms (reading the sheets 4.1, the table 0.3, matching 8.0; 2 rules and 310 elements a build); cascades not timed whole (yonder --layout-profile times them)
+    timeline 0-5 s: busy 77% of 4.9 s: the stream 3714.4 ms (tasks 2654.6, layouts 1016.5, parsing 690.7, finding sheets 26.4, arriving 100.9), waiting 1158.4 ms, paint 50.0 ms (drawing 49.6), the rest 24.4 ms; layouts 31 in 1016.5 ms (a script's read 30 in 971.9, a page arriving 1 in 44.6); script tasks 4, forcing 30 layouts in 1117.8 ms; parsed 551 KiB
+    timeline longest 2: at 2.3 s, the stream 1176.1 ms; layouts in it 30 in 971.9 ms (a script's read 30 in 971.9), its script tasks forcing 30 in 1117.8 ms; its longest task script file:///home/lt.html#inline-2, 1174.8 ms, forcing 30 layouts in 1117.8 ms
+    timeline broad 1: at 5.5 s, an attribute class of i#i.b at depth 4 marked 4 of 310 elements (a class 1, :has() 3); 1 of the batch's 1 changes had marked 156 when refused
+    timeline parse 1: at 0.7 s, 68.5 ms: a feed of 16384 bytes, 528 KiB into the page, inside a script still open
+
+- **The layouts a script's read forced, by phase** (with the layout
+  profile on): a reading's line ends its longest task with `the longest
+  task's forced layouts by phase` and then `the reading's forced layouts
+  by phase`: how many and their wall time, the model rebuilds the reads
+  began with, the cascade by what became of it (kept, updated, fresh by
+  reason), then style, boxes, placement and the public tree, and the boxes
+  they made and how many of those the graft copied. A layout is
+  forced when a script's read asked for it (the read marker the timeline
+  uses, kept while the profile runs), which is also what `layout needed`'s
+  `forced by a read` half counts, ledger or no ledger.
+- **The steps are the window loop's own** (`yonder_lt_step_t`): waiting,
+  input, the window's layouts, the stream (a slice of the arriving page's
+  parse, or one of its scripts), the page waiting for its sheets, scripts
+  (the shown page's tasks), bodies and media, motion, upkeep, observers,
+  paint, the turn's close. Each is timed by the clock as the loop enters
+  the next, so from the loop's first step the steps cover it with no gap
+  (a navigation that begins inside a step starts counting at the loop's
+  next step), and a step running across a slice's edge is shared between
+  the slices by time. A slice's `busy` is its time not waiting.
+- **What was inside a step**, in parentheses after it: its script tasks,
+  its layouts, its drawing (the whole of a paint: the backdrops' marks,
+  the kept drawings, the render and the publish), the arriving page's
+  parser calls (`parsing`), its looks for new sheets (`finding sheets`),
+  and a page being made the shown one (`arriving`), shared between slices
+  as the step is. The parts may overlap: a layout a task forced is inside
+  the task too, and the arrival's layout inside the arriving. What none of
+  them holds is the step's own work: the dispatcher's own, and so on.
+- **Who asked for each layout** (`yonder_lt_why_t`): a script's read (a
+  box, a hit, text rects, a computed style, a scroll), yonder bringing the
+  shown page up to date after a script's changes, a page arriving, a sheet
+  arriving, sizes arriving, the animations, the window. The outermost
+  asker stands, so a rebuild a read asks for is the read's; a layout no
+  site tagged says `no reason told`, so what the tagging misses shows.
+  Each slice counts its layouts by asker, and `timeline layouts` counts
+  every layout by asker and the step it ran in (`no step` for one made
+  outside any: before the loop's first turn, or after a navigation that
+  began inside a step, until the next). With `yonder
+  --layout-profile`, the same line gives each asker's cascades: their
+  time, and how many were built fresh.
+- **What scripts forced** is each task's own count when it ends (the DOM's
+  geometry statistics, the status line's "Script forced" with diagnostics
+  on, never formatted with them off), so it needs no
+  `ledger`; its time includes answering the read, so it can exceed the
+  layouts' own.
+- **Bytes parsed**: the arriving page's bytes its parser took in the slice.
+- **The slowest parser calls** (`timeline parse N`), eight at most, each
+  with when it began, how long, what call it was (a feed, a resume, the
+  input's end, the finish), the bytes it was handed, how far into the page
+  the stream had taken, and the element whose text was still open (a
+  `script`, a `style`); the summary counts every call and its time.
+- **Fresh cascades by part**, from libgarb itself: while the timeline runs
+  yonder hands a fresh cascade its clock (`garb_cascade_limits_t.clock`),
+  and libgarb keeps what reading the sheets, sizing its table and matching
+  the elements cost (`garb_cascade_build_cost`). `timeline layouts` sums
+  them by asker, with the rules and elements a build. This is Fable's
+  "fresh-cascade split" (BRIEF_CASCADE_TRACKING_C3_ANSWERS § 2), and it
+  needs no `--layout-profile`.
+- **What triggered a broad refusal** (`timeline broad N`, the eight that
+  marked the most; the summary counts all): libgarb keeps, for a cascade
+  given a clock, the change of the batch that marked the most (its kind,
+  its target, the target's depth, the attribute, how many it marked and by
+  which mark: an attribute or a state, a class, a style, added subtrees,
+  siblings, `:has()`, the parent's state, slots, and the readers' reaches), and the batch's size
+  (`garb_cascade_broad_trigger`). Restyling marks nothing (what is under a
+  changed custom property map is recomputed, not counted), so only the
+  batch's changes can cross the half.
+  The refusal itself is unchanged: Fable's ruling (§ 3) keeps it whole and
+  adds only the record.
+- **The longest steps**, sixteen at most, of 200 ms or more, each with when
+  it began, the layouts inside it by who asked, its drawing, and the
+  longest task inside it. Waits
+  are left out: an idle page's waits would crowd the work off the list.
+  Those past the list are counted with their time on the summary line.
+- **The milestones**: `arrived` (the stream ended and the page is the
+  shown one), the first paint after that (nothing of a streamed page is
+  painted before it arrives), and the first picture a video handed the
+  paint.
+- **Its own room** in the record, `YONDER_DIAG_TIMELINE_FACTS`: a busy page
+  fills the ordinary room long before these are written (one large
+  application's record had 1473 lines not kept), and the timeline is written whole
+  at each write of its navigation's record — its arrival, its last picture,
+  each reading, its leaving, and a navigation stopped or failed before it
+  arrived. A write in the middle of a step (the arrival's, inside the
+  stream's) counts that step up to the moment of the write, from a copy,
+  the timeline going on as it was. A record written after a later
+  navigation began keeps the lines its last write gave it.
+- **What it costs**: while it runs, readings of the clock at its hooks;
+  past its last slice it stops, and its hooks cost a test of a flag. A
+  cascade built while it ran keeps its clock for its life, so its updates
+  go on counting their changes' marks (a few counters a change; the change
+  is named only at a broad refusal) after the timeline has stopped.
+  Without `diagnostics` it never starts: each hook is a test of a flag, a
+  tagged asker a store putting back what it found, and libgarb, given no
+  clock, counts nothing (a store of which mark is being made, per mark
+  call).
+
+### Where the thread goes, per reading (thread_reading.h)
+
+The timeline stops after three minutes, and its slices name the loop's
+steps but not the calls inside them. A page that grows heavier video by
+video needs every reading said, however late, and a scripts step whose
+time is more than its tasks' needs the rest named. So while yonder.conf
+names a `diagnostics` directory, each reading adds five lines:
+
+    thread reading 3: in 4900.0 ms the loop's steps took 4900.0 ms, busy 77%; scripts 1747.1 ms in 980 turns (a task found and run 820.4 ms 980 times, the rendering step after a task 640.2 ms 402 times, the pointer's events 210.0 ms 980 times, the other calls 76.5 ms 1960 times; inside: tasks 402 in 654.0 ms, layouts 3 in 120.0 ms, model rebuilds 402 in 590.1 ms, what tasks said 402 in 80.2 ms); waiting 1130.0 ms in 600 turns; ...
+    slow turns reading 3: 9 of 6200 turns took 100 ms or more, 3900.0 ms in all; they began at 410, 5920, 11430, 16950, 22460, 27980, 33490, 39010, 44520 ms; the longest: (1) 680.2 ms from 16950 ms: scripts: the animations and the animation frames 600.1 ms, paint: the paint 50.0 ms, the other calls 30.1 ms; inside: tasks 2 in 610.0 ms, layouts 1 in 40.0 ms, drawing 1 in 45.0 ms; its longest task animation-frame 580.0 ms, forcing 1 layout in 40.0 ms; (2) ...
+    timers reading 3: 380 timer tasks in 590.2 ms, from 12 sites; tick at the page:1:131: 300 tasks, 450.0 ms (each 1.5, the most 9.0); ...
+    collector reading 3: 2 runs (2 asked by the allocation threshold, 0 of them at a threshold the limit lowered) in 160.0 ms, each 80.0 ms on average; walked 600000 objects, 300000 a run, and freed 7000 in cycles; the engine's heap 200.0 MiB before a run and 195.0 MiB after, on average; the next run waits for the engine's heap to reach 300.0 MiB; the script heap now 210.0 MiB of 512.0 MiB, 0 allocations refused at the limit; since the script began, the longest run 90.0 ms, the most walked in one 400000
+    walks reading 3: 300 intersection steps walked 90000 observed targets, 300 a step, the most 310; the every-turn checks visited 1200 records in 6200 turns, the most in one 40; the timer list: 40 live now, 380 arms walked 7600 entries to find their places, 20 an arm; the binding holds 41000 values for the engine
+
+(The numbers above are made up to show the shape.)
+
+- **The steps are the timeline's**, and each is the sum of its CALLS: the
+  loop names every call it makes (`yonder_tr_call_t`: the dispatcher's
+  turn, the stream's, the coming page's; in scripts, the rendering step
+  owed before a task, the fields flushed, a task found and run, the
+  animations and the animation frames, the rendering step after a task,
+  what the task asked of the window, the pointer's events; in the media
+  step each of its turns; motion's ticks; each of upkeep's turns; the
+  observers' calls; the paint and what the animations hear of it; and the
+  turn's close: its bells, the look at leaving, the frame closed, the next
+  moment scheduled). A call's time runs to the next call, so a step has no
+  unnamed rest. Each call says how many times it was made, so a cost per
+  turn can be read beside `nodes reading N`. Calls under a millisecond in
+  the reading are summed as `the other calls`.
+- **Inside a step**, wherever the call: its script tasks, layouts, model
+  rebuilds, what the tasks said afterwards (the status line, the record's
+  line, the audit) and drawing, each with a count. They may overlap: a
+  layout a task forced is inside both.
+- **The slow turns**: a TURN of the loop runs from the dispatcher's call
+  to the next call of the dispatcher or of the wait, so its time is work
+  and never sleep, and one of 100 ms or more (`TR_SLOW_TURN_MS`) is slow.
+  The line gives how many of the turns that ended were slow and their
+  time; when the first 48 began, in ms from the reading's start, so a
+  stall on a beat shows as evenly spaced starts; and the six longest,
+  whole: when each began, its four costliest calls of a millisecond or
+  more by step (the rest summed, so the line's length has a bound), what ran
+  inside it, and its longest task: a timer as
+  `a timer set by` its site, the site as the timers line keeps it, and any
+  other task by its kind and script as the timeline names it. A reading
+  whose counter rate was not known when it began judges no turn and says
+  so. A turn still under way when the
+  line is written is not in it; one under way at a restart goes on as the
+  next reading's.
+- **Timers by site**: the timer tasks by the function that set them
+  (libdom's `os64_dom_timer_sites`, on with page files): its name and
+  where it is defined, a script by its address and an inline one as `the
+  page`. Each site has its tasks, their time, each on average, the most,
+  and the layouts they forced; the costliest `YONDER_TR_SITES_SHOWN` are
+  shown and the rest summed. A timer set before the sites were asked, the
+  binding's own, and the custom element reactions a timer turn runs
+  instead of a timer are `with no site known`.
+- **The collector**, from libjs's counts (`os64_js_collector`, which the
+  engine keeps at every run with or without the ledger, patch 0047): the
+  runs in the reading and those the allocation threshold asked for (and of
+  them those at a threshold the limit lowered), their
+  time, the GC objects walked and the objects, functions and modules freed
+  from cycles, the engine's heap
+  before and after a run, the threshold the next run waits for, the
+  script heap now against its limit, and since the script began the
+  longest run and the most one walked. Every run walks every GC object
+  the page holds, its nodes' wrappers among them, so `a run` grows with
+  what a page keeps alive. The engine starts a run only when an object is
+  made past the threshold, which is half again the heap the last run left,
+  held below the memory limit (patch 0048: lowered to the limit less a
+  sixteenth, raised where that lowered it to a sixty-fourth above what the
+  run left, then lowered to the limit less a 256th; such a run also waits
+  for that 256th of growth, so the threshold the line prints can sit below
+  the heap). The line says how many
+  runs waited for a threshold the limit lowered, and how many allocations
+  the limit refused: on a page that is truly full, the second rises while
+  the runs stop.
+- **The walks whose size the page sets**: the intersection steps and the
+  observed targets they walked (every target of every observer, at each
+  step where anything moved); the records the loop's every-turn checks
+  visited (libdom's `os64_dom_checks_visited`: the wrapped images the
+  image check polled, the canvases with a context the damage visit looked
+  at), over the turns told and the most in one, which on a quiet page is
+  0 however many wrappers it holds (a canvas the page draws on is
+  visited until its drawing is painted); the timer list (kept in due order, so each
+  arm, a set or an interval's re-arm, walks past the timers due before
+  it), live now with the reading's arms and the entries they walked; and
+  the values the binding holds for the engine (`os64_dom_registry_count`:
+  wrappers, listeners, timers, observers), which every collector run
+  walks.
+- **A reading is the span between two**: the lines are written when the
+  chord keeps a reading, and the counts start again then and when a page
+  is shown. The call under way at a restart goes on as the next reading's
+  first; with none under way (the first reading) the span begins at the
+  first call. A page whose script was made again or let go since the
+  reading began says its collector and timer list from their own start.
+- **What it costs**: a read of the counter (`cycles`) and a few additions
+  at each call, and one read of the checks' count at each turn's close;
+  the sites' lookup at each `setTimeout`
+  and `setInterval`; and nothing at all without `diagnostics` but a test
+  of a flag at each call. The collector's counts are the engine's, kept
+  always: one addition per object a run walks, two counter reads per run.
+  The checks' count is libdom's, kept always too: one addition per check.
+  libdom counts the timer list only while the sites are on.
 
 ### Built differently from the brief, and why
 

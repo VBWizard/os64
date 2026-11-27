@@ -195,7 +195,7 @@ static garb_cascade_t *document_cascade(const yonder_svg_document_t *d, garb_env
         sheets[i] = (garb_sheet_in_t){.sheet = &d->sheets[i], .media = d->media[i]};
     return garb_cascade_limited(sheets, (int32_t)d->nsheets, d->tree, env,
         (garb_cascade_limits_t){YONDER_SVG_CASCADE_BYTES, YONDER_SVG_READ_BYTES,
-                                YONDER_SVG_ATTRIBUTE_BYTES, YONDER_SVG_ATTRIBUTES});
+                                YONDER_SVG_ATTRIBUTE_BYTES, YONDER_SVG_ATTRIBUTES, NULL, NULL, false});
 }
 svg_status_t yonder_svg_document_size(yonder_svg_document_t *d, bool dark, bool reduced,
                                       bool (*cancelled)(void *), void *context,

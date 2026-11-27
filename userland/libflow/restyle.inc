@@ -1,0 +1,801 @@
+// restyle.inc — a restyle kept in the tree it changes (flow_restyle_in_place;
+// BRIEF_LAYOUT_NEEDS.md N1). Included by flow.c, whose tree, frames and
+// ink it writes.
+//
+// The styles are rebuilt as a layout would rebuild them. When every element
+// whose style came out different differs only in what the painter reads
+// (f_style_paint_only), and nothing else about it moved, the new values are
+// written into the tree's own styles in place: the boxes, the fragments and
+// the public tree keep pointing at the same structs, which now hold the new
+// values, and no box is built or placed. The lists those values point into
+// are copied into the tree's restyle arena first, so that nothing points
+// into the build, which is freed. The animation tick is the precedent: it
+// writes a ticking element's style in place the same way, and the frames,
+// the ink and the drawn stamps follow as they do there. Where a transform
+// took a new value, the page's extent and the scroll containers' ranges
+// are reached again from where placement left them, which the tick does
+// not do.
+
+// Whether two records' anchors (or fixed anchors) are the same element:
+// the same node, or each record's own. A pseudo-element that makes a
+// containing block is its own anchor, and its node is the style pass's,
+// made again by every pass, so `o_self` and `n_self` (the node each record
+// is for) are what say its two anchors are one.
+static bool keep_same_anchor(const os64_html_node_t *o, const os64_html_node_t *o_self,
+                             const os64_html_node_t *n, const os64_html_node_t *n_self)
+{
+    return o == n || (o == o_self && n == n_self);
+}
+
+// The first derived part of two records of one element that differs, by
+// name, or NULL when they agree (the decoration is keep_judge's to judge
+// apart): what boxes, lists, links, anchors and pseudo-elements were built
+// from. `o_self` and `n_self`: the node each record is for (keep_same_anchor).
+static const char *keep_derived_differs(const FStyled *o, const os64_html_node_t *o_self,
+                                        const FStyled *n, const os64_html_node_t *n_self)
+{
+    return o->holds_block != n->holds_block ? "holds_block"
+         : o->link != n->link ? "link"
+         : o->lists != n->lists || o->lists_or_dls != n->lists_or_dls || o->items != n->items ? "lists"
+         : o->in_nobr != n->in_nobr ? "in_nobr"
+         : o->quotes != n->quotes ? "quotes"
+         : o->has_rp != n->has_rp ? "has_rp"
+         : !keep_same_anchor(o->anchor, o_self, n->anchor, n_self) ||
+           !keep_same_anchor(o->fixed_anchor, o_self, n->fixed_anchor, n_self) ? "anchor"
+         : o->transparent != n->transparent ? "transparent"
+         : o->lays_out_items != n->lays_out_items ? "lays_out_items"
+         : o->pseudo_declared != n->pseudo_declared || (o->pseudo[0] != NULL) != (n->pseudo[0] != NULL) ||
+           (o->pseudo[1] != NULL) != (n->pseudo[1] != NULL) ? "pseudo-elements"
+         : NULL;
+}
+
+// Whether two pseudo-elements' nodes hold the same content text (or both
+// none): a different text is a different box, which is placement's.
+static bool keep_same_text(const os64_html_node_t *a, const os64_html_node_t *b)
+{
+    const os64_html_node_t *x = a != NULL ? a->first_child : NULL, *y = b != NULL ? b->first_child : NULL;
+    if ((x == NULL) != (y == NULL))
+        return false;
+    return x == NULL || (x->text_len == y->text_len && os64_memcmp(x->text, y->text, x->text_len) == 0);
+}
+
+// A pair to write: the tree's record and the build's, and the node the
+// tree's is for (a pseudo-element's own node, the style pass's); and, for a
+// box that only moves (keep_move), how far, in 26.6.
+typedef struct {
+    FStyled *was;
+    const FStyled *is;
+    const os64_html_node_t *self;
+    bool moves;
+    int64_t dx, dy;
+} FKeep;
+
+typedef struct {
+    const flow_tree_t *tree;
+    FKeep *pairs;
+    int32_t n, cap;
+    flow_restyle_reason_t why;
+    // Where the restyle declined, and what was found there (flow_restyle_t).
+    const os64_html_node_t *at;
+    char detail[48];
+} FKeeps;
+
+// A decline at `node`, said in `what`.
+static bool keep_declined(FKeeps *k, flow_restyle_reason_t why, const os64_html_node_t *node, const char *what)
+{
+    k->why = why;
+    k->at = node;
+    size_t n = 0;
+    for (; what != NULL && what[n] != '\0' && n + 1 < sizeof(k->detail); n++)
+        k->detail[n] = what[n];
+    k->detail[n] = '\0';
+    return false;
+}
+
+// How a write that changed only an element's insets (f_style_insets_only)
+// lands: the case it is (BRIEF_LAYOUT_NEEDS.md N4), said in `said` for the
+// record, returned when it is one a move does not take (NULL when the box
+// moves by its insets alone), and how far, for keep_move. Told first when
+// it applies: `a pseudo-element`; `no box`
+// (flow_box_for has none: its own `display: none` or `contents`, among
+// others; one under a `display: none` ancestor never reaches here, since
+// no style of it comes out different); `static` (its insets are not read);
+// `sticky`; `a relative inline` (a relative inline's pieces, or an atom on
+// a line: what they reach is their line's, and so their block's); `laid
+// out unpositioned` (a box its position does not place, a table row's);
+// for an absolute or fixed `a table` or `an aspect ratio` (each sizes and
+// places itself by rules of its own). Then, for an axis whose insets
+// changed, on an absolute or fixed box (CSS 2.1 §§ 10.3.7, 10.6.4, as
+// layout.c's solve_axis does them): its width follows them (no width
+// given and a side set: shrink-to-fit or stretched); its height follows
+// them (no height given and both sides set in one of the two styles); auto
+// margins place it (both sides set in one style and a margin auto). Then,
+// for a relative (§ 9.4.3) or absolute or fixed box: another side places
+// it after the write than before, on either axis; else `a percentage` when
+// an inset that changed and places it is one (its containing block is not
+// looked up); else how far it moves: `resolves the same` (every inset that
+// places it came out the same length), less than a pixel on each axis, or
+// a pixel or more on the larger axis, by whole pixels, bucketed.
+static bool keep_length_same(flow_length_t a, flow_length_t b)
+{
+    return a.kind == b.kind && a.value == b.value && a.offset == b.offset;
+}
+
+// The change of one placing inset: none when the two are the same length,
+// whatever a percentage of; a percentage that changed is said apart.
+static int64_t keep_offset_of(flow_length_t a, flow_length_t b, bool *percent)
+{
+    if (keep_length_same(a, b))
+        return 0;
+    *percent = *percent || a.kind == FLOW_LENGTH_PERCENT || b.kind == FLOW_LENGTH_PERCENT;
+    return f_len(b, 0) - f_len(a, 0);
+}
+
+static bool keep_set(const flow_style_t *s, int side)
+{
+    return s->inset[side].kind != FLOW_LENGTH_AUTO;
+}
+
+// The move along one axis whose sides are `s0`, `s1`: the start side wins
+// when both are set (`left` over `right`, `top` over `bottom`; an
+// absolute box's over-constrained start is the start side too, its auto
+// margins aside, which the caller said apart), so the axis moves by the
+// change of the side set, and is refused when the side that places it is
+// not the same one on both.
+static const char *keep_axis_move(const flow_style_t *a, const flow_style_t *b, int s0, int s1, bool *percent,
+                                  int64_t *d)
+{
+    bool a0 = keep_set(a, s0), b0 = keep_set(b, s0), a1 = keep_set(a, s1), b1 = keep_set(b, s1);
+    *d = 0;
+    if (a0 && b0)
+        *d = keep_offset_of(a->inset[s0], b->inset[s0], percent);
+    else if (!a0 && !b0 && a1 && b1)
+        *d = -keep_offset_of(a->inset[s1], b->inset[s1], percent);
+    else if (a0 || b0 || a1 || b1)
+        return "another side places it";
+    return NULL;
+}
+
+// Why an absolute or fixed box's axis with sides `s0`, `s1`, whose insets
+// changed, is not moved by them alone: its size given or not (`given`).
+static const char *keep_axis_sized(const flow_style_t *a, const flow_style_t *b, int s0, int s1, bool given,
+                                   bool across)
+{
+    bool any = keep_set(a, s0) || keep_set(a, s1) || keep_set(b, s0) || keep_set(b, s1);
+    bool both = (keep_set(a, s0) && keep_set(a, s1)) || (keep_set(b, s0) && keep_set(b, s1));
+    if (!given && (across ? any : both))
+        return across ? "its width follows them" : "its height follows them";
+    if (both && (b->margin[s0].kind == FLOW_LENGTH_AUTO || b->margin[s1].kind == FLOW_LENGTH_AUTO ||
+                 a->margin[s0].kind == FLOW_LENGTH_AUTO || a->margin[s1].kind == FLOW_LENGTH_AUTO))
+        return "auto margins place it";
+    return NULL;
+}
+
+static const char *keep_offset_case(const flow_tree_t *tree, const os64_html_node_t *node,
+                                    const os64_html_node_t *self, const flow_style_t *a, const flow_style_t *b,
+                                    char *said, size_t cap, int64_t *mx, int64_t *my)
+{
+    const flow_box_t *box = node == self ? flow_box_for(tree, node) : NULL;
+    bool out = b->position == FLOW_POSITION_ABSOLUTE || b->position == FLOW_POSITION_FIXED;
+    const char *why = node != self ? "a pseudo-element"
+                    : box == NULL ? "no box"
+                    : b->position == FLOW_POSITION_STATIC ? "static"
+                    : b->position == FLOW_POSITION_STICKY ? "sticky"
+                    : box->kind == FLOW_BOX_SPAN || box->kind == FLOW_BOX_ATOMIC ? "a relative inline"
+                    : !box->positioned ? "laid out unpositioned"
+                    : out && box->kind == FLOW_BOX_TABLE ? "a table"
+                    : out && box->kind == FLOW_BOX_BLOCK && b->aspect_ratio > 0 ? "an aspect ratio" : NULL;
+    const char *kind = b->position == FLOW_POSITION_RELATIVE ? "relative"
+                     : b->position == FLOW_POSITION_FIXED ? "fixed" : "absolute";
+    bool replaced = box != NULL && box->kind == FLOW_BOX_REPLACED;
+    bool across = !keep_length_same(a->inset[FLOW_LEFT], b->inset[FLOW_LEFT]) ||
+                  !keep_length_same(a->inset[FLOW_RIGHT], b->inset[FLOW_RIGHT]);
+    bool down = !keep_length_same(a->inset[FLOW_TOP], b->inset[FLOW_TOP]) ||
+                !keep_length_same(a->inset[FLOW_BOTTOM], b->inset[FLOW_BOTTOM]);
+    if (why == NULL && out && across)
+        why = keep_axis_sized(a, b, FLOW_LEFT, FLOW_RIGHT,
+                              replaced || b->width.kind == FLOW_LENGTH_PX || b->width.kind == FLOW_LENGTH_PERCENT, true);
+    if (why == NULL && out && down)
+        why = keep_axis_sized(a, b, FLOW_TOP, FLOW_BOTTOM,
+                              replaced || b->height.kind == FLOW_LENGTH_PX || b->height.kind == FLOW_LENGTH_PERCENT, false);
+    bool percent = false;
+    int64_t dx = 0, dy = 0;
+    if (why == NULL)
+        why = keep_axis_move(a, b, FLOW_LEFT, FLOW_RIGHT, &percent, &dx);
+    if (why == NULL)
+        why = keep_axis_move(a, b, FLOW_TOP, FLOW_BOTTOM, &percent, &dy);
+    if (why == NULL && percent)
+        why = "a percentage";
+    int64_t far = dx < 0 ? -dx : dx;
+    far = dy > far ? dy : -dy > far ? -dy : far;
+    const char *moves = far == 0 ? "resolves the same"
+                      : far < FLOW_UNITS_PER_PX ? "moves less than a pixel"
+                      : far < 2 * FLOW_UNITS_PER_PX ? "moves 1 px"
+                      : far < 9 * FLOW_UNITS_PER_PX ? "moves 2 to 8 px"
+                      : far < 65 * FLOW_UNITS_PER_PX ? "moves 9 to 64 px" : "moves over 64 px";
+    os64_snprintf(said, cap, "an inset, %s%s%s", why != NULL ? why : kind, why != NULL ? "" : ", ",
+                  why != NULL ? "" : moves);
+    *mx = dx;
+    *my = dy;
+    return why;
+}
+
+// Whether an element whose only change past what the painter reads is its
+// insets is kept (LAYOUT_NEEDS N4, a box that only moves), and how far it
+// moves, in 26.6: an element with no box, or a static one, whose insets
+// nothing reads, is kept and moves nothing; a positioned block-level box
+// keep_offset_case finds moved by its insets alone is kept and moves, when
+// what was made of it can be made again where it moved to (move_blocked).
+// Anything else is declined, `said` naming why.
+static bool keep_move(const FKeeps *k, const os64_html_node_t *node, const os64_html_node_t *self,
+                      const flow_style_t *a, const flow_style_t *b, int64_t *dx, int64_t *dy, char *said,
+                      size_t cap)
+{
+    *dx = *dy = 0;
+    const char *why = keep_offset_case(k->tree, node, self, a, b, said, cap, dx, dy);
+    if (why != NULL && (os64_streq(why, "no box") || os64_streq(why, "static"))) {
+        *dx = *dy = 0;
+        return true;
+    }
+    if (why != NULL)
+        return false;
+    const FBox *record = box_record(k->tree, node);
+    const char *blocked = record != NULL ? move_blocked(record, true) : "no record of its box";
+    if (blocked != NULL) {
+        os64_snprintf(said, cap, "an inset, %s", blocked);
+        return false;
+    }
+    return true;
+}
+
+// Judges one element's (or pseudo-element's) two records: nothing to do,
+// one more pair to write, or the reason the restyle declines. `node` is
+// the element it is told at; `was_self` and `is_self` the nodes the two
+// records are for, which differ for a pseudo-element (keep_same_anchor).
+static bool keep_judge(FKeeps *k, const os64_html_node_t *node, FStyled *was, const FStyled *is,
+                       const os64_html_node_t *was_self, const os64_html_node_t *is_self)
+{
+    if (was == NULL || is == NULL)
+        return keep_declined(k, FLOW_RESTYLE_MEMBERSHIP, node, was == NULL ? "no record before" : "no record after");
+    // An animated element's sampled style may come out the same while what
+    // its keyframes resolve against moved: an `inherit` endpoint, or an
+    // implicit keyframe's underlying value. It is kept only when its
+    // underlying style (the motion's `base`, which inherited values reach)
+    // came out the same as well.
+    if ((was->motion != NULL) != (is->motion != NULL) ||
+        (was->motion != NULL && (was->motion->nanims != is->motion->nanims ||
+                                 !f_style_equal(&was->motion->base, &is->motion->base))))
+        return keep_declined(k, FLOW_RESTYLE_MOTION, node, "an animation's underlying style");
+    bool same_style = f_style_equal(&was->style, &is->style);
+    bool same_decoration = was->decoration == is->decoration &&
+                           (was->decoration == 0 || os64_memcmp(&was->decoration_colors, &is->decoration_colors,
+                                                                sizeof(was->decoration_colors)) == 0);
+    const char *derived = keep_derived_differs(was, was_self, is, is_self);
+    if (same_style && same_decoration && derived == NULL)
+        return true;
+    if (was->motion != NULL || is->motion != NULL)
+        return keep_declined(k, FLOW_RESTYLE_MOTION, node, "an animated element");
+    if (derived != NULL) {
+        char said[48] = "derived ";
+        os64_strcopy(said + 8, sizeof(said) - 8, derived);
+        return keep_declined(k, FLOW_RESTYLE_GEOMETRY, node, said);
+    }
+    int64_t dx = 0, dy = 0;
+    if (!f_style_paint_only(&was->style, &is->style) && f_style_insets_only(&was->style, &is->style)) {
+        char said[sizeof(k->detail)];
+        if (!keep_move(k, node, was_self, &was->style, &is->style, &dx, &dy, said, sizeof(said)))
+            return keep_declined(k, FLOW_RESTYLE_GEOMETRY, node, said);
+    } else if (!f_style_paint_only(&was->style, &is->style)) {
+        int64_t at = f_style_placement_byte(&was->style, &is->style);
+        if (at < 0)
+            return keep_declined(k, FLOW_RESTYLE_GEOMETRY, node,
+                                 at == -2 ? "a transform or filter came or went" : "a placement list");
+        // "placement byte N", N in decimal (the offset in flow_style_t).
+        char said[48] = "placement byte ", digits[24];
+        size_t n = 0, used = os64_strlen(said);
+        do {
+            digits[n++] = (char)('0' + at % 10);
+            at /= 10;
+        } while (at > 0 && n < sizeof(digits));
+        while (n > 0 && used + 1 < sizeof(said))
+            said[used++] = digits[--n];
+        said[used] = '\0';
+        return keep_declined(k, FLOW_RESTYLE_GEOMETRY, node, said);
+    }
+    // Whether a box comes to be a group or a context, which changes the
+    // layers, is asked of the boxes themselves before anything is written
+    // (flow_restyle_in_place). An opacity's side of 0 is the record's
+    // `transparent` (an unpainted box), which keep_derived_differs compares.
+    // The fragments hold a copy of their element's decoration and its
+    // colours (layout.c), which no restyle in place refreshes.
+    if (!same_decoration)
+        return keep_declined(k, FLOW_RESTYLE_DECORATION, node, "a decoration or its colours");
+    if (k->n == k->cap) {
+        int32_t cap = k->cap != 0 ? k->cap * 2 : 16;
+        FKeep *grown = os64_realloc(k->pairs, (size_t)cap * sizeof(*grown));
+        if (grown == NULL)
+            return keep_declined(k, FLOW_RESTYLE_ROOM, node, "no memory for the pairs");
+        k->pairs = grown;
+        k->cap = cap;
+    }
+    k->pairs[k->n++] = (FKeep){was, is, was_self, dx != 0 || dy != 0, dx, dy};
+    return true;
+}
+
+// The node `key` of a build is a pseudo-element's: its element's record
+// there names it.
+static bool keep_is_pseudo(const FStyles *b, const os64_html_node_t *key)
+{
+    const FStyled *up = key->parent != NULL ? f_style_of(b, key->parent) : NULL;
+    return up != NULL && (up->pseudo[0] == key || up->pseudo[1] == key);
+}
+
+// A decline found at `node` because its anchor moved is a descendant's
+// echo of an ancestor that came to make a containing block, or ceased to
+// (the elements are met in the map's order, not the tree's), so the record
+// is told that ancestor, the nearest in the flat tree whose being its own
+// anchor turned, as the cause. The verdict stays the echo's: geometry.
+static void keep_explain_anchor(FKeeps *k, const FStyles *old, const FStyles *b, const os64_html_node_t *node)
+{
+    for (const os64_html_node_t *a = node != NULL ? f_flat_parent(old->doc, node) : NULL; a != NULL;
+         a = f_flat_parent(old->doc, a)) {
+        const FStyled *was = f_style_of(old, a), *is = f_style_of(b, a);
+        if (was == NULL || is == NULL)
+            continue;
+        if ((was->anchor == a) != (is->anchor == a) || (was->fixed_anchor == a) != (is->fixed_anchor == a)) {
+            k->at = a;
+            os64_strcopy(k->detail, sizeof(k->detail), "derived anchor, a containing block came or went");
+            return;
+        }
+    }
+    // No ancestor turned, yet the anchor did: the two builds computed it
+    // otherwise, which is the builder's to explain.
+    os64_strcopy(k->detail, sizeof(k->detail), "derived anchor, no ancestor turned");
+}
+
+// The pairs to write for every element and pseudo-element of the new build
+// `b` against the tree's `old`, or false with the reason.
+static bool keep_collect(FKeeps *k, FStyles *old, const FStyles *b)
+{
+    if (b->map.count != old->map.count)
+        return keep_declined(k, FLOW_RESTYLE_MEMBERSHIP, NULL, "the number of records");
+    for (size_t i = 0; i < b->map.cap; i++) {
+        const os64_html_node_t *node = b->map.keys[i];
+        if (node == NULL || keep_is_pseudo(b, node))
+            continue;
+        FStyled *was = f_map_get(&old->map, node);
+        const FStyled *is = b->map.vals[i];
+        if (!keep_judge(k, node, was, is, node, node)) {
+            if (k->why == FLOW_RESTYLE_GEOMETRY && os64_streq(k->detail, "derived anchor"))
+                keep_explain_anchor(k, old, b, node);
+            return false;
+        }
+        for (int p = 0; p < 2; p++) {
+            if (is->pseudo[p] == NULL)
+                continue;
+            if (!keep_same_text(was->pseudo[p], is->pseudo[p]))
+                return keep_declined(k, FLOW_RESTYLE_GEOMETRY, node, p ? "::after's text" : "::before's text");
+            if (!keep_judge(k, node, f_map_get(&old->map, was->pseudo[p]), f_style_of(b, is->pseudo[p]),
+                            was->pseudo[p], is->pseudo[p]))
+                return false;
+        }
+    }
+    return true;
+}
+
+// The styles written, by the struct a box points at: the records' (an
+// element's, which its fragments share, or a pseudo-element's) and the
+// anonymous boxes' taken again under them.
+static bool keep_written(const FMap *written, const flow_style_t *s)
+{
+    return s != NULL && f_map_get(written, s) != NULL;
+}
+
+// Element `n` into `changed`, changed in every property (`all`): CANVAS
+// when the canvas may take its background; MEMORY.
+static int32_t keep_change(const flow_tree_t *tree, FMap *changed, const os64_html_node_t *n, const FProps *all)
+{
+    if (n == NULL || f_map_get(changed, n) != NULL)
+        return FLOW_PARTS_MARKED;
+    if (may_own_canvas(tree, n))
+        return FLOW_PARTS_CANVAS;
+    return f_map_put(changed, n, (void *)all) ? FLOW_PARTS_MARKED : FLOW_PARTS_MEMORY;
+}
+
+// The elements whose styles `written` holds into `changed`, for parts_in
+// to mark (LAYOUT_NEEDS_N3.md § 3 A): by the boxes that draw them
+// (box_named: a pseudo-element's box names its host, an anonymous box the
+// element holding it), and an element with no box by the replaced box that
+// draws it from its style (drawn_by: an inline svg's shapes), if one does;
+// NO_BOX when what draws it cannot be bounded.
+static int32_t keep_changed(const flow_tree_t *tree, const FKeeps *k, const FMap *written, FMap *changed,
+                            const FProps *all)
+{
+    int32_t why = FLOW_PARTS_MARKED;
+    for (const flow_box_t *box = tree->root; why == FLOW_PARTS_MARKED && box != NULL; box = box_after(box))
+        if (keep_written(written, box->style))
+            why = keep_change(tree, changed, box_named(box), all);
+    for (int32_t i = 0; why == FLOW_PARTS_MARKED && i < k->n; i++) {
+        const os64_html_node_t *n = k->pairs[i].self, *by;
+        if (n == NULL || f_pseudo_of(n) != GARB_PSEUDO_NONE || f_map_get(&tree->first, n) != NULL)
+            continue;
+        why = !drawn_by(tree, n, &by) ? FLOW_PARTS_NO_BOX : keep_change(tree, changed, by, all);
+    }
+    return why;
+}
+
+static flow_restyle_t restyle_in_place(flow_tree_t *tree, const os64_html_document_t *doc,
+                                       const os64_page_t *model, const flow_env_t *env,
+                                       const flow_reuse_inputs_t *inputs, int32_t width,
+                                       const flow_restyle_marks_t *marks, int32_t *parts)
+{
+    flow_restyle_t out = {FLOW_RESTYLE_DECLINED, FLOW_RESTYLE_NO_TREE, 0, NULL, "", FLOW_PARTS_INCOMPLETE, 0};
+    if (tree == NULL || doc == NULL || env == NULL || inputs == NULL || tree->doc != doc || tree->incomplete ||
+        tree->styles == NULL || tree->restyle_spent)
+        return out;
+    // What changed since the tree, and whether it was laid out as this
+    // layout would be: the graft's own source test. Its cascade's
+    // generation among them: a tree's records point into the cascade they
+    // were computed in (a family's names are that cascade's strings), and a
+    // host frees a cascade with the tree laid out in it, so a tree kept
+    // under another cascade would outlive what its unwritten records read.
+    FReuseSnapshot *r = tree->reuse;
+    flow_reuse_stats_t ignored = {0};
+    out.why = FLOW_RESTYLE_NO_HISTORY;
+    if (r == NULL || !inputs->resource_owner || !reuse_read(r, &ignored))
+        return out;
+    out.why = FLOW_RESTYLE_STRUCTURE;
+    if (r->structural) {
+        out.at = r->structural_at;
+        os64_strcopy(out.detail, sizeof(out.detail), r->structural_what);
+        // Whether the element it is told at has a box: one with none is in a
+        // part of the page no box was made for (`display: none` above it,
+        // say), which the record says.
+        if (out.at != NULL && flow_box_for(tree, out.at) == NULL) {
+            size_t n = os64_strlen(out.detail);
+            os64_strcopy(out.detail + n, sizeof(out.detail) - n, ", no box");
+        }
+        return out;
+    }
+    out.why = FLOW_RESTYLE_INPUTS;
+    const char *input = r->width != width || r->doc != doc ? "another width"
+                      : r->generation != garb_cascade_generation(env->cascade) ? "another cascade"
+                      : doc->quirks == OS64_HTML_QUIRKS ? "a quirks-mode page"
+                      : !reuse_inputs_equal(&r->inputs, inputs) ? "fonts, pictures or form state"
+                      : !reuse_environment_equal(&r->env, env) ? "the environment" : NULL;
+    if (input != NULL) {
+        os64_strcopy(out.detail, sizeof(out.detail), input);
+        return out;
+    }
+    FStyles *b = f_style_build_reusing(doc, model, env, tree->styles, false);
+    out.why = FLOW_RESTYLE_STYLES;
+    if (b == NULL || b->lists_refused) {
+        f_style_free(b);
+        return out;
+    }
+    FKeeps k = {tree, NULL, 0, 0, FLOW_RESTYLE_NONE, NULL, ""};
+    if (!keep_collect(&k, tree->styles, b)) {
+        out.why = k.why;
+        out.at = k.at;
+        os64_strcopy(out.detail, sizeof(out.detail), k.detail);
+        os64_free(k.pairs);
+        f_style_free(b);
+        return out;
+    }
+    // Every value first, into the restyle arena, before any is written: a
+    // room that runs out leaves the tree's styles as they were, and marks
+    // the room spent, so that no later restyle is kept in this tree.
+    flow_style_t *values = k.n > 0 ? os64_malloc((size_t)k.n * sizeof(*values)) : NULL;
+    bool room = k.n == 0 || values != NULL;
+    for (int32_t i = 0; room && i < k.n; i++) {
+        values[i] = k.pairs[i].is->style;
+        room = f_style_copy_lists(&values[i], &tree->restyle);
+    }
+    if (!room) {
+        tree->restyle_spent = true;
+        out.why = FLOW_RESTYLE_ROOM;
+        os64_free(values);
+        os64_free(k.pairs);
+        f_style_free(b);
+        return out;
+    }
+    FMap written = {0};
+    for (int32_t i = 0; room && i < k.n; i++)
+        room = f_map_put(&written, &k.pairs[i].was->style, &k.pairs[i]);
+    if (!room) {
+        f_map_free(&written);
+        out.why = FLOW_RESTYLE_ROOM;
+        os64_free(values);
+        os64_free(k.pairs);
+        f_style_free(b);
+        return out;
+    }
+    // A box that is a group (is_group) has layers opened and closed round
+    // it, and one that makes a context (makes_context) paints its own: a
+    // new value that changes either changes the public tree's layers, which
+    // no restyle in place rebuilds. A transform drawn through its matrix is
+    // a group (own_through), and one drawn upright or moved is not, so the
+    // copy's frame is filled from the new value for is_group to ask. Judged
+    // on a copy of each written box with its new value before anything is
+    // written.
+    bool transformed = false;
+    for (const flow_box_t *box = tree->root; k.n > 0 && box != NULL; box = box_after(box)) {
+        FKeep *kp = f_map_get(&written, box->style);
+        if (kp == NULL)
+            continue;
+        // The copy's own frame is a copy too, naming the copy as its box, as
+        // makes_context and own_through ask of a box's own frame.
+        const flow_style_t *value = &values[kp - k.pairs];
+        const flow_frame_t *f = box->frame;
+        bool framed = f != NULL && f->box == box && f->kind == F_FRAME_TRANSFORM;
+        flow_frame_t tried = framed ? *f : (flow_frame_t){0};
+        flow_box_t tried_box = *box;
+        tried_box.style = value;
+        if (framed) {
+            transform_fill(&tried, value);
+            tried.box = &tried_box;
+            tried_box.frame = &tried;
+        }
+        bool layers_same = is_group(&tried_box) == is_group(box) && makes_context(&tried_box) == makes_context(box);
+        if (!layers_same) {
+            f_map_free(&written);
+            out.why = FLOW_RESTYLE_STACKING;
+            // A pseudo-element's box is told at its host: its own node is
+            // the style pass's, which never leaves libflow.
+            out.at = box->node != NULL && f_pseudo_of(box->node) != GARB_PSEUDO_NONE ? box->node->parent : box->node;
+            os64_strcopy(out.detail, sizeof(out.detail),
+                         is_group(&tried_box) != is_group(box) ? "a group came or went" : "a context came or went");
+            os64_free(values);
+            os64_free(k.pairs);
+            f_style_free(b);
+            return out;
+        }
+        transformed = transformed || framed;
+    }
+    // A transform, or a box that only moved, moves how far the page and its
+    // scroll containers reach, which is worked again from where placement
+    // left them.
+    uint64_t moves = 0;
+    for (int32_t i = 0; i < k.n; i++)
+        moves += k.pairs[i].moves;
+    if ((transformed || moves > 0) && tree->nscrollers > 0 && tree->reach_base_ranges == NULL) {
+        f_map_free(&written);
+        out.why = FLOW_RESTYLE_ROOM;
+        os64_free(values);
+        os64_free(k.pairs);
+        f_style_free(b);
+        return out;
+    }
+    // What the written elements painted before the write; what they paint
+    // after it is marked once the boxes have followed.
+    FMap changed = {0};
+    FProps all;
+    os64_memset(&all, 0xff, sizeof(all));
+    int32_t marked = FLOW_PARTS_MARKED;
+    bool marking = marks != NULL && marks->mark != NULL && k.n > 0;
+    if (marking)
+        marked = keep_changed(tree, &k, &written, &changed, &all);
+    if (marking && marked == FLOW_PARTS_MARKED)
+        marked = parts_in(tree, &changed, marks->scroll, marks->mark, marks->ctx, NULL, 0);
+    for (int32_t i = 0; i < k.n; i++) {
+        k.pairs[i].was->style = values[i];
+        k.pairs[i].was->decoration_colors = k.pairs[i].is->decoration_colors;
+    }
+    // The boxes that draw a written style: an anonymous box under one takes
+    // its parent's inherited values again (in tree order, so a chain of them
+    // follows); a transform's frame is filled again, the ink grows to the
+    // new shadows and filters, and the drawn stamps move, as an animation
+    // tick's do. An anonymous box past the map's room keeps its old values,
+    // which is said: the restyle answers as declined, after its writes, and
+    // the layout that follows makes the tree afresh.
+    uint64_t stamp = k.n > 0 ? ++tree->drawn : 0;
+    bool whole = true;
+    for (flow_box_t *box = tree->root; k.n > 0 && box != NULL; box = (flow_box_t *)box_after(box)) {
+        bool own = keep_written(&written, box->style);
+        if (!own && box->node == NULL && box->parent != NULL && box->style != NULL &&
+            keep_written(&written, box->parent->style)) {
+            f_style_anonymous(tree->styles, box->parent->style, box->style->display, (flow_style_t *)box->style);
+            whole = whole && f_map_put(&written, box->style, box);
+            own = true;
+        }
+        if (!own)
+            continue;
+        flow_frame_t *f = (flow_frame_t *)box->frame;
+        if (f != NULL && f->box == box && f->kind == F_FRAME_TRANSFORM)
+            transform_fill(f, box->style);
+        ink_grown(box);
+        drawn_changed(box, true, stamp);
+    }
+    f_map_free(&written);
+    // The boxes that only moved, made again where they moved to (move_box),
+    // after their frames were filled from the new values: a moved box's own
+    // transform is worked again about where it now stands.
+    bool moved_whole = true;
+    for (int32_t i = 0; whole && moved_whole && i < k.n; i++)
+        if (k.pairs[i].moves)
+            moved_whole = move_box(tree, k.pairs[i].self, k.pairs[i].dx, k.pairs[i].dy, stamp);
+    bool unmoved = !moved_whole;
+    whole = whole && moved_whole;
+    bool reaching = transformed || moves > 0;
+    // The page's extent and the scroll containers' ranges reached again,
+    // from where placement left them, now the transforms draw elsewhere or
+    // the moved boxes stand elsewhere. When that moves a range or a scroll
+    // (and so a sticky box held to a range), what is painted moves outside
+    // every written element, and the marks are not the whole of it
+    // (LAYOUT_NEEDS_N3.md § 8); the page's extent changing alone moves only
+    // the host's scrollbars (reach_moved_painted).
+    flow_point_t *was_reach = reaching && marking && tree->nscrollers > 0
+                                  ? os64_malloc((size_t)tree->nscrollers * 2 * sizeof(*was_reach))
+                                  : NULL;
+    if (reaching && marking && tree->nscrollers > 0 && was_reach == NULL)
+        marked = FLOW_PARTS_MEMORY;
+    for (int32_t i = 0; was_reach != NULL && i < tree->nscrollers; i++) {
+        was_reach[2 * i] = tree->scrollers[i]->range;
+        was_reach[2 * i + 1] = tree->scrollers[i]->at;
+    }
+    if (reaching) {
+        // A moved box's reach is in the layout's own extent, which is worked
+        // out again with it where it moved to: the base the reach starts
+        // from (f_layout_extent).
+        if (moves > 0) {
+            f_layout_extent(tree->layout, tree_moved_of, tree);
+            tree->reach_base_w = tree->layout->width;
+            tree->reach_base_h = tree->layout->height;
+        }
+        tree->layout->width = tree->reach_base_w;
+        tree->layout->height = tree->reach_base_h;
+        for (int32_t i = 0; i < tree->nscrollers; i++)
+            tree->scrollers[i]->range = tree->reach_base_ranges[i];
+        reach_stacked(tree);
+        sticky_reach_scrolled(tree);
+        // A range that shrank holds its scroll within it, as a layout's
+        // restored scroll is held (flow_scroll_set).
+        for (int32_t i = 0; i < tree->nscrollers; i++) {
+            flow_frame_t *s = tree->scrollers[i];
+            if (s->at.x > s->range.x) s->at.x = s->range.x;
+            if (s->at.y > s->range.y) s->at.y = s->range.y;
+        }
+        if (marking && marked == FLOW_PARTS_MARKED && reach_moved_painted(tree, was_reach))
+            marked = FLOW_PARTS_MOVED;
+    }
+    os64_free(was_reach);
+    tree->styles->cascade_updates = b->cascade_updates;
+    out = (flow_restyle_t){k.n > 0 ? FLOW_RESTYLE_PAINT : FLOW_RESTYLE_NOTHING, FLOW_RESTYLE_NONE, (uint64_t)k.n, NULL, "",
+                           FLOW_PARTS_INCOMPLETE, moves};
+    if (!whole) {
+        tree->restyle_spent = true;
+        out = (flow_restyle_t){FLOW_RESTYLE_DECLINED, FLOW_RESTYLE_ROOM, (uint64_t)k.n, NULL, "",
+                               FLOW_PARTS_INCOMPLETE, moves};
+        os64_strcopy(out.detail, sizeof(out.detail),
+                     unmoved ? "a moved box past the room" : "an anonymous box past the map's room");
+    } else {
+        // Kept: the tree is current at the document's version, the one the
+        // cascade was brought to before this restyle.
+        pending_open(tree);
+        if (marking && marked == FLOW_PARTS_MARKED)
+            marked = parts_in(tree, &changed, marks->scroll, marks->mark, marks->ctx, NULL, 0);
+    }
+    *parts = marked;
+    f_map_free(&changed);
+    os64_free(values);
+    os64_free(k.pairs);
+    f_style_free(b);
+    return out;
+}
+
+flow_restyle_t flow_restyle_in_place(flow_tree_t *tree, const os64_html_document_t *doc,
+                                     const os64_page_t *model, const flow_env_t *env,
+                                     const flow_reuse_inputs_t *inputs, int32_t width,
+                                     const flow_restyle_marks_t *marks)
+{
+    int32_t parts = FLOW_PARTS_INCOMPLETE;
+    flow_restyle_t out = restyle_in_place(tree, doc, model, env, inputs, width, marks, &parts);
+    // Nothing written paints nothing; a declined restyle's marks, if any
+    // were handed before it declined, are not the whole of anything.
+    out.parts = out.kind == FLOW_RESTYLE_NOTHING ? FLOW_PARTS_MARKED
+              : out.kind == FLOW_RESTYLE_PAINT   ? parts
+                                                 : FLOW_PARTS_INCOMPLETE;
+    return out;
+}
+
+// Whether the kept tree `a` answers as the whole layout `b` of the same
+// document does, for what a restyle kept in place may write or must leave:
+// - the same boxes in the same order, each of the same kind and node, with
+//   the same border box, content box, baseline, own transform's frame (its
+//   border box, its origin's move and its matrix as drawn), overflow, clip,
+//   and stacking and painting flags;
+// - drawing styles equal in every field (f_style_equal);
+// - the same decoration lines and, where there are lines, the same colours
+//   (a box with none keeps colours it never draws, which a kept tree does
+//   not refresh);
+// - ink that covers the whole layout's, and an outline held wherever the
+//   whole layout holds one (a kept tree's ink and outlines only grow,
+//   ink_grown);
+// - the same paint layers, in order, by box and part;
+// - the same page extent, and each scroll container's range and scroll.
+// The first difference is named: a box's at `node` (its element's, for an
+// anonymous box), and what differed at `what`.
+// Whether two boxes' own transform frames, if they have one, draw alike:
+// the border box each keeps, how far the origin moved, and the matrix as
+// it is drawn (the same values a layout or a tick works out, to the bit).
+static bool restyle_same_frame(const flow_box_t *x, const flow_box_t *y)
+{
+    const flow_frame_t *f = x->frame != NULL && x->frame->box == x && x->frame->kind == F_FRAME_TRANSFORM ? x->frame : NULL;
+    const flow_frame_t *g = y->frame != NULL && y->frame->box == y && y->frame->kind == F_FRAME_TRANSFORM ? y->frame : NULL;
+    if (f == NULL || g == NULL)
+        return f == g;
+    return f->box_x == g->box_x && f->box_y == g->box_y && f->box_w == g->box_w && f->box_h == g->box_h &&
+           f->by.x == g->by.x && f->by.y == g->by.y && f->upright == g->upright && f->through == g->through &&
+           os64_memcmp(f->affine, g->affine, sizeof(f->affine)) == 0;
+}
+
+bool flow_restyle_check(const flow_tree_t *a, const flow_tree_t *b, const os64_html_node_t **node, const char **what)
+{
+    *node = NULL;
+    *what = NULL;
+    if (a == NULL || b == NULL) {
+        *what = "a tree";
+        return false;
+    }
+    const flow_box_t *x = a->root, *y = b->root;
+    for (; x != NULL && y != NULL; x = box_after(x), y = box_after(y)) {
+        bool ink_covers = true;
+        for (int k = 0; k < 4; k++)
+            ink_covers = ink_covers && x->ink[k] >= y->ink[k];
+        const char *differs = x->kind != y->kind || x->node != y->node ? "the boxes"
+                            : !same_rect(x->rect, y->rect) ? "a border box"
+                            : !same_rect(x->content, y->content) ? "a content box"
+                            : x->baseline != y->baseline ? "a baseline"
+                            : !restyle_same_frame(x, y) ? "a transform's frame"
+                            : !same_rect(x->overflow, y->overflow) ? "an overflow"
+                            : x->clipped != y->clipped || (x->clipped && !same_rect(x->clip, y->clip)) ? "a clip"
+                            : x->stacked != y->stacked || x->positioned != y->positioned || x->fixed != y->fixed ||
+                              x->unpainted != y->unpainted || x->scroller != y->scroller ? "a box's stacking"
+                            : (x->style == NULL) != (y->style == NULL) ? "a style"
+                            : x->style != NULL && !f_style_equal(x->style, y->style) ? "a style"
+                            : x->decoration != y->decoration ||
+                              (x->decoration != 0 && (x->underline_color != y->underline_color ||
+                                                      x->line_through_color != y->line_through_color))
+                                  ? "a decoration"
+                            : !ink_covers ? "an ink that does not cover the whole layout's"
+                            : y->holds_outline && !x->holds_outline ? "an outline not held"
+                            : NULL;
+        if (differs != NULL) {
+            *node = box_named(x);
+            *what = differs;
+            return false;
+        }
+    }
+    if (x != NULL || y != NULL) {
+        *what = "the number of boxes";
+        return false;
+    }
+    if (a->nlayers != b->nlayers) {
+        *what = "the paint layers";
+        return false;
+    }
+    for (int32_t i = 0; i < a->nlayers; i++)
+        if (a->layers[i].part != b->layers[i].part || a->layers[i].box->kind != b->layers[i].box->kind ||
+            a->layers[i].box->node != b->layers[i].box->node) {
+            *node = box_named(a->layers[i].box);
+            *what = "the paint layers";
+            return false;
+        }
+    if (a->layout->width != b->layout->width || a->layout->height != b->layout->height) {
+        *what = "the page's extent";
+        return false;
+    }
+    if (a->nscrollers != b->nscrollers) {
+        *what = "the scroll containers";
+        return false;
+    }
+    for (int32_t i = 0; i < a->nscrollers; i++) {
+        const flow_frame_t *s = a->scrollers[i], *t = b->scrollers[i];
+        if (s->range.x != t->range.x || s->range.y != t->range.y || s->at.x != t->at.x || s->at.y != t->at.y) {
+            *node = box_named(s->box);
+            *what = "a scroll container's range";
+            return false;
+        }
+    }
+    return true;
+}

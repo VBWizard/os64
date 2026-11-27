@@ -352,7 +352,8 @@ a codec we decode); everything else `""`. The day AAC is configured in,
 `emptied`, `stalled`, `loadedmetadata`, `loadeddata`, `canplay`,
 `canplaythrough`, `playing`, `waiting`, `seeking`, `seeked`, `ended`,
 `durationchange`, `timeupdate` (every 250 ms while playing, as other
-browsers do), `play`, `pause`, `ratechange`, `volumechange`. Twenty-two.
+browsers do; one at most waits undelivered, and `progress` likewise, so a
+page slower than the clock hears one when it gets there), `play`, `pause`, `ratechange`, `volumechange`. Twenty-two.
 `addEventListener` hears any type today; the `on…` handler properties
 come from a bit per event type in a 64-bit mask with 13 bits free. **The
 mask is widened to 128 bits** in this arc — the alternative, `on…`
@@ -569,10 +570,11 @@ above:
   sounds at a time.** No media thread is joined: their handles are
   closed at birth, a session is freed once each of its threads has said
   it is done, and yonder's end waits for the audio thread to say so too.
-  A start that answers an error is treated as
-  one that may be running, because out of handles the kernel starts the
-  thread detached and still answers an error; freeing the fetch job under
-  such a loader was a crash on a page with eighteen players. The fetches
+  A start that answers an error made no thread (the kernel reserves the
+  handle before it makes the thread), so the loader's job and slot are
+  given back at once. Before that, out of handles the kernel started the
+  thread detached and still answered an error, and freeing the fetch job
+  under such a loader was a crash on a page with eighteen players. The fetches
   queue for four loader slots, below libfetch's six connections to a host
   (DEBTS.md § A page's sound has what a slot held by a long sound costs).
 - **The source keeps every byte that has arrived**, up to 256 MiB, so a seek

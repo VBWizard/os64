@@ -1,0 +1,49 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>A video under its controls and captions</title>
+<!--
+  VIDEO_PLANE.md § 5.2, P3b's fixture for what a page draws over a picture.
+  The video stays on its plane with all of it over the picture: the page
+  paints the layer of what lies over it, and the kernel blends that over
+  each picture inside the overlay rectangles.
+
+  Over the picture: a see-through control bar (black at half) across its
+  foot, an opaque play button overlapping the bar, and a caption's white
+  text. A badge moves across the top every half second, and a notice
+  blinks on and off every two seconds: each is a partial repaint, and an
+  overlay that moves or goes away must leave nothing behind.
+
+  What to read: the record's video line (`d`): placed, the layers made, the
+  overlays. Under `--plane-check=1`, its plane-check counts (wrong must be
+  0) and any `plane-check:` line on the console.
+-->
+<style>
+  body { font: 16px sans-serif; margin: 16px; background: #223; color: #ddd; }
+  #box { position: relative; width: 480px; height: 270px; }
+  video { display: block; width: 480px; height: 270px; background: #000; }
+  #bar { position: absolute; left: 0; bottom: 0; width: 480px; height: 40px; background: rgba(0, 0, 0, .5); }
+  #play { position: absolute; left: 12px; bottom: 6px; width: 28px; height: 28px; background: #e33; border-radius: 4px; }
+  #caption { position: absolute; left: 0; bottom: 48px; width: 480px; margin: 0; text-align: center;
+             color: #fff; font-size: 18px; }
+  #badge { position: absolute; top: 10px; left: 10px; padding: 2px 6px; background: #3a6; color: #fff; font-size: 12px; }
+  #notice { position: absolute; top: 40px; right: 10px; padding: 2px 6px; background: rgba(255, 200, 0, .7);
+            color: #000; font-size: 12px; }
+</style>
+<h1>A video under its controls and captions</h1>
+<div id="box">
+  <video id="v" src="bbb-480p-3s-av.mp4" autoplay muted loop></video>
+  <div id="bar"></div><div id="play"></div>
+  <p id="caption">A caption over the picture</p>
+  <div id="badge">LIVE</div>
+  <div id="notice">A notice that blinks</div>
+</div>
+<script>
+  const badge = document.getElementById('badge'), notice = document.getElementById('notice');
+  let x = 10, dx = 20;
+  setInterval(function () {
+    x += dx;
+    if (x > 400 || x < 10) dx = -dx;
+    badge.style.left = x + 'px';
+  }, 500);
+  setInterval(function () { notice.style.display = notice.style.display === 'none' ? '' : 'none'; }, 2000);
+</script>

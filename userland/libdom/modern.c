@@ -81,6 +81,10 @@ static const DModernRow kModern[] = {
     /* AUDIO_YONDER.md § Y.6: navigator.mediaSession, after the row above,
      * whose Navigator.prototype it joins. */
     {(const char *const[]){"MediaSession", "MediaMetadata", NULL}, d_media_session_install},
+    /* VIDEO.md § 9: the Fullscreen API, members of Element's and Document's
+     * prototypes and none of window's, so the row lists no name (as P1-Da's
+     * document row). */
+    {(const char *const[]){NULL}, d_fullscreen_install},
     {(const char *const[]){"localStorage", "sessionStorage", "Storage", NULL}, d_storage_install},
     {(const char *const[]){"performance", "Performance", "PerformanceEntry", "PerformanceMark",
                            "PerformanceMeasure", "PerformanceResourceTiming", "PerformanceNavigationTiming",

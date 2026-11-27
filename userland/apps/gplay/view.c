@@ -118,7 +118,7 @@ gplay_key_t gplay_key(uint8_t *seq, char ascii, uint8_t scancode, bool shift)
     }
     if (ascii == 27) {
         if (scancode == ESC_KEY_PS2 || scancode == ESC_KEY_USB)
-            return GPLAY_KEY_QUIT;
+            return GPLAY_KEY_ESCAPE;
         *seq = SEQ_ESC;
         return GPLAY_KEY_NONE;
     }
@@ -131,6 +131,9 @@ gplay_key_t gplay_key(uint8_t *seq, char ascii, uint8_t scancode, bool shift)
     case 'i':
     case 'I':
         return GPLAY_KEY_READOUT;
+    case 'f':
+    case 'F':
+        return GPLAY_KEY_FULL_SCREEN;
     case 'q':
     case 'Q':
         return GPLAY_KEY_QUIT;

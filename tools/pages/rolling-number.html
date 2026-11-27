@@ -1,0 +1,34 @@
+<!doctype html><html><head><title>rolling number</title><style>
+/* A number whose characters are columns placed by a negative margin-top in
+   a clipping row, at rest, with no animation, as another browser lays it out
+   (2026-11-23 capture): the row 20px tall, flex, overflow hidden; inside it a
+   flex span 100% tall; each character an inline element, so a flex item
+   blockified, stretched to 20px plus its negative margin; its children
+   20px blocks, a blank then 1 2 3 ... 9 0 1 2 3 ... Each window must show
+   exactly one digit, its top on the row's top, and the row sits on the text's
+   line like the words after it. */
+html{font-size:10px}body{margin:20px;background:#fff;color:#000;font-family:sans-serif}
+.info{overflow:hidden;display:inline-flex;vertical-align:top;font-size:14px;line-height:20px}
+.count{display:inline-flex}
+.num{line-height:2rem;font-size:1.4rem;overflow:hidden;display:flex}
+.digits{height:100%;display:flex}
+ch{display:inline}
+.after{font-size:14px}
+</style></head><body>
+<div class=info><div class=count><span class=num style="height:20px;line-height:20px"><span class=digits></span></span></div>
+<span class=after>&nbsp;views 17h ago</span></div>
+<script>
+const digits = document.querySelector('.digits');
+const shows = ['1', '7', '5', ',', '1', '9', '6'];
+for (const c of shows) {
+  const ch = document.createElement('ch');
+  // The blank is a line tall, as the capture measured it (a no-break space).
+  const column = ['\u00a0'];
+  if (c === ',') column.push(',', '\u00a0');
+  else for (let i = 0; i < 14; i++) column.push(String((i + 1) % 10));
+  for (const t of column) { const d = document.createElement('div'); d.textContent = t; ch.appendChild(d); }
+  const place = column.indexOf(c, 1);
+  ch.style.marginTop = (-20 * place) + 'px';
+  digits.appendChild(ch);
+}
+</script></body></html>

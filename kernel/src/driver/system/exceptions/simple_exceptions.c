@@ -71,40 +71,40 @@ static void record_resolved_fault(thread_t *fault_thread, bool did_read,
     kPageFaultCount++;
 }
 
-// ── The twin-resolve publish lock (2026-08-16) ──────────────────────────────
+// ── Publishing a page: the task's page lock (2026-08-16, 2026-11-26) ─────────
 //
 // Two threads of one task faulting on the SAME not-yet-present page both used
 // to resolve it independently: both allocated a frame, both filled it
 // identically, both mapped it — and the second paging_map_page overwrote the
 // first's PTE, orphaning the loser's frame in a page reachable from no table,
 // which the burial-time VMA reclaim (it walks the tables) could never free.
-// Booked in DEBTS the day the pager's seek/read race was fixed next door
-// (2026-08-15); paid here.
 //
 // The shape is deliberately NOT shared_object.c's per-page CAS slot — a plain
 // VMA has no page array to CAS into. Instead: resolve WITHOUT the lock (both
 // racers may do redundant work — rare, and never wrong, since both frames are
-// filled from the same source), then PUBLISH under this lock: re-walk the
-// table, and the racer who finds the page already present frees its own frame
-// instead of mapping over the winner's. No I/O and no allocation ever happens
-// with this lock held (paging_map_page can draw a table page, which takes
-// the allocator's locks (kFrameLock, kMemoryStatusLock) — that nests
-// publish→allocator, and nothing takes them in the other order), so the
-// spin is bounded by a map, not a disk.
+// filled from the same source), then PUBLISH under the task's pageLock
+// (task.h): re-walk the table, and the racer who finds the page already
+// present gives its own frame back instead of mapping over the winner's.
 //
-// One global lock, not per-task: the critical section is a walk plus at most
-// one map, and a lock that small doesn't earn a per-task field.
-static volatile uint32_t sPagePublishLock;
-
-static inline void page_publish_lock(void)
+// THE SAME LOCK SERIALIZES A PUBLISH WITH UNMAP (MAPPING_LIST.md). unmap
+// delists its mapping first, then walks and removes each page under this
+// lock; a publish rechecks that its mapping is still listed under it. So a
+// page is installed before unmap's walk of it, and unmap frees it, or the
+// publish finds the mapping gone and gives its frame back: never a page left
+// mapped in a range no mapping covers, with its frame lost.
+//
+// No I/O happens under it. paging_map_page can draw a table page, which takes
+// the allocator's locks (kFrameLock, kMemoryStatusLock) under it, and nothing
+// takes them in the other order; frames given back are freed after it is
+// released. So its hold is bounded by a walk and a map, not a disk.
+static inline uint64_t page_publish_lock(task_t *task)
 {
-	while (__sync_lock_test_and_set(&sPagePublishLock, 1))
-		__asm__ volatile("pause");
+	return counted_lock_acquire(&task->pageLock);
 }
 
-static inline void page_publish_unlock(void)
+static inline void page_publish_unlock(task_t *task, uint64_t flags)
 {
-	__sync_lock_release(&sPagePublishLock);
+	counted_lock_release(&task->pageLock, flags);
 }
 
 static bool is_canonical_address(uint64_t address)
@@ -126,7 +126,7 @@ static bool address_is_mapped(uint64_t address)
 ///
 /// address_is_mapped() asks kKernelPML4v, and for kernel pointers that is the
 /// right question. It is the WRONG question for anything on a task's RSP0
-/// stack — task_alloc_guarded_stack puts those at TASK-LOCAL lower-half VAs
+/// stack — task_stack_map puts those at TASK-LOCAL lower-half VAs
 /// that are deliberately absent from the kernel's tables (CLAUDE.md says so in
 /// as many words). A fault frame lives on exactly such a stack, so asking the
 /// kernel oracle about it answers "unmapped" while the CPU is standing on it
@@ -761,7 +761,7 @@ static bool try_catch_segv(task_t *task)
 
 // Which side of a thread's user stack a faulting address fell on, if it
 // fell in the unmapped guard on either side: a word for the headline, or
-// NULL. The stack is `task_alloc_guarded_stack`'s layout — esp3BaseV is the
+// NULL. The stack is task.c § Stacks' layout — esp3BaseV is the
 // lowest usable byte, esp3Size (the size the thread got, which a main
 // thread's program may declare, SCRIPT_STACK.md) above it, and
 // THREAD_STACK_GUARD_PAGE_COUNT unmapped pages beyond each end.
@@ -908,6 +908,235 @@ static void __attribute__((noreturn)) user_fault_kill(task_t *task, const char *
 	__builtin_unreachable();
 }
 
+// The fault, resolved in the mapping `vma` covering cr2, which the caller
+// holds (vma_lookup_hold) and gives back after this returns, whatever it
+// returns. NULL when the fault is resolved; otherwise the reason a ring-3
+// fault kills its program, which the caller acts on once the hold is given
+// back: the kill delivers a caught SIGSEGV under signalLock, and a fault
+// path takes that only with no hold and no page lock of its own. A fault
+// this function cannot resolve in ring 0 panics here.
+static const char *page_fault_in_mapping(task_t *task, vma_t *vma, thread_t *fault_thread,
+                                         uint64_t cr2, uint64_t error_code, uint64_t rip)
+{
+    // Per-fault detail: rides DETAILED so the base demand-paging channel
+    // stays a readable two-lines-per-fault (announce + resolution).
+    printd(DEBUG_DEMAND_PAGING | DEBUG_DETAILED, "Found VMA: 0x%016lx - 0x%016lx (prot=0x%x, cow=%d)\n", vma->start, vma->end, vma->prot, vma->cow);
+
+    // Calculate aligned fault address
+    uintptr_t aligned = cr2 & ~(PAGE_SIZE - 1);
+
+    // Classify the fault from the error code:
+    //   bit 0 (P): 0 = page not present, 1 = page present (protection violation)
+    //   bit 1 (W): 0 = read fault,        1 = write fault
+    bool page_was_present = (error_code & 0x1) != 0;
+    bool was_write        = (error_code & 0x2) != 0;
+
+    if (page_was_present && was_write && vma->cow)
+    {
+        // Copy-on-Write fault: the page is present but mapped read-only because
+        // it is (or was) shared with another task.  Allocate a private copy,
+        // duplicate the content, then remap writable so the faulting store can retry.
+        uintptr_t old_phys = paging_walk_paging_table((pt_entry_t *)task->pml4v, aligned);
+        if (!old_phys || old_phys == 0xbadbadba)
+            page_fault_panic("CoW fault — page table walk did not find the original page",
+                             cr2, error_code, rip);
+
+        // Any allocator-owned page, kmalloc_aligned's or
+        // allocate_memory_aligned's alike, is reachable through the HHDM
+        // while it is allocated (the lazy-HHDM contract, paging.h).
+        void *new_virt = kmalloc_aligned(PAGE_SIZE);
+        if (!new_virt)
+            page_fault_panic("CoW fault — failed to allocate replacement page",
+                             cr2, error_code, rip);
+        uintptr_t new_phys = (uintptr_t)new_virt - kHHDMOffset;
+
+        // Copy the old page's content via HHDM — the source physical page is
+        // accessible at (old_phys | kHHDMOffset); the dest is new_virt directly.
+        memcpy(new_virt,
+               (void *)(old_phys | kHHDMOffset),
+               PAGE_SIZE);
+
+        // Remap the virtual address to the new private page, now writable.
+        // The private copy keeps the VMA's execute verdict: a CoW'd DATA page
+        // must not come back executable just because this remap forgot to ask
+        // (2026-08-16, with the NX arc).
+        uint64_t cow_flags = PAGE_PRESENT | PAGE_USER | PAGE_WRITE;
+        if (!(vma->prot & PROT_EXEC))
+            cow_flags |= PAGE_NO_EXECUTE;
+
+        // The static branch's twin-resolve race lives here too (two threads
+        // storing to the same CoW page at once: both copy, both remap, the
+        // loser's copy leaks). Same cure: publish under the lock, and the
+        // racer who finds the page ALREADY WRITABLE discards its copy, as
+        // does one whose mapping a sibling's unmap delisted meanwhile.
+        uint64_t pf = page_publish_lock(task);
+        uintptr_t now = paging_walk_paging_table_keep_flags(
+                            (pt_entry_t *)task->pml4v, aligned, true);
+        bool gone = !vma_is_listed(task, vma);
+        if (gone || (now != 0xbadbadba && (now & PAGE_WRITE)))
+        {
+            page_publish_unlock(task, pf);
+            kfree(new_virt);
+            // Our TLB may still hold the shared page's read-only entry;
+            // drop it so the retried store sees the winner's mapping.
+            __asm__ volatile("invlpg [%0]" :: "r"(aligned) : "memory");
+            printd(DEBUG_DEMAND_PAGING,
+                   gone ? "CoW at 0x%016lx: its mapping was unmapped meanwhile, our copy discarded\n"
+                        : "CoW twin at 0x%016lx: winner already privatised, our copy discarded\n",
+                   aligned);
+            record_resolved_fault(fault_thread, false, false);
+            return NULL;
+        }
+        paging_map_page((pt_entry_t *)task->pml4v, aligned, new_phys, cow_flags);
+        page_publish_unlock(task, pf);
+
+        // paging_map_page does not flush the TLB on map (only on unmap), so we
+        // must invalidate this entry explicitly or the CPU retries against the
+        // stale read-only TLB entry and faults again immediately.
+        __asm__ volatile("invlpg [%0]" :: "r"(aligned) : "memory");
+
+        printd(DEBUG_DEMAND_PAGING, "CoW: 0x%016lx privatised (old phys 0x%016lx -> new phys 0x%016lx)\n",
+               aligned, old_phys, new_phys);
+        record_resolved_fault(fault_thread, false, false);
+        return NULL;
+    }
+
+    if (page_was_present)
+    {
+        // Ring-3 protection violation on a non-CoW page (write to read-only
+        // data, jump into no-exec, etc.): the app's bug — segfault the task.
+        // Ring-0 violations fall through to the diagnosing panic below.
+        // Error bit 4 (I/D) marks an instruction fetch — under NXE that is
+        // the NX bit doing its job, and the kill names it (2026-08-16).
+        if (error_code & 0x4)
+            return (error_code & 0x10)
+                       ? "no-execute violation (instruction fetch from data memory)"
+                       : "protection violation";
+
+        // Page is present but the access was denied and this VMA is not CoW.
+        // This is a genuine protection violation, not a recoverable fault.
+        // Decode the error bits into the panic message rather than assuming
+        // write-to-read-only: a USER instruction fetch through intermediate
+        // tables lacking PAGE_USER lands here too (that exact fault, error
+        // 0x15, is how ring-3 bring-up found the paging_map_page U/S bug),
+        // and a wrong message sends the reader hunting in the wrong place.
+        page_fault_panic("protection violation on a present non-CoW page",
+                         cr2, error_code, rip);
+    }
+
+    // Demand page fault: page is not present yet.
+    if (vma->flags & MAP_SHARED_LIBRARY)
+    {
+        // This VMA belongs to a dynamically-linked image (library or main
+        // executable) — vma->file is a shared_object_t*, not a vfs_file_t*.
+        // Resolution goes through the per-image page cache instead of a
+        // plain per-VMA file read: whichever task touches a given page
+        // first reads it from the file and applies that page's
+        // relocations; every task after gets the same physical page. The
+        // symbols those relocations reference resolve against the OBJECT'S
+        // own dependency scope (so + so->deps, inside shared_object.c) —
+        // deliberately not this task's view, since the resolved page is
+        // cached and shared with every other task that maps this object.
+        // Never PAGE_WRITE here even for a writable segment — vma->cow
+        // (checked above) governs the write path separately, through the
+        // existing, unmodified CoW branch.
+        shared_object_t *so = (shared_object_t *)vma->file;
+        // page_idx counts from the image's own lowest PT_LOAD page — see
+        // shared_object_page_index, which owns this arithmetic. A fault
+        // address outside the image's page span means the VMA and the object
+        // disagree about the image's extent, which is a kernel bug, not a
+        // program's: resolve_page would index off the end of the cache array.
+        size_t page_idx = 0;
+        if (!shared_object_page_index(so, aligned, &page_idx))
+            page_fault_panic("shared-object VMA covers an address outside its image",
+                             cr2, error_code, rip);
+
+        bool did_read = false;
+        uintptr_t phys = shared_object_resolve_page(so, page_idx, &did_read);
+        if (!phys)
+        {
+            // The image could not be materialised: out of memory, a disk read
+            // that failed, or a relocation this kernel cannot apply (a
+            // corrupt or wrongly-linked .so). Since 2026-08-22 that is the
+            // FAULTING PROGRAM's problem, not the machine's — a ring-3 fault
+            // kills the task the same way a wild pointer does, and the
+            // resolver has already logged which object and which offset. A
+            // ring-0 fault here still panics: the kernel touching a
+            // shared-object page it cannot resolve is a kernel bug.
+            if (error_code & 0x4)
+                return "shared library or dynamic executable page could not be resolved";
+            page_fault_panic("failed to resolve a shared-object page",
+                             cr2, error_code, rip);
+        }
+
+        // The cache's page, so a mapping unmapped meanwhile gives nothing
+        // back: it is only not installed.
+        uint64_t pf = page_publish_lock(task);
+        if (vma_is_listed(task, vma))
+            paging_map_page((pt_entry_t *)task->pml4v, aligned, phys, PAGE_PRESENT | PAGE_USER);
+        page_publish_unlock(task, pf);
+        record_resolved_fault(fault_thread, did_read, false);
+        return NULL;
+    }
+
+    // Ordinary demand page fault: page is not present yet.  Resolve via the
+    // VMA's backing (static executables, anonymous memory).
+    bool did_read = false;
+    bool anon_zero = (vma->flags & MAP_ANONYMOUS) || vma->file == NULL;
+    uintptr_t phys = vma_resolve_backing_page(vma, cr2, &did_read);
+    if (!phys)
+        page_fault_panic("failed to resolve the page", cr2, error_code, rip);
+
+    // Map the page into task's address space
+    uint64_t flags = PAGE_PRESENT | PAGE_USER;
+    if (vma->prot & PROT_WRITE)
+        flags |= PAGE_WRITE;
+    // NX for everything the VMA doesn't declare executable (2026-08-16): the
+    // ELF loader has recorded honest per-segment prot from PF_X since birth,
+    // and anonymous VMAs (heap, os64_map regions) never claim it — but the
+    // bit went nowhere until paging_map_page's uint16_t truncation was found
+    // and fixed. This is the W^X half a demand-paged mapping gets for free:
+    // the leaf is written exactly once, here, with the right answer.
+    if (!(vma->prot & PROT_EXEC))
+        flags |= PAGE_NO_EXECUTE;
+
+    // Publish under the task's page lock; the twin-resolve loser, and a
+    // fault whose mapping was unmapped meanwhile, free instead of leaking
+    // (page_publish_lock's block comment has the whole story).
+    uint64_t pf = page_publish_lock(task);
+    uintptr_t already = paging_walk_paging_table_keep_flags(
+                            (pt_entry_t *)task->pml4v, aligned, true);
+    bool gone = !vma_is_listed(task, vma);
+    if (gone || (already != 0xbadbadba && (already & PAGE_PRESENT)))
+    {
+        page_publish_unlock(task, pf);
+        // Another thread resolved this page while we were resolving it, or
+        // unmapped its mapping. Our frame is ours alone; give it back BY ITS OWN ALLOCATOR —
+        // the same fork vma_resolve_backing_page allocates on: anonymous
+        // pages come from the physical allocator, file-backed from kmalloc.
+        // (Freed OUTSIDE the publish lock: both frees take the allocator's
+        // locks (kFrameLock, kMemoryStatusLock), and holding two locks where
+        // one will do is how ABBAs are born.)
+        if ((vma->flags & MAP_ANONYMOUS) || vma->file == NULL)
+            free_memory(phys);
+        else
+            kfree((void *)(phys | kHHDMOffset));
+        printd(DEBUG_DEMAND_PAGING,
+               gone ? "Demand page at 0x%016lx: its mapping was unmapped meanwhile, our frame 0x%016lx freed\n"
+                    : "Twin resolve at 0x%016lx: winner already published, our frame 0x%016lx freed\n",
+               aligned, phys);
+        record_resolved_fault(fault_thread, did_read, anon_zero);
+        return NULL;   // retry the access: the winner's mapping, or no mapping at all
+    }
+    paging_map_page((pt_entry_t *)task->pml4v, aligned, phys, flags);
+    page_publish_unlock(task, pf);
+
+    printd(DEBUG_DEMAND_PAGING, "Mapped page at 0x%016lx with flags 0x%lx\n", aligned, flags);
+
+    record_resolved_fault(fault_thread, did_read, anon_zero);
+    return NULL;
+}
+
 void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
 {
     if (kTestingPageFaults)
@@ -962,7 +1191,19 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
         page_fault_panic("access to guarded page zero", cr2, error_code, rip);
     }
 
-    vma_t *vma = vma_lookup(task, cr2);
+    // The mapping, held: a sibling's unmap may delist it while this fault
+    // resolves, and the hold keeps it alive until the fault is done with it.
+    // Every exit that returns gives the hold back, the kill's included, which
+    // gives it back before it acts; only a panic does not. A thread is never
+    // torn down inside this path (a signal redirects only a thread in ring
+    // 3), so burial should find no hold outstanding, and counts any it does.
+    //
+    // NO LOOKUP ABOVE THE USER CEILING: no mapping covers such an address,
+    // and the lookup takes the task's mapLock, so a ring-0 fault taken while
+    // that lock is held (a wild pointer followed under it, the lazy HHDM's
+    // tripwire) would wait on its own thread's lock with interrupts off
+    // instead of reaching the panic below that names it.
+    vma_t *vma = cr2 < USER_CANONICAL_MAX ? vma_lookup_hold(task, cr2) : NULL;
     if (!vma)
     {
         // Error bit 2 = the faulting access came from ring 3: the app chased
@@ -1004,224 +1245,15 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
         page_fault_panic("no VMA covers this address", cr2, error_code, rip);
     }
 
-    // Per-fault detail: rides DETAILED so the base demand-paging channel
-    // stays a readable two-lines-per-fault (announce + resolution).
-    printd(DEBUG_DEMAND_PAGING | DEBUG_DETAILED, "Found VMA: 0x%016lx - 0x%016lx (prot=0x%x, cow=%d)\n", vma->start, vma->end, vma->prot, vma->cow);
-
-    // Calculate aligned fault address
-    uintptr_t aligned = cr2 & ~(PAGE_SIZE - 1);
-
-    // Classify the fault from the error code:
-    //   bit 0 (P): 0 = page not present, 1 = page present (protection violation)
-    //   bit 1 (W): 0 = read fault,        1 = write fault
-    bool page_was_present = (error_code & 0x1) != 0;
-    bool was_write        = (error_code & 0x2) != 0;
-
-    if (page_was_present && was_write && vma->cow)
+    const char *kill = page_fault_in_mapping(task, vma, fault_thread, cr2, error_code, rip);
+    vma_release(task, vma);
+    if (kill != NULL)
     {
-        // Copy-on-Write fault: the page is present but mapped read-only because
-        // it is (or was) shared with another task.  Allocate a private copy,
-        // duplicate the content, then remap writable so the faulting store can retry.
-        uintptr_t old_phys = paging_walk_paging_table((pt_entry_t *)task->pml4v, aligned);
-        if (!old_phys || old_phys == 0xbadbadba)
-            page_fault_panic("CoW fault — page table walk did not find the original page",
-                             cr2, error_code, rip);
-
-        // Any allocator-owned page, kmalloc_aligned's or
-        // allocate_memory_aligned's alike, is reachable through the HHDM
-        // while it is allocated (the lazy-HHDM contract, paging.h).
-        void *new_virt = kmalloc_aligned(PAGE_SIZE);
-        if (!new_virt)
-            page_fault_panic("CoW fault — failed to allocate replacement page",
-                             cr2, error_code, rip);
-        uintptr_t new_phys = (uintptr_t)new_virt - kHHDMOffset;
-
-        // Copy the old page's content via HHDM — the source physical page is
-        // accessible at (old_phys | kHHDMOffset); the dest is new_virt directly.
-        memcpy(new_virt,
-               (void *)(old_phys | kHHDMOffset),
-               PAGE_SIZE);
-
-        // Remap the virtual address to the new private page, now writable.
-        // The private copy keeps the VMA's execute verdict: a CoW'd DATA page
-        // must not come back executable just because this remap forgot to ask
-        // (2026-08-16, with the NX arc).
-        uint64_t cow_flags = PAGE_PRESENT | PAGE_USER | PAGE_WRITE;
-        if (!(vma->prot & PROT_EXEC))
-            cow_flags |= PAGE_NO_EXECUTE;
-
-        // The static branch's twin-resolve race lives here too (two threads
-        // storing to the same CoW page at once: both copy, both remap, the
-        // loser's copy leaks). Same cure: publish under the lock, and the
-        // racer who finds the page ALREADY WRITABLE discards its copy.
-        page_publish_lock();
-        uintptr_t now = paging_walk_paging_table_keep_flags(
-                            (pt_entry_t *)task->pml4v, aligned, true);
-        if (now != 0xbadbadba && (now & PAGE_WRITE))
-        {
-            page_publish_unlock();
-            kfree(new_virt);
-            // Our TLB may still hold the shared page's read-only entry;
-            // drop it so the retried store sees the winner's mapping.
-            __asm__ volatile("invlpg [%0]" :: "r"(aligned) : "memory");
-            printd(DEBUG_DEMAND_PAGING,
-                   "CoW twin at 0x%016lx: winner already privatised, our copy discarded\n",
-                   aligned);
-            record_resolved_fault(fault_thread, false, false);
-            return;
-        }
-        paging_map_page((pt_entry_t *)task->pml4v, aligned, new_phys, cow_flags);
-        page_publish_unlock();
-
-        // paging_map_page does not flush the TLB on map (only on unmap), so we
-        // must invalidate this entry explicitly or the CPU retries against the
-        // stale read-only TLB entry and faults again immediately.
-        __asm__ volatile("invlpg [%0]" :: "r"(aligned) : "memory");
-
-        printd(DEBUG_DEMAND_PAGING, "CoW: 0x%016lx privatised (old phys 0x%016lx -> new phys 0x%016lx)\n",
-               aligned, old_phys, new_phys);
-        record_resolved_fault(fault_thread, false, false);
-        return;
+        if (try_catch_segv(task))
+            return;   // handler armed; the exception iretq resumes into it
+        user_fault_kill(task, kill, cr2, error_code, rip);
     }
-
-    if (page_was_present)
-    {
-        // Ring-3 protection violation on a non-CoW page (write to read-only
-        // data, jump into no-exec, etc.): the app's bug — segfault the task.
-        // Ring-0 violations fall through to the diagnosing panic below.
-        // Error bit 4 (I/D) marks an instruction fetch — under NXE that is
-        // the NX bit doing its job, and the kill names it (2026-08-16).
-        if (error_code & 0x4)
-        {
-            if (try_catch_segv(task))
-                return;   // handler armed; the exception iretq resumes into it
-            user_fault_kill(task,
-                (error_code & 0x10)
-                    ? "no-execute violation (instruction fetch from data memory)"
-                    : "protection violation",
-                cr2, error_code, rip);
-        }
-
-        // Page is present but the access was denied and this VMA is not CoW.
-        // This is a genuine protection violation, not a recoverable fault.
-        // Decode the error bits into the panic message rather than assuming
-        // write-to-read-only: a USER instruction fetch through intermediate
-        // tables lacking PAGE_USER lands here too (that exact fault, error
-        // 0x15, is how ring-3 bring-up found the paging_map_page U/S bug),
-        // and a wrong message sends the reader hunting in the wrong place.
-        page_fault_panic("protection violation on a present non-CoW page",
-                         cr2, error_code, rip);
-    }
-
-    // Demand page fault: page is not present yet.
-    if (vma->flags & MAP_SHARED_LIBRARY)
-    {
-        // This VMA belongs to a dynamically-linked image (library or main
-        // executable) — vma->file is a shared_object_t*, not a vfs_file_t*.
-        // Resolution goes through the per-image page cache instead of a
-        // plain per-VMA file read: whichever task touches a given page
-        // first reads it from the file and applies that page's
-        // relocations; every task after gets the same physical page. The
-        // symbols those relocations reference resolve against the OBJECT'S
-        // own dependency scope (so + so->deps, inside shared_object.c) —
-        // deliberately not this task's view, since the resolved page is
-        // cached and shared with every other task that maps this object.
-        // Never PAGE_WRITE here even for a writable segment — vma->cow
-        // (checked above) governs the write path separately, through the
-        // existing, unmodified CoW branch.
-        shared_object_t *so = (shared_object_t *)vma->file;
-        // page_idx counts from the image's own lowest PT_LOAD page — see
-        // shared_object_page_index, which owns this arithmetic. A fault
-        // address outside the image's page span means the VMA and the object
-        // disagree about the image's extent, which is a kernel bug, not a
-        // program's: resolve_page would index off the end of the cache array.
-        size_t page_idx = 0;
-        if (!shared_object_page_index(so, aligned, &page_idx))
-            page_fault_panic("shared-object VMA covers an address outside its image",
-                             cr2, error_code, rip);
-
-        bool did_read = false;
-        uintptr_t phys = shared_object_resolve_page(so, page_idx, &did_read);
-        if (!phys)
-        {
-            // The image could not be materialised: out of memory, a disk read
-            // that failed, or a relocation this kernel cannot apply (a
-            // corrupt or wrongly-linked .so). Since 2026-08-22 that is the
-            // FAULTING PROGRAM's problem, not the machine's — a ring-3 fault
-            // kills the task the same way a wild pointer does, and the
-            // resolver has already logged which object and which offset. A
-            // ring-0 fault here still panics: the kernel touching a
-            // shared-object page it cannot resolve is a kernel bug.
-            if (error_code & 0x4)
-            {
-                if (try_catch_segv(task))
-                    return;   // handler armed; the exception iretq resumes into it
-                user_fault_kill(task, "shared library or dynamic executable page could not be resolved",
-                                cr2, error_code, rip);
-            }
-            page_fault_panic("failed to resolve a shared-object page",
-                             cr2, error_code, rip);
-        }
-
-        paging_map_page((pt_entry_t *)task->pml4v, aligned, phys, PAGE_PRESENT | PAGE_USER);
-        record_resolved_fault(fault_thread, did_read, false);
-        return;
-    }
-
-    // Ordinary demand page fault: page is not present yet.  Resolve via the
-    // VMA's backing (static executables, anonymous memory).
-    bool did_read = false;
-    bool anon_zero = (vma->flags & MAP_ANONYMOUS) || vma->file == NULL;
-    uintptr_t phys = vma_resolve_backing_page(vma, cr2, &did_read);
-    if (!phys)
-        page_fault_panic("failed to resolve the page", cr2, error_code, rip);
-
-    // Map the page into task's address space
-    uint64_t flags = PAGE_PRESENT | PAGE_USER;
-    if (vma->prot & PROT_WRITE)
-        flags |= PAGE_WRITE;
-    // NX for everything the VMA doesn't declare executable (2026-08-16): the
-    // ELF loader has recorded honest per-segment prot from PF_X since birth,
-    // and anonymous VMAs (heap, os64_map regions) never claim it — but the
-    // bit went nowhere until paging_map_page's uint16_t truncation was found
-    // and fixed. This is the W^X half a demand-paged mapping gets for free:
-    // the leaf is written exactly once, here, with the right answer.
-    if (!(vma->prot & PROT_EXEC))
-        flags |= PAGE_NO_EXECUTE;
-
-    // Publish under the lock; the twin-resolve loser frees instead of
-    // leaking (see sPagePublishLock's block comment for the whole story).
-    page_publish_lock();
-    uintptr_t already = paging_walk_paging_table_keep_flags(
-                            (pt_entry_t *)task->pml4v, aligned, true);
-    if (already != 0xbadbadba && (already & PAGE_PRESENT))
-    {
-        page_publish_unlock();
-        // Another thread resolved this page while we were resolving it. Our
-        // frame holds an identical copy; give it back BY ITS OWN ALLOCATOR —
-        // the same fork vma_resolve_backing_page allocates on: anonymous
-        // pages come from the physical allocator, file-backed from kmalloc.
-        // (Freed OUTSIDE the publish lock: both frees take the allocator's
-        // locks (kFrameLock, kMemoryStatusLock), and holding two locks where
-        // one will do is how ABBAs are born.)
-        if ((vma->flags & MAP_ANONYMOUS) || vma->file == NULL)
-            free_memory(phys);
-        else
-            kfree((void *)(phys | kHHDMOffset));
-        printd(DEBUG_DEMAND_PAGING,
-               "Twin resolve at 0x%016lx: winner already published, our frame 0x%016lx freed\n",
-               aligned, phys);
-        record_resolved_fault(fault_thread, did_read, anon_zero);
-        return;   // retry the access against the winner's mapping
-    }
-    paging_map_page((pt_entry_t *)task->pml4v, aligned, phys, flags);
-    page_publish_unlock();
-
-    printd(DEBUG_DEMAND_PAGING, "Mapped page at 0x%016lx with flags 0x%lx\n", aligned, flags);
-
-    record_resolved_fault(fault_thread, did_read, anon_zero);
 }
-
 
 void handle_machine_check(uint64_t rip) {
     exception_panic("Machine Check (#MC) occurred!", rip, 0xFFFFFFFFFFFFFFFF);

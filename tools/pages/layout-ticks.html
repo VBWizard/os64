@@ -1,0 +1,78 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>A bar of K parts, written and read four times a second</title>
+<!--
+  BRIEF_LAYOUT_NEEDS.md's fixture for N1 to N3. A progress bar of K parts,
+  K chosen by the buttons (1, 2, 12, 40), and a timer four times a second
+  that, for each part, writes a style and reads clientWidth back: the
+  write-then-read pair a video player's bar makes at every update. A video
+  plays beside it.
+
+  The write is chosen too:
+  - "transform" and "background": paint only. With the restyle kept in
+    the tree (N1) no box is placed, so the forced-layout line and the
+    video's dropped pictures should not depend on K.
+  - "left": a positioned part moved (N4's case; laid out today).
+  - "class": a class that only colours (the restyle's verdict decides).
+  - "custom property": a var() the restyle must see through (N1's path,
+    and still right).
+
+  Read it with `yonder --layout-profile`: the record's `layout kept` line
+  counts the restyles kept and why the rest were declined; `d` readings
+  split the minutes. `--geometry-check` lays each kept tree out whole
+  beside it and says whether they differed.
+-->
+<style>
+  body { font: 16px sans-serif; margin: 16px; }
+  video { width: 320px; background: #888; }
+  #bar { position: relative; width: 600px; height: 12px; background: #ddd; margin: 12px 0; display: flex; }
+  .part { position: relative; flex: 1; height: 12px; background: #c33; transform-origin: left;
+          border-right: 1px solid #fff; --fill: #c33; }
+  .part.lit { color: #fff; }
+  .part.var { background: var(--fill); }
+</style>
+<h1>A bar of K parts, written and read four times a second</h1>
+<video id="v" src="bbb-480p-3s.mp4" autoplay muted loop></video>
+<div id="bar"></div>
+<p>Parts:
+  <input type="button" value="1" data-k="1">
+  <input type="button" value="2" data-k="2">
+  <input type="button" value="12" data-k="12">
+  <input type="button" value="40" data-k="40"></p>
+<p>Write:
+  <input type="button" value="transform" data-w="transform">
+  <input type="button" value="background" data-w="background">
+  <input type="button" value="left" data-w="left">
+  <input type="button" value="class" data-w="class">
+  <input type="button" value="custom property" data-w="var"></p>
+<p id="state"></p>
+<script>
+  const bar = document.getElementById('bar'), state = document.getElementById('state');
+  let k = 12, write = 'transform', ticks = 0, sum = 0;
+  const build = () => {
+    bar.textContent = '';
+    for (let i = 0; i < k; i++) {
+      const part = document.createElement('div');
+      part.className = 'part' + (write === 'var' ? ' var' : '');
+      bar.appendChild(part);
+    }
+  };
+  for (const b of document.querySelectorAll('[data-k]'))
+    b.onclick = () => { k = +b.dataset.k; build(); };
+  for (const b of document.querySelectorAll('[data-w]'))
+    b.onclick = () => { write = b.dataset.w; build(); };
+  build();
+  setInterval(() => {
+    ticks++;
+    const t = (ticks % 40) / 40;
+    for (const part of bar.children) {
+      if (write === 'transform') part.style.transform = 'scaleX(' + t.toFixed(3) + ')';
+      else if (write === 'background') part.style.backgroundColor = 'rgb(' + (100 + (ticks % 100)) + ',40,40)';
+      else if (write === 'left') part.style.left = (ticks % 10) + 'px';
+      else if (write === 'class') part.classList.toggle('lit');
+      else part.style.setProperty('--fill', 'rgb(40,' + (100 + (ticks % 100)) + ',40)');
+      sum += part.clientWidth;
+    }
+    state.textContent = k + ' parts, writing ' + write + ', tick ' + ticks;
+  }, 250);
+</script>

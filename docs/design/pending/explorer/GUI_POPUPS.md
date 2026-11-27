@@ -227,7 +227,7 @@ key/mouse records before ordinary ring delivery resumes; retained pre-loss
 presses must not re-arm a control after reset.
 
 Serialize association/focus/handle mutations under `kGuiLock`. Follow existing
-`canvas_release_locked` / `canvas_pages_release` cleanup with lock order
+`canvas_release_locked` / `gui_canvas_pages_release` cleanup with lock order
 `kGuiLock -> task signalLock`, caller CR3 reload and task-exit sequencing. Do not
 free task canvas mappings from compositor focus notifications. No raw window
 pointer survives an unlock without a separate existing lifetime guarantee.

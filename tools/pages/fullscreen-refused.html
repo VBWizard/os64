@@ -1,0 +1,33 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Full screen: asked without a click</title>
+<!--
+  VIDEO.md § 9, the Fullscreen API (slice 2). The page asks for full screen
+  as it loads, with no click or key from the person: other browsers refuse
+  it, and so must yonder. The window stays as it is, and the log says
+  fullscreenerror, then the promise rejected with TypeError.
+  Then "Ask now" (a click) is allowed, and the window covers the screen.
+  "Ask in 6 s" asks six seconds after the click, past the five seconds a
+  person's input counts for: refused again. Escape comes back.
+-->
+<style>
+  body { font: 16px sans-serif; margin: 16px; background: #223; color: #ddd; }
+  #box { width: 320px; height: 180px; background: #36c; }
+  #log { font: 13px monospace; white-space: pre; margin-top: 12px; }
+</style>
+<h1>Full screen: asked without a click</h1>
+<div id="box"></div>
+<p><button id="now">Ask now</button> <button id="late">Ask in 6 s</button></p>
+<div id="log"></div>
+<script>
+  const box = document.getElementById('box'), log = document.getElementById('log');
+  const note = s => { log.textContent += s + '\n'; console.log(s); };   // on the page, and on yonder's output for a redirect
+  const ask = why => box.requestFullscreen().then(() => note(why + ': resolved'),
+                                                  e => note(why + ': rejected ' + e.name));
+  document.addEventListener('fullscreenerror', () => note('fullscreenerror'));
+  document.addEventListener('fullscreenchange', () =>
+    note('fullscreenchange: ' + (document.fullscreenElement ? 'in' : 'out')));
+  ask('at load');
+  document.getElementById('now').onclick = () => ask('on a click');
+  document.getElementById('late').onclick = () => setTimeout(() => ask('six seconds after a click'), 6000);
+</script>

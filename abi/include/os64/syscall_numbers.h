@@ -117,8 +117,8 @@
 // nothing (a ring left over from an earlier wait costs one such pass).
 //
 // It is the pipe a thread would otherwise wait on, with the ring buffer and
-// the second handle taken out: a pipe pair is two of a task's
-// OS64_TASK_HANDLES and 64 KiB to carry this one bit. A bell is never given
+// the second handle taken out: a pipe pair is two of a task's handles and
+// 64 KiB to carry this one bit. A bell is never given
 // to a spawned child. libos64 wraps it as os64/bell.h.
 #define SYSCALL_BELL       67
 
@@ -242,7 +242,7 @@
 // needed durability, so durability got a name.
 #define SYSCALL_SYNC       32
 
-// thread(entry, arg, exit_stub) — start a second line of execution inside
+// thread(entry, arg, exit_stub, name) — start a second line of execution inside
 // THIS task, sharing everything: the same address space, the same heap,
 // the same open handles. Returns a HANDLE, or negative.
 //
@@ -257,6 +257,13 @@
 // function that simply returns lands there and the stub calls
 // thread_exit with the value in RAX. It cannot be a kernel address —
 // ring 3 would fault the instant it tried to return into one.
+//
+// name is what the thread is for, NULL or "" for unnamed: printable ASCII,
+// at most 63 bytes, copied at the call and fixed for the thread's life
+// (os64/thread_name.h). A name that breaks the rule refuses the call, and
+// no thread is made. All four registers mean something: a caller passing
+// three leaves R10 holding whatever it held, which the kernel reads as a
+// name.
 //
 // Threads share an address space, so they need NO copy-on-write; that is
 // fork's problem, and fork is the next customer for this same plumbing.
@@ -766,6 +773,25 @@ typedef enum os64_shutdown_mode
 // Take the window's frame answer if one waits: arg0 handle, arg1 event out.
 // Never blocks, never touches any other event. See os64/gui.h.
 #define SYSCALL_GUI_FRAME_TAKE 70
+// A window's planes (os64/gui.h § Planes; VIDEO_PLANE.md § 3.1): make one
+// (arg0 handle, arg1 width, arg2 height; answers its name), its canvas
+// (arg0 handle, arg1 name, arg2 os64_gui_plane_surface_t out), publish a
+// picture from it (arg0 handle, arg1 name, arg2 width, arg3 height), take it
+// out of the window (arg0 handle, arg1 name), a window publish carrying
+// plane edits (arg0 handle, arg1 damage or NULL, arg2 edits, arg3 count),
+// a plane's wait for its frame (arg0 handle, arg1 name, arg2 patience in
+// milliseconds, arg3 os64_gui_plane_frame_t out) and its poke (arg0
+// handle, arg1 name).
+#define SYSCALL_GUI_PLANE_CREATE 71
+#define SYSCALL_GUI_PLANE_SURFACE 72
+#define SYSCALL_GUI_PLANE_PUBLISH 73
+#define SYSCALL_GUI_PLANE_DESTROY 74
+#define SYSCALL_GUI_WINDOW_PUBLISH_EDITS 75
+#define SYSCALL_GUI_PLANE_FRAME_WAIT 76
+#define SYSCALL_GUI_PLANE_POKE 77
+// Put an owned window over the whole screen or bring it back: arg0 handle,
+// arg1 0 or 1. See os64/gui.h.
+#define SYSCALL_GUI_WINDOW_SET_FULL_SCREEN 78
 
 // Owner-task notification: arg0 = window handle, arg1 = nonzero uint32 mask.
 // Bits coalesce outside the input ring; see os64/gui.h.

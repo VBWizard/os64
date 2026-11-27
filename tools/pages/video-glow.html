@@ -1,0 +1,88 @@
+<!doctype html><html><head><title>video glow</title><style>
+/* A video page's shape, for measuring a paint beside a playing picture: a
+   canvas behind the video, its bitmap larger than its box and redrawn by a
+   script every second, blurred (the glow); a blurred container holding,
+   scaled, two small canvases stretched over it one on the other (the
+   ambient light); a progress bar over the picture's foot whose strip a
+   script scales as the clip plays; and the page's own background changed
+   every two seconds, which the whole view paints. Every four seconds the
+   script draws the hidden ambient canvas and fades it in over a second by
+   a CSS animation of its opacity, the shown one fading out, so the
+   record's ticks name the canvas and the longhand ("ticks that were frames
+   changed canvas#b (opacity)"), and between fades one of the two stands
+   at opacity 0. A small canvas in the corner, its bitmap half its box, is
+   redrawn at every frame of the display (requestAnimationFrame): beside
+   the glow's slow redraws it is the canvas whose picture is never worth
+   keeping (canvas_keep.h). The record's paint effects name, for each canvas, the part
+   each draw walked ("canvas WxH drawn WxH") apart from asking the script side
+   for the bitmap ("canvas bitmap WxH asked for"), and for each group laid
+   through its matrix what it was laid onto ("warp WxH laid on WxH"). */
+body{margin:0;background:#0f0f0f}
+.amb{position:absolute;left:0;top:0;width:800px;height:470px;filter:blur(40px)}
+.amb div{position:relative;width:800px;height:470px;transform:scale(1.08)}
+.amb canvas{position:absolute;left:0;top:0;width:800px;height:470px;opacity:0}
+.amb canvas.shown{opacity:1}
+.amb canvas.in{animation:fadein 1s linear both}
+.amb canvas.out{animation:fadeout 1s linear both}
+@keyframes fadein{from{opacity:0}to{opacity:1}}
+@keyframes fadeout{from{opacity:1}to{opacity:0}}
+.glow{display:block}
+.glow{position:absolute;left:20px;top:20px;width:760px;height:428px;filter:blur(15px)}
+video{position:absolute;left:20px;top:20px;width:760px;height:428px;background:#000}
+.spin{position:absolute;left:820px;top:20px;width:100px;height:60px}
+.bar{position:absolute;left:30px;top:430px;width:740px;height:6px;background:rgba(255,255,255,.2)}
+.bar div{height:6px;background:#f00;transform-origin:0 0;transform:scaleX(0)}
+</style></head><body>
+<div class=amb><div><canvas id=a class=shown width=110 height=75></canvas><canvas id=b width=110 height=75></canvas></div></div>
+<canvas class=glow id=g width=1780 height=1002></canvas>
+<video id=v src="bbb-480p-3s-av.mp4" autoplay muted loop></video>
+<div class=bar><div id=p></div></div>
+<canvas class=spin id=s width=50 height=30></canvas>
+<script>
+function stripes(c, shift) {
+  const x = c.getContext('2d');
+  for (let i = 0; i < 16; i++) {
+    x.fillStyle = 'hsl(' + (i * 22 + shift) % 360 + ',70%,45%)';
+    x.fillRect(i * c.width / 16, 0, c.width / 16, c.height);
+  }
+}
+stripes(document.getElementById('a'), 0);
+// The ambient pair: the hidden canvas drawn, then the two crossed over.
+let front = document.getElementById('a'), back = document.getElementById('b'), amb = 0;
+setInterval(() => {
+  amb += 60;
+  stripes(back, amb);
+  front.className = 'out';
+  back.className = 'in';
+  const t = front; front = back; back = t;
+}, 4000);
+const glow = document.getElementById('g');
+let turn = 0;
+stripes(glow, 0);
+// The glow follows the picture: redrawn whole every second, from the video
+// where a canvas can draw one, else in shifted stripes.
+setInterval(() => {
+  turn += 40;
+  try { glow.getContext('2d').drawImage(document.getElementById('v'), 0, 0, glow.width, glow.height); }
+  catch (e) { stripes(glow, turn); }
+}, 1000);
+const v = document.getElementById('v'), p = document.getElementById('p');
+setInterval(() => {
+  const t = v.duration > 0 ? v.currentTime / v.duration : 0;
+  p.style.transform = 'scaleX(' + t + ')';
+}, 100);
+const spin = document.getElementById('s').getContext('2d');
+let spun = 0;
+function frame() {
+  spun = (spun + 7) % 360;
+  spin.fillStyle = 'hsl(' + spun + ',80%,50%)';
+  spin.fillRect(0, 0, 50, 30);
+  spin.fillStyle = '#fff';
+  spin.fillRect(spun % 44, 5, 6, 20);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+let dark = 0;
+setInterval(() => { document.body.style.background = (dark ^= 1) ? '#141414' : '#0f0f0f'; }, 2000);
+</script>
+</body></html>

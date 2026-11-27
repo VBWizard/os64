@@ -79,35 +79,69 @@ static void between(uint32_t u, uint32_t n, int32_t size, uint32_t *i, uint32_t 
     }
 }
 
-// The picture at (u, v) of a copy `tw` x `th`, mixed from the four source
-// pixels round it by how near each is — their colours weighed by their
-// alphas for a straight source, or directly for a premultiplied source.
-// The result retains the source alpha convention.
-static uint32_t smooth_at(const uint32_t *src, uint32_t sw, uint32_t sh, uint32_t u, int32_t tw,
-                          uint32_t v, int32_t th, size_t stride, bool premultiplied)
+// THE COLUMNS AND THE ROWS. Where a copy's column falls in the source
+// depends on the column alone, and a row's on the row alone, so a walk
+// works each out once — a column for every row, a row for every column of
+// a run — and mixes from them at every pixel: the same pixels as asking at
+// each, without two divisions a pixel. The columns are worked SCALE_COLUMNS
+// at a time, every row taken across them before the next run; each pixel
+// is its own, so the order changes none.
+#define SCALE_COLUMNS 256
+
+// A smoothed copy's column or row: the source pixel before it, the one after
+// (the edge pixel again past the last), and the weight of the one after,
+// of 256 (between).
+typedef struct {
+    uint32_t i, next, f;
+} Tap;
+
+static Tap tap_at(uint32_t u, uint32_t n, int32_t size)
 {
-    uint32_t x, fx, y, fy;
-    between(u, sw, tw, &x, &fx);
-    between(v, sh, th, &y, &fy);
-    uint32_t x1 = x + 1 < sw ? x + 1 : x, y1 = y + 1 < sh ? y + 1 : y;
-    const uint32_t p[4] = {src[(uint64_t)y * stride + x], src[(uint64_t)y * stride + x1],
-                           src[(uint64_t)y1 * stride + x], src[(uint64_t)y1 * stride + x1]};
-    const uint32_t w[4] = {(256 - fx) * (256 - fy), fx * (256 - fy), (256 - fx) * fy, fx * fy};
-    uint64_t a = 0, r = 0, g = 0, b = 0;
+    Tap t;
+    between(u, n, size, &t.i, &t.f);
+    t.next = t.i + 1 < n ? t.i + 1 : t.i;
+    return t;
+}
+
+// The picture at column `c` and row `r`, mixed from the four source pixels
+// round it by how near each is — their colours weighed by their alphas for
+// a straight source, or directly for a premultiplied source. The result
+// retains the source alpha convention.
+static uint32_t mix(const uint32_t *src, size_t stride, Tap c, Tap r, bool premultiplied)
+{
+    const uint32_t p[4] = {src[(uint64_t)r.i * stride + c.i], src[(uint64_t)r.i * stride + c.next],
+                           src[(uint64_t)r.next * stride + c.i], src[(uint64_t)r.next * stride + c.next]};
+    const uint32_t w[4] = {(256 - c.f) * (256 - r.f), c.f * (256 - r.f), (256 - c.f) * r.f, c.f * r.f};
+    if (premultiplied) {
+        // Two channels to a word, each in a 32-bit half: a weight is at
+        // most 65536 and a channel 255, so four weighted channels sum
+        // below 2^26 and neither half carries into the other — the same
+        // sums as one channel at a time, in half the multiplies.
+        uint64_t ar = 0, gb = 0;
+        for (int k = 0; k < 4; k++) {
+            uint64_t x = p[k];
+            ar += ((x >> 24) << 32 | ((x >> 16) & 0xff)) * w[k];
+            gb += (((x >> 8) & 0xff) << 32 | (x & 0xff)) * w[k];
+        }
+        uint32_t a = (uint32_t)(ar >> 32);
+        if (a == 0)
+            return 0;
+        return ((a + 32768) >> 16) << 24 | (((uint32_t)ar + 32768) >> 16) << 16 |
+               (((uint32_t)(gb >> 32) + 32768) >> 16) << 8 | (((uint32_t)gb + 32768) >> 16);
+    }
+    // A straight source's colours are weighed by their alphas, and the sum
+    // divided by the alphas' again.
+    uint64_t a = 0, red = 0, g = 0, b = 0;
     for (int k = 0; k < 4; k++) {
         uint64_t wa = (uint64_t)w[k] * (p[k] >> 24);
         a += wa;
-        uint64_t wc = premultiplied ? w[k] : wa;
-        r += wc * ((p[k] >> 16) & 0xff);
-        g += wc * ((p[k] >> 8) & 0xff);
-        b += wc * (p[k] & 0xff);
+        red += wa * ((p[k] >> 16) & 0xff);
+        g += wa * ((p[k] >> 8) & 0xff);
+        b += wa * (p[k] & 0xff);
     }
     if (a == 0)
         return 0;
-    if (premultiplied)
-        return (uint32_t)((a + 32768) >> 16) << 24 | (uint32_t)((r + 32768) >> 16) << 16 |
-               (uint32_t)((g + 32768) >> 16) << 8 | (uint32_t)((b + 32768) >> 16);
-    return (uint32_t)((a + 32768) >> 16) << 24 | (uint32_t)((r + a / 2) / a) << 16 |
+    return (uint32_t)((a + 32768) >> 16) << 24 | (uint32_t)((red + a / 2) / a) << 16 |
            (uint32_t)((g + a / 2) / a) << 8 | (uint32_t)((b + a / 2) / a);
 }
 
@@ -132,20 +166,35 @@ void yonder_tile_picture(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, os
         y1 = (int32_t)min64(y1, (int64_t)tile.y + tile.h);
     }
     // A copy at the picture's own size steps through its row; a scaled one
-    // asks which source pixel each of its columns shows, or, smoothed, what
-    // the four round it make.
+    // shows the source pixel each column lands on, or, smoothed, what the
+    // four round it make — each column worked out once for all the rows.
     bool own = (uint32_t)tile.w == sw;
     smooth = smooth && !(own && (uint32_t)tile.h == sh);
-    for (int32_t y = y0; y < y1; y++) {
-        uint32_t v = wrap((int64_t)y - tile.y, (uint32_t)tile.h);
-        const uint32_t *row = src + (uint64_t)source_at(v, sh, tile.h) * sw;
-        uint32_t *out = dst + (uint64_t)y * pitch;
-        uint32_t u = x0 < x1 ? wrap((int64_t)x0 - tile.x, (uint32_t)tile.w) : 0;
-        for (int32_t x = x0; x < x1; x++) {
-            put(&out[x], smooth ? smooth_at(src, sw, sh, u, tile.w, v, tile.h, sw, false)
-                                : row[own ? u : source_at(u, sw, tile.w)], false);
+    Tap taps[SCALE_COLUMNS];
+    uint32_t at[SCALE_COLUMNS];
+    for (int32_t cx = x0; cx < x1; cx += SCALE_COLUMNS) {
+        int32_t n = x1 - cx < SCALE_COLUMNS ? x1 - cx : SCALE_COLUMNS;
+        uint32_t u = wrap((int64_t)cx - tile.x, (uint32_t)tile.w);
+        for (int32_t k = 0; k < n; k++) {
+            if (smooth)
+                taps[k] = tap_at(u, sw, tile.w);
+            else
+                at[k] = own ? u : source_at(u, sw, tile.w);
             if (++u == (uint32_t)tile.w)
                 u = 0;
+        }
+        for (int32_t y = y0; y < y1; y++) {
+            uint32_t v = wrap((int64_t)y - tile.y, (uint32_t)tile.h);
+            uint32_t *out = dst + (uint64_t)y * pitch + cx;
+            if (smooth) {
+                Tap r = tap_at(v, sh, tile.h);
+                for (int32_t k = 0; k < n; k++)
+                    put(&out[k], mix(src, sw, taps[k], r, false), false);
+            } else {
+                const uint32_t *row = src + (uint64_t)source_at(v, sh, tile.h) * sw;
+                for (int32_t k = 0; k < n; k++)
+                    put(&out[k], row[at[k]], false);
+            }
         }
     }
 }
@@ -169,31 +218,78 @@ bool yonder_draw_surface(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, os
     int32_t x0 = (int32_t)max64(box.x, clip.x), y0 = (int32_t)max64(box.y, clip.y);
     int32_t x1 = (int32_t)min64((int64_t)box.x + box.w, (int64_t)clip.x + clip.w);
     int32_t y1 = (int32_t)min64((int64_t)box.y + box.h, (int64_t)clip.y + clip.h);
-    for (int32_t y = y0; y < y1; y++) {
-        // The source row whose span covers the middle of this one:
-        // floor((y - box.y + 1/2) * sh / box.h), in integers.
-        uint32_t sy = own ? (uint32_t)((int64_t)y - box.y) :
-            (uint32_t)((((int64_t)y - box.y) * 2 + 1) * sh / ((int64_t)box.h * 2));
-        const uint32_t *row = src + (uint64_t)sy * stride;
-        uint32_t *out = dst + (uint64_t)y * pitch;
-        // At native size the pixel centers coincide. Walk the clipped row
-        // directly instead of dividing to rediscover each source position.
-        if (own) {
+    // At native size the pixel centers coincide: each row is walked
+    // directly, with nothing to work out.
+    if (own) {
+        for (int32_t y = y0; y < y1; y++) {
+            const uint32_t *row = src + (uint64_t)((int64_t)y - box.y) * stride;
+            uint32_t *out = dst + (uint64_t)y * pitch;
             for (int32_t x = x0; x < x1; x++)
                 put(&out[x], row[(size_t)((int64_t)x - box.x)], premultiplied);
-            continue;
         }
-        for (int32_t x = x0; x < x1; x++) {
+        return true;
+    }
+    Tap taps[SCALE_COLUMNS];
+    uint32_t at[SCALE_COLUMNS];
+    for (int32_t cx = x0; cx < x1; cx += SCALE_COLUMNS) {
+        int32_t n = x1 - cx < SCALE_COLUMNS ? x1 - cx : SCALE_COLUMNS;
+        for (int32_t k = 0; k < n; k++) {
+            uint32_t u = (uint32_t)((int64_t)cx + k - box.x);
+            if (smooth)
+                taps[k] = tap_at(u, sw, box.w);
+            else    // the source column whose span covers this one's middle
+                at[k] = (uint32_t)(((int64_t)u * 2 + 1) * sw / ((int64_t)box.w * 2));
+        }
+        for (int32_t y = y0; y < y1; y++) {
+            uint32_t v = (uint32_t)((int64_t)y - box.y);
+            uint32_t *out = dst + (uint64_t)y * pitch + cx;
             if (smooth) {
-                put(&out[x], smooth_at(src, sw, sh, (uint32_t)((int64_t)x - box.x), box.w,
-                                       (uint32_t)((int64_t)y - box.y), box.h, stride, premultiplied), premultiplied);
-                continue;
+                Tap r = tap_at(v, sh, box.h);
+                for (int32_t k = 0; k < n; k++)
+                    put(&out[k], mix(src, stride, taps[k], r, premultiplied), premultiplied);
+            } else {
+                // The source row whose span covers the middle of this one:
+                // floor((v + 1/2) * sh / box.h), in integers.
+                const uint32_t *row = src + (uint64_t)(((int64_t)v * 2 + 1) * sh / ((int64_t)box.h * 2)) * stride;
+                for (int32_t k = 0; k < n; k++)
+                    put(&out[k], row[at[k]], premultiplied);
             }
-            uint32_t sx = (uint32_t)((((int64_t)x - box.x) * 2 + 1) * sw / ((int64_t)box.w * 2));
-            put(&out[x], row[sx], premultiplied);
         }
     }
     return true;
+}
+
+bool yonder_scale_part(uint32_t *out, uint32_t pitch, os64_gui_rect_t part, int32_t bw, int32_t bh,
+                       const draw2d_surface_t *source)
+{
+    if (!source || (source->format != DRAW2D_ARGB8_PREMULTIPLIED && source->format != DRAW2D_ARGB8_STRAIGHT) ||
+        draw2d_surface_validate(source) != DRAW2D_OK || bw <= 0 || bh <= 0 || source->width == 0 ||
+        source->height == 0 || part.x < 0 || part.y < 0 || part.w < 0 || part.h < 0 ||
+        (int64_t)part.x + part.w > bw || (int64_t)part.y + part.h > bh)
+        return false;
+    const uint32_t *src = source->pixels;
+    uint32_t sw = source->width, sh = source->height;
+    size_t stride = source->stride / sizeof(uint32_t);
+    bool premultiplied = source->format == DRAW2D_ARGB8_PREMULTIPLIED;
+    Tap taps[SCALE_COLUMNS];
+    for (int32_t cx = 0; cx < part.w; cx += SCALE_COLUMNS) {
+        int32_t n = part.w - cx < SCALE_COLUMNS ? part.w - cx : SCALE_COLUMNS;
+        for (int32_t k = 0; k < n; k++)
+            taps[k] = tap_at((uint32_t)(part.x + cx + k), sw, bw);
+        for (int32_t y = 0; y < part.h; y++) {
+            Tap r = tap_at((uint32_t)(part.y + y), sh, bh);
+            uint32_t *row = out + (uint64_t)y * pitch + cx;
+            for (int32_t k = 0; k < n; k++)
+                row[k] = mix(src, stride, taps[k], r, premultiplied);
+        }
+    }
+    return true;
+}
+
+void yonder_lay_scaled(uint32_t *dst, const uint32_t *px, int32_t n, bool premultiplied)
+{
+    for (int32_t k = 0; k < n; k++)
+        put(&dst[k], px[k], premultiplied);
 }
 
 void yonder_draw_picture(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, os64_gui_rect_t box,

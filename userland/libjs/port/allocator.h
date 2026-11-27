@@ -16,6 +16,9 @@ typedef struct {
      * held against) now, and the most it has stood at since the runtime
      * was made. */
     size_t charged_bytes, peak_bytes;
+    /* Allocations the ceiling refused since the runtime was made, each
+     * counted (`failures` only says one happened since it was cleared). */
+    uint64_t refused_by_limit;
     bool tracked;
 } JSPortAllocator;
 /* Fatal-profile allocations have no additional header. The tracked profile

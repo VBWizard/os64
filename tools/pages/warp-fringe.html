@@ -1,0 +1,22 @@
+<!doctype html><html><head><title>warp fringe</title><style>
+body{margin:0;background:#202020}
+.w{position:absolute;width:150px;height:100px;transform-origin:0 0}
+.f{width:150px;height:100px;background:#335}
+.t{position:relative;left:60px;top:40px;width:20px;height:20px;background:#3c0}
+#a{left:10px;top:10px;transform:scale(2)}
+#b{left:350px;top:10px;transform:scale(2)} #b .f{filter:brightness(1)}
+#c{left:10px;top:250px;filter:brightness(1)} #c .s{transform:scale(2);transform-origin:0 0;width:150px;height:100px}
+#d{left:350px;top:250px;transform:scale(1.5)}
+</style></head><body>
+<div class=w id=a><div class=f><div class=t></div></div></div>
+<div class=w id=b><div class=f><div class=t></div></div></div>
+<div class=w id=c><div class=s><div class=f><div class=t></div></div></div></div>
+<div class=w id=d><div class=f><div class=t></div></div></div>
+<script>
+let n = 0;
+setInterval(() => {
+  n++;
+  for (const t of document.querySelectorAll('.t')) t.style.backgroundColor = n % 2 ? '#fff' : '#3c0';
+}, 250);
+</script>
+</body></html>
