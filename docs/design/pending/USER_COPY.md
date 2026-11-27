@@ -98,6 +98,8 @@ Outside a program racing its own memory, as `/tests/copyrace` does on purpose, n
 - **A kernel with the recovery off panics on it in QEMU.**
 - **The pure rule** has its host test and mutants.
 - **The whole ring-3 suite (`testrun`)** passes, since every syscall's copy changed.
+- **`/tests/copybench`** prices the copies with nothing else under them, so the same binary run under the kernel before and after answers whether the copies got slower. It compares a syscall that copies a 16-byte struct out with one that copies nothing. It times one thread's write into an empty pipe and read back, at sizes up to the pipe's 64 KiB, which never parks. And it repeats the 64 KiB round trip at every page offset of the user buffer, which crosses every (dst - src) & 0xFFF in both directions: the relationship some cores' string moves are slow under.
+- **A pipeline that reads a file (`cat file | wc -D`) is not a measure of the copies.** Its time is mostly the pipe's hand-offs: a writer that finds the reader still on its way to sleep leaves it to the next sweep, which runs on the BSP's scheduler passes, up to a tick later (pipe.c `pipe_claim_parked_waiter`). How often that happens depends on timing, which is why one line on one boot read 740 ms and then 2,500 ms.
 
 ## The other class: task memory through the HHDM
 
