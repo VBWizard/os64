@@ -2460,6 +2460,20 @@ int64_t os64_html_set_ce(os64_html_document_t *doc, HNode *e, os64_html_ce_t ce)
     return OS64_HTML_OK;
 }
 
+int64_t os64_html_set_state(os64_html_document_t *doc, HNode *e, uint8_t state)
+{
+    HDoc *d = (HDoc *)doc;
+    if (!d || !e || !ours(d, e) || e->kind != ELEMENT || (state & ~OS64_HTML_STATE_ALL) != 0)
+        return OS64_HTML_BAD_ARGUMENT;
+    if (e->state != state) {
+        d_version_advance(d);
+        e->state = state;
+        os64_html_change_t change = {.kind = OS64_HTML_CHANGE_STATE, .target = e};
+        log_change(d, &change);
+    }
+    return OS64_HTML_OK;
+}
+
 int64_t os64_html_touch(os64_html_document_t *doc, HNode *node)
 {
     HDoc *d = (HDoc *)doc;
