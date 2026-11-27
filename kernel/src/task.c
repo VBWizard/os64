@@ -36,6 +36,7 @@
 #include "knet.h"                // knet_thread — the "/knet" task's body
 #include "kusb.h"                // kusb_thread — the "/kusb" task's body
 #include "audio/audio.h"         // kaudio_thread — the "/kaudio" task's body
+#include "thread_reap.h"         // thread_reap_at_burial — a buried thread's stacks
 #include "gui/compositor.h"
 #include "gui/gui_demos.h"
 #include "gui/plane.h"        // gui_task_planes_release — a buried task's planes' pairs
@@ -59,66 +60,11 @@ static void debug_announce_loaded(const char *path, uint64_t bias);
 // one per terminal — and NULL still means "nobody owns this console yet",
 // with Ctrl+C staying an ordinary data byte there. See task.h and tty.h.)
 
-// Shared virtual address bump pointer for all tasks that use kKernelPML4 directly.
-// Tasks sharing the same PML4 must draw from the same counter or their stack
-// allocations collide at the same virtual address, overwriting each other's PTEs.
+// ktask's own draw of lower-half addresses (ktask_reserve_virt). ktask runs on
+// kKernelPML4, whose lower half is nobody's heap range, so it does not use
+// task_va_reserve; every other task does.
 static uintptr_t kKernelTaskMemoryNextVirt = KERNEL_TASK_MEMORY_BASE;
 
-/// @brief Allocate page-aligned memory for task-specific use (stacks, structures, etc.)
-/// This allocates memory in the lower half of the address space at task-specific virtual addresses.
-/// @param task The task to allocate memory for
-/// @param size Size in bytes to allocate (will be rounded up to page boundary)
-/// @return Virtual address of allocated memory, or NULL on failure
-void* task_alloc_aligned(task_t* task, size_t size)
-{
-	if (!task || size == 0) {
-		return NULL;
-	}
-
-	// Round size up to page boundary
-	size_t aligned_size = (size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
-	size_t page_count = aligned_size / PAGE_SIZE;
-
-	// Allocate physical memory
-	uintptr_t phys = allocate_memory_aligned(aligned_size);
-	if (phys == 0) {
-		printd(DEBUG_TASK, "task_alloc_aligned: Failed to allocate %lu bytes of physical memory\n", aligned_size);
-		return NULL;
-	}
-
-	// Tasks sharing kKernelPML4 must use a shared counter; per-task counters all
-	// start at KERNEL_TASK_MEMORY_BASE and would map at the same virtual address.
-	// Since 2026-07-25 only ktask is in that position (idle tasks got their own
-	// PML4 — see the address-space note in task_initialize), so this branch has
-	// a single occupant today. It stays because the RULE is what matters: any
-	// future task that shares an address space must draw from the shared
-	// counter, and a lone occupant is not a reason to delete the guard rail.
-	uintptr_t *counter = (task->pml4v == (uint64_t*)kKernelPML4v)
-		? &kKernelTaskMemoryNextVirt
-		: &task->taskMemoryNextVirt;
-
-	uintptr_t virt = *counter;
-	*counter += aligned_size;
-
-	// Map pages into task's PML4
-	paging_map_pages(task->pml4v, virt, phys, page_count, PAGE_PRESENT | PAGE_WRITE);
-
-	printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "task_alloc_aligned: Allocated %lu bytes (phys=0x%lx, virt=0x%lx) for task %s\n",
-		aligned_size, phys, virt, task->exename);
-
-	return (void*)virt;
-}
-
-/// @brief Reserve `size` bytes of task-address-space VA, advancing the correct
-///        next-virtual counter, and return the base of the reserved range.
-/// Tasks that SHARE kKernelPML4 must draw from the shared
-/// kKernelTaskMemoryNextVirt counter: their per-task taskMemoryNextVirt all
-/// start at KERNEL_TASK_MEMORY_BASE, so drawing from that would hand the same VA
-/// to every such task and collide with their own stacks. Single source of truth
-/// for both stack and arena VA allocation — keep all task-VA reservations here.
-/// (Only ktask shares today; idle tasks stopped sharing on 2026-07-25 — see
-/// task_initialize. This counter is the COUNTER-DRAW half of that problem; the
-/// FIXED-CONSTANT half — TASK_ARGV_VIRT and friends — is what the split fixed.)
 // A default-IGNORE signal at a task with no handler for it is CONSUMED AT
 // PUBLICATION — no bit is set anywhere. Ignoring by leaving the bit pending
 // looked equivalent and was not: a thread parked in a blocking call with no
@@ -324,77 +270,101 @@ void task_terminate_sibling_threads(task_t* task, thread_t* self)
 		       task->exename, marked, marked == 1 ? "" : "s");
 }
 
-uintptr_t task_reserve_task_virt(task_t* task, size_t size)
+uintptr_t ktask_reserve_virt(task_t* task, size_t size)
 {
-	uintptr_t *counter = (task->pml4v == (uint64_t*)kKernelPML4v)
-		? &kKernelTaskMemoryNextVirt
-		: &task->taskMemoryNextVirt;
-	uintptr_t base = *counter;
-	*counter += size;
+	if (task == NULL || task->pml4v != (uint64_t*)kKernelPML4v || size == 0 ||
+	    (size & (PAGE_SIZE - 1)) != 0 || size >= TASK_ARGV_VIRT)
+		return 0;
+	// A CAS, so two kernel contexts drawing at once get ranges of their own;
+	// one that would reach the fixed windows at TASK_ARGV_VIRT is refused.
+	uintptr_t base = __atomic_load_n(&kKernelTaskMemoryNextVirt, __ATOMIC_RELAXED);
+	do
+	{
+		if (base + size > TASK_ARGV_VIRT)
+		{
+			printd(DEBUG_TASK, "ktask_reserve_virt: %lu bytes at 0x%lx would reach 0x%x; refused\n",
+			       (unsigned long)size, (unsigned long)base, TASK_ARGV_VIRT);
+			return 0;
+		}
+	} while (!__atomic_compare_exchange_n(&kKernelTaskMemoryNextVirt, &base, base + size, true,
+	                                      __ATOMIC_RELAXED, __ATOMIC_RELAXED));
 	return base;
 }
 
-/// @brief Allocate guarded stack memory for a task
-/// Allocates stack with guard pages on both sides to detect stack overflow
-/// @param task The task to allocate stack for
-/// @param stackSize Size of usable stack (guard pages are added automatically)
-/// @param isRing3 true for user stack (PAGE_USER set), false for kernel stack
-/// @return Virtual address of stack base (bottom), or NULL on failure
-/// `optional`: a stack the caller can do without (a program's declared main
-/// stack, SCRIPT_STACK.md), asked of allocate_memory_try, which refuses with
-/// 0 where allocate_memory_aligned panics; nothing is reserved on a refusal.
-static void* guarded_stack(task_t* task, size_t stackSize, bool isRing3, bool optional)
+// ── Stacks (THREAD_STACKS.md § Stacks) ─────────────────────────────────────
+//
+// A stack is one frame run for its usable bytes, mapped in the middle of a
+// range THREAD_STACK_GUARD_PAGE_COUNT pages longer at each end; the ends stay
+// unmapped, so running off either end faults in a guard (stack_guard_side
+// names it). The range comes from the task's one door, task_va_reserve
+// (ktask's from ktask_reserve_virt), and like every range either hands out
+// is never handed out again. A thread is made
+// in three steps so that a refusal leaves nothing behind: the frames for
+// both stacks, then both ranges, then the mappings, which cannot fail. Only
+// what was already taken is given back, and a range is never given back.
+
+uintptr_t task_stack_frames(size_t usable, bool mayRefuse)
 {
-	if (!task || stackSize == 0) {
-		return NULL;
+	return mayRefuse ? allocate_memory_try(usable) : allocate_memory_aligned(usable);
+}
+
+bool task_stack_reserve(task_t* task, size_t usable, uintptr_t* base)
+{
+	const uint64_t guards = (uint64_t)THREAD_STACK_GUARD_PAGE_COUNT * PAGE_SIZE;
+	uint64_t bytes = usable + 2 * guards;
+	uintptr_t at;
+	if (task->pml4v == (uint64_t*)kKernelPML4v)
+	{
+		at = ktask_reserve_virt(task, bytes);
+		if (at == 0)
+			return false;
 	}
+	else if (!task_va_reserve(task, bytes, &at))
+		return false;
+	__atomic_add_fetch(&task->stackBytes, bytes, __ATOMIC_RELAXED);
+	__atomic_add_fetch(&task->stackRanges, 1, __ATOMIC_RELAXED);
+	*base = at + guards;
+	return true;
+}
 
-	// Calculate total allocation size including guard pages
-	size_t total_size = stackSize + (THREAD_STACK_GUARD_PAGE_COUNT * PAGE_SIZE * 2);
-	size_t aligned_size = (total_size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
-
-	// Allocate physical memory for entire region (including guards)
-	uintptr_t phys = optional ? allocate_memory_try(aligned_size) : allocate_memory_aligned(aligned_size);
-	if (phys == 0) {
-		printd(DEBUG_TASK, "task_alloc_guarded_stack: Failed to allocate %lu bytes\n", aligned_size);
-		return NULL;
-	}
-
-	uintptr_t virt_base = task_reserve_task_virt(task, aligned_size);
-
-	// Map only the usable stack pages (skip guard pages on each end)
-	uintptr_t phys_stack_start = phys + (THREAD_STACK_GUARD_PAGE_COUNT * PAGE_SIZE);
-	uintptr_t virt_stack_start = virt_base + (THREAD_STACK_GUARD_PAGE_COUNT * PAGE_SIZE);
-	size_t stack_page_count = (stackSize + PAGE_SIZE - 1) / PAGE_SIZE;  // Round up to cover full stack
-
+// Page by page under the task's page lock (task.h, pageLock): a sibling
+// faulting a page in at the same moment writes the same tables and may draw
+// from the same table arena. Nothing else writes a stack's entries (no
+// mapping covers a stack, so no fault installs there), so the stack needs
+// no lock held across it, and each hold stays one page's walk and store.
+void task_stack_map(task_t* task, uintptr_t base, uintptr_t phys, size_t usable, bool ring3)
+{
 	uint64_t flags = PAGE_PRESENT | PAGE_WRITE;
-	if (isRing3) {
-		// NX (2026-08-16): a ring-3 stack is data. Smashed-stack shellcode
-		// has been the canonical exploit since the Morris worm; declining to
-		// execute the stack costs one bit. (Kernel stacks stay NX-less for
-		// now — kernel-side W^X is its own booked arc, and a stray NX bit
-		// under any core that missed EFER.NXE is a reserved-bit #PF.)
+	if (ring3) {
+		// NX: a ring-3 stack is data. (Kernel stacks stay NX-less — kernel
+		// W^X is its own booked arc, and a stray NX bit under a core that
+		// missed EFER.NXE is a reserved-bit #PF.)
 		flags |= PAGE_USER | PAGE_NO_EXECUTE;
 	}
-
-	paging_map_pages(task->pml4v, virt_stack_start, phys_stack_start, stack_page_count, flags);
-
-	printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "task_alloc_guarded_stack: Allocated %lu byte %s stack at virt=0x%lx (phys=0x%lx), guards: 0x%lx-0x%lx and 0x%lx-0x%lx\n",
-		stackSize, isRing3 ? "user" : "kernel", virt_stack_start, phys_stack_start,
-		virt_base, virt_stack_start,
-		virt_stack_start + stackSize, virt_base + aligned_size);
-
-	return (void*)virt_stack_start;
+	for (size_t off = 0; off < usable; off += PAGE_SIZE)
+	{
+		uint64_t lf = counted_lock_acquire(&task->pageLock);
+		paging_map_page((pt_entry_t *)task->pml4v, base + off, phys + off, flags);
+		counted_lock_release(&task->pageLock, lf);
+	}
+	printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,
+	       "task_stack_map: %s's %lu-byte %s stack at 0x%lx (phys 0x%lx)\n",
+	       task->exename, (unsigned long)usable, ring3 ? "user" : "kernel", (unsigned long)base,
+	       (unsigned long)phys);
 }
 
-void* task_alloc_guarded_stack(task_t* task, size_t stackSize, bool isRing3)
+// The reap's half: the stack leaves the task's tables, page by page under
+// the page lock, as task_stack_map put it there. Its frames are NOT freed
+// here: other CPUs may still hold its translations until the caller's
+// tlb_shootdown_wait returns.
+void task_stack_unmap(task_t* task, uintptr_t base, size_t usable)
 {
-	return guarded_stack(task, stackSize, isRing3, false);
-}
-
-void* task_try_guarded_stack(task_t* task, size_t stackSize, bool isRing3)
-{
-	return guarded_stack(task, stackSize, isRing3, true);
+	for (uintptr_t va = base; va < base + usable; va += PAGE_SIZE)
+	{
+		uint64_t lf = counted_lock_acquire(&task->pageLock);
+		paging_unmap_page((pt_entry_t *)task->pml4v, va);
+		counted_lock_release(&task->pageLock, lf);
+	}
 }
 
 void task_idle_loop()
@@ -604,40 +574,6 @@ static bool task_threads_all_retired(task_t *t)
 			return false;
 	}
 	return true;
-}
-
-// Free one guarded stack given its usable-base VA (esp0BaseV/esp3BaseV).
-// The whole thing — guards included — is ONE allocator extent
-// (task_alloc_guarded_stack): resolve the first USABLE page's physical
-// through the corpse's own tables, step back over the leading guard pages,
-// and free_memory() releases the entire extent (and HHDM-unmaps it — the
-// use-after-free tripwire now guards freed stacks too). No task-VA unmap:
-// nothing will ever load this CR3 again, and the page-table pages themselves
-// are pool-owned (bump allocator, can't free yet — the booked deferral).
-static void task_free_guarded_stack(task_t *t, uintptr_t stackBaseV)
-{
-	if (stackBaseV == 0 || t->pml4v == NULL)
-		return;
-	uintptr_t phys = paging_walk_paging_table((pt_entry_t *)t->pml4v, stackBaseV);
-	if (phys == 0 || phys == 0xbadbadba)
-	{
-		// A corpse whose stack VA no longer resolves is NEWS, not noise: either
-		// the tables were torn before this walk (ordering bug) or the PTE was
-		// never there (creation bug) — and the extent this free would have
-		// released now leaks. Say so on the always-on channel; a silent return
-		// here hid whatever it hid for free (2026-08-14, scribbled-text hunt).
-		printd(DEBUG_EXCEPTIONS,
-		       "task_free_guarded_stack: %s (task %lu) stack VA 0x%016lx does not resolve "
-		       "(walk=0x%lx) — skipping the free, extent LEAKS\n",
-		       t->exename, t->taskID, (uint64_t)stackBaseV, (uint64_t)phys);
-		return;
-	}
-	// The -16KB step-back trusts the PTE to name OUR stack frame. Since the
-	// exact-base tripwire (allocator.c, same day), a stale/foreign PTE here
-	// can no longer silently release an innocent extent: unless the computed
-	// address is EXACTLY some extent's base, free_memory panics and names it.
-	free_memory((phys & ~(uintptr_t)0xFFF) -
-	            (THREAD_STACK_GUARD_PAGE_COUNT * PAGE_SIZE));
 }
 
 // ── THE DEFERRAL LEDGER (2026-08-13) — PAID IN FULL (2026-08-15) ───────────
@@ -1012,9 +948,7 @@ static void task_destroy(task_t *t)
 	while (th != NULL) {
 		thread_t *next = th->taskNext;
 		scheduler_reap_zombie_thread(th);   // no-op if already NONE
-		task_free_guarded_stack(t, th->esp0BaseV);
-		task_free_guarded_stack(t, th->esp3BaseV);
-		kfree(th->syscallIOScratch);
+		thread_reap_at_burial(th);          // its stacks and scratch, unless the reap took them
 		mark_TID_unused((uint32_t)th->threadID);
 		kfree(th);
 		th = next;
@@ -1050,9 +984,8 @@ static void task_destroy(task_t *t)
 	// went out of scope the instant it was mapped. Nothing had ever freed it:
 	// 4KB per ring-3 command since the trampoline was written, on no ledger,
 	// in no notes doc, found 2026-08-13 while auditing what else the tables
-	// still held. Recovered the way task_free_guarded_stack recovers a stack —
-	// ask the corpse's own page tables where it went. Kernel tasks never had
-	// one; the walk finds nothing and we skip.
+	// still held. Recovered by asking the corpse's own page tables where it
+	// went. Kernel tasks never had one; the walk finds nothing and we skip.
 	if (t->pml4v != NULL) {
 		uintptr_t tramp_phys = paging_walk_paging_table((pt_entry_t *)t->pml4v,
 		                                                TASK_EXIT_TRAMPOLINE_VIRT);
@@ -2078,12 +2011,9 @@ task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask, uint
 	// luck — kernel tasks load no ELF, so task_setup_entry never runs and
 	// nothing ever READ the clobbered mapping.)
 	//
-	// The half-fix was already in the tree and is worth understanding before
-	// touching this: task_alloc_aligned and task_reserve_task_virt route
-	// shared-PML4 tasks to a SHARED VA counter, precisely so their stacks and
-	// arenas could not collide the same way. That patch works and covers
-	// nothing that is a hardcoded constant rather than a counter draw — which
-	// is exactly what TASK_ARGV_VIRT, TASK_ENV_VIRT and
+	// A shared VA counter for shared-PML4 tasks covered their stacks and
+	// arenas, and nothing that is a hardcoded constant rather than a counter
+	// draw — which is exactly what TASK_ARGV_VIRT, TASK_ENV_VIRT and
 	// TASK_EXIT_TRAMPOLINE_VIRT are. Rather than teach three more constants to
 	// dodge, remove the sharing: with one address space per task the fixed VAs
 	// are unambiguous by construction, and any future per-task fixed address
@@ -2098,13 +2028,11 @@ task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask, uint
 		// This is ktask - use the kernel PML4 directly
 		newTask->pml4v = (uint64_t*)kKernelPML4v;
 		newTask->pml4 = (uint64_t*)kKernelPML4;
-		newTask->taskMemoryNextVirt = KERNEL_TASK_MEMORY_BASE;
 		printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "task_initialize: ktask using kKernelPML4 directly\n");
 	}
 	else
 	{
 		task_init_page_tables(newTask);
-		newTask->taskMemoryNextVirt = kernelTask ? KERNEL_TASK_MEMORY_BASE : USER_TASK_MEMORY_BASE;
 		printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "task_initialize: Allocated new PML4 at 0x%lx for %s%s task (shared upper-half)\n",
 			newTask->pml4, idleTask ? "idle " : "", kernelTask ? "kernel" : "user");
 
@@ -2126,7 +2054,11 @@ task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask, uint
 		}
 	}
 
-	newTask->threads = createThread((void*)newTask, kernelTask, userStack);
+	// The heap range opens before the first thread is made: its stacks are
+	// the range's first ranges (task_stack_reserve).
+	newTask->heapStart = TASK_HEAP_START;
+	newTask->heapEnd = TASK_HEAP_START;
+	newTask->threads = createThread((void*)newTask, kernelTask, userStack, false);
 	newTask->threads->idleThread = idleTask;
 	newTask->threads->pinnedCPU = pinnedCPU;
 	printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,
@@ -2887,10 +2819,6 @@ task_t *task_create_checked(char *path, int argc, char **argv, task_t *parentTas
 	}
 
 	gmtime((time_t*)&kSystemCurrentTime,&newTask->startTime);
-
-	//Initialize the heap at 0 bytes
-    newTask->heapStart=TASK_HEAP_START;
-    newTask->heapEnd=TASK_HEAP_START;
 
 	if (parentTaskPtr != NULL)
     {

@@ -294,23 +294,43 @@ static bool test_allocator_try_refuses(void)
     return true;
 }
 
-// A stack a program declared, refused, degrades (SCRIPT_STACK.md): the
-// fallible stack allocator answers NULL for more than all memory, panics
-// nothing, reserves nothing, and the refusal is counted, so createThread's
-// fallback to the default can run (Codex #441 rd1).
+// A stack a program declared, refused, degrades (SCRIPT_STACK.md), and a
+// thread a program asked for, refused, is no thread (task.c § Stacks): a
+// stack's fallible frames answer 0 for more than all memory, panic nothing,
+// change no books, and the refusal is counted (Codex #441 rd1). Its range
+// is taken only after its frames, so a refusal here takes none.
 static bool test_stack_try_refuses(void)
 {
     allocator_stats_t before, after;
     allocator_stats(&before, 0);
-    uintptr_t next = task_reserve_task_virt(kKernelTask, 0);    // the counter, unmoved
-    void *got = task_try_guarded_stack(kKernelTask, (before.frames_usable + 1) * PAGE_SIZE, false);
+    uintptr_t got = task_stack_frames((before.frames_usable + 1) * PAGE_SIZE, true);
     allocator_stats(&after, 0);
-    if (got != NULL)
-        TEST_FAIL("task_try_guarded_stack of more than all memory answered a stack");
-    if (task_reserve_task_virt(kKernelTask, 0) != next)
-        TEST_FAIL("a refused stack reserved address space");
+    if (got != 0)
+        TEST_FAIL("task_stack_frames of more than all memory answered frames");
     if (after.free_bytes != before.free_bytes || after.refusals != before.refusals + 1)
         TEST_FAIL("a refused stack changed the books, or was not counted");
+    return true;
+}
+
+// ktask's own draw (ktask_reserve_virt) serves ktask alone, whole pages
+// only, and never reaches the fixed windows at TASK_ARGV_VIRT; a refusal
+// moves nothing, so the next draw follows the last one granted.
+static bool test_ktask_reserve_virt(void)
+{
+    task_t other = {0};   // a task not on kKernelPML4
+    if (ktask_reserve_virt(&other, PAGE_SIZE) != 0)
+        TEST_FAIL("ktask_reserve_virt served a task that is not ktask");
+    uintptr_t a = ktask_reserve_virt(kKernelTask, PAGE_SIZE);
+    if (a == 0 || (a & (PAGE_SIZE - 1)) != 0)
+        TEST_FAIL("ktask_reserve_virt refused ktask a page");
+    if (ktask_reserve_virt(kKernelTask, PAGE_SIZE + 1) != 0 || ktask_reserve_virt(kKernelTask, 0) != 0)
+        TEST_FAIL("ktask_reserve_virt took a size that is not whole pages");
+    if (ktask_reserve_virt(kKernelTask, TASK_ARGV_VIRT) != 0 ||
+        ktask_reserve_virt(kKernelTask, TASK_ARGV_VIRT - a) != 0)
+        TEST_FAIL("ktask_reserve_virt handed out a range reaching TASK_ARGV_VIRT");
+    uintptr_t b = ktask_reserve_virt(kKernelTask, PAGE_SIZE);
+    if (b != a + PAGE_SIZE)
+        TEST_FAIL("a refused draw moved ktask's counter");
     return true;
 }
 
@@ -819,9 +839,6 @@ static bool test_task_arena_create_and_destroy(void)
         TEST_FAIL("No current task available for testing");
     }
 
-    // Save original next virtual address
-    uintptr_t orig_next_virt = task->taskMemoryNextVirt;
-
     task_arena_t *arena = task_arena_create(task, 4096);
     if (arena == NULL) {
         TEST_FAIL("task_arena_create returned NULL");
@@ -853,9 +870,6 @@ static bool test_task_arena_create_and_destroy(void)
 
     task_arena_destroy(arena);
 
-    // Restore original next virtual address for cleanup
-    task->taskMemoryNextVirt = orig_next_virt;
-
     return true;
 }
 
@@ -865,8 +879,6 @@ static bool test_task_arena_alloc_and_convert(void)
     if (task == NULL) {
         TEST_FAIL("No current task available for testing");
     }
-
-    uintptr_t orig_next_virt = task->taskMemoryNextVirt;
 
     task_arena_t *arena = task_arena_create(task, 4096);
     if (arena == NULL) {
@@ -914,7 +926,6 @@ static bool test_task_arena_alloc_and_convert(void)
     }
 
     task_arena_destroy(arena);
-    task->taskMemoryNextVirt = orig_next_virt;
 
     return true;
 }
@@ -925,8 +936,6 @@ static bool test_task_arena_aligned_alloc(void)
     if (task == NULL) {
         TEST_FAIL("No current task available for testing");
     }
-
-    uintptr_t orig_next_virt = task->taskMemoryNextVirt;
 
     task_arena_t *arena = task_arena_create(task, 8192);
     if (arena == NULL) {
@@ -959,7 +968,6 @@ static bool test_task_arena_aligned_alloc(void)
     }
 
     task_arena_destroy(arena);
-    task->taskMemoryNextVirt = orig_next_virt;
 
     return true;
 }
@@ -971,7 +979,6 @@ static bool test_task_arena_exhaustion(void)
         TEST_FAIL("No current task available for testing");
     }
 
-    uintptr_t orig_next_virt = task->taskMemoryNextVirt;
 
     // Create a small arena (will be rounded to PAGE_SIZE)
     task_arena_t *arena = task_arena_create(task, 4096);
@@ -999,7 +1006,6 @@ static bool test_task_arena_exhaustion(void)
     }
 
     task_arena_destroy(arena);
-    task->taskMemoryNextVirt = orig_next_virt;
 
     return true;
 }
@@ -6385,6 +6391,7 @@ static void register_builtin_tests(void)
 	// Pre-boot, beside the allocator's own refusal test: after kKernelTask
 	// exists, and before any other task allocates under the books it reads.
 	test_register("stack_try_refuses", test_stack_try_refuses, TEST_PHASE_PREBOOT);
+	test_register("ktask_reserve_virt", test_ktask_reserve_virt, TEST_PHASE_PREBOOT);
 	test_register("allocator_zero_after_free", test_allocator_zero_after_free, TEST_PHASE_PREBOOT);
 	test_register("fpu_state_round_trip", test_fpu_state_round_trip, TEST_PHASE_PREBOOT);
 	test_register("fpu_image_on_this_cpu", test_fpu_image_on_this_cpu, TEST_PHASE_PREBOOT);

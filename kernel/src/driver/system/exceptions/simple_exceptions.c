@@ -126,7 +126,7 @@ static bool address_is_mapped(uint64_t address)
 ///
 /// address_is_mapped() asks kKernelPML4v, and for kernel pointers that is the
 /// right question. It is the WRONG question for anything on a task's RSP0
-/// stack — task_alloc_guarded_stack puts those at TASK-LOCAL lower-half VAs
+/// stack — task_stack_map puts those at TASK-LOCAL lower-half VAs
 /// that are deliberately absent from the kernel's tables (CLAUDE.md says so in
 /// as many words). A fault frame lives on exactly such a stack, so asking the
 /// kernel oracle about it answers "unmapped" while the CPU is standing on it
@@ -761,7 +761,7 @@ static bool try_catch_segv(task_t *task)
 
 // Which side of a thread's user stack a faulting address fell on, if it
 // fell in the unmapped guard on either side: a word for the headline, or
-// NULL. The stack is `task_alloc_guarded_stack`'s layout — esp3BaseV is the
+// NULL. The stack is task.c § Stacks' layout — esp3BaseV is the
 // lowest usable byte, esp3Size (the size the thread got, which a main
 // thread's program may declare, SCRIPT_STACK.md) above it, and
 // THREAD_STACK_GUARD_PAGE_COUNT unmapped pages beyond each end.

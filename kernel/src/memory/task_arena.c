@@ -39,13 +39,16 @@ task_arena_t *task_arena_create(task_t *task, size_t capacity)
         return NULL;
     }
 
-    // Reserve VA in the task's address space through the shared helper. For a
-    // task that shares kKernelPML4 (e.g. kKernelTask, which the preboot arena
-    // tests pass here) this draws from kKernelTaskMemoryNextVirt — the SAME
-    // counter its stack came from. Using task->taskMemoryNextVirt directly was
-    // the bug: for such a task it is still at KERNEL_TASK_MEMORY_BASE, so the
-    // arena mapped over the task's stack and task_arena_destroy then unmapped it.
-    uintptr_t task_virt = task_reserve_task_virt(task, aligned_capacity);
+    // The task-side range: ktask's own draw, the one its stack came from, so
+    // the arena never lands on the stack. Only ktask (the preboot arena
+    // tests' task) is served; any other task has a heap range, and is
+    // refused here.
+    uintptr_t task_virt = ktask_reserve_virt(task, aligned_capacity);
+    if (task_virt == 0) {
+        printd(DEBUG_TASK, "task_arena_create: no range for %lu bytes in %s\n", aligned_capacity, task->exename);
+        kfree(kernel_buffer);
+        return NULL;
+    }
 
     // Map into task's PML4 (in addition to kernel PML4 where it's already mapped)
     paging_map_pages(task->pml4v, task_virt, phys, page_count, PAGE_PRESENT | PAGE_WRITE | PAGE_USER);

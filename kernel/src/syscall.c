@@ -19,6 +19,7 @@
 #include "log.h"
 #include "os64/klog.h"     // os64_logent_t — klog_read's out-struct (abi)
 #include "thread_join.h"   // the object behind HANDLE_THREAD
+#include "thread_reap.h"   // THREAD_REAP_BACKLOG — the creator's wait
 #include "console.h"
 #include "gui/gui_client.h"   // the GUI client API rows 16-21 dispatch into
 #include "strings/strlen.h"   // the dir canonical-path copy measures with it
@@ -5299,6 +5300,41 @@ static uint64_t syscall_thread(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		return SYSCALL_RESULT_BAD_USER_DATA;
 	}
 
+	// THE REAP'S BACKLOG (THREAD_STACKS.md § The reap). Each ended thread
+	// keeps its stacks until kworker releases them; a task that ends threads
+	// faster than that would hold an ever larger pile. So while more than
+	// THREAD_REAP_BACKLOG of this task's threads wait, it parks a tick at a
+	// time instead of making another, for THREAD_REAP_PARK_MOST_US at most:
+	// a thread's creation never hangs on a daemon, so past that it proceeds.
+	// It waits for kworker rather than releasing them itself: the release
+	// waits for every CPU to flush, and a syscall runs with interrupts off,
+	// where that wait could deadlock (tlb_shootdown_wait). A signal ends the
+	// wait as it ends a sleep.
+	thread_t *self = cls->currentThread;
+	uint64_t parked_since = 0;
+	bool proceeded = false;
+	while (__atomic_load_n(&task->reaps.pending, __ATOMIC_RELAXED) > THREAD_REAP_BACKLOG)
+	{
+		if (parked_since == 0)
+			parked_since = micros_now();
+		else if (micros_now() - parked_since >= THREAD_REAP_PARK_MOST_US)
+		{
+			proceeded = true;
+			break;
+		}
+		if (signal_park_must_end(self))
+		{
+			thread_reap_note_park(micros_now() - parked_since, false);
+			if (current_thread_will_catch())
+				return (uint64_t)(int64_t)OS64_INTERRUPTED;
+			raise_terminating_signal_and_die(task, self);
+			__builtin_unreachable();
+		}
+		signal_raise(SIGSLEEP, kTicksSinceStart + 1, self);
+	}
+	if (parked_since != 0)
+		thread_reap_note_park(micros_now() - parked_since, proceeded);
+
 	// THE HANDLE BEFORE THE THREAD: thread_join_create submits the thread to
 	// the scheduler, so a handle asked for afterwards could be refused with
 	// the thread already running, and a caller told "no thread" would have
@@ -5368,6 +5404,10 @@ static uint64_t syscall_thread_exit(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	// The thread that is currently executing must still BE in the running
 	// queue when the scheduler takes over — that is how it finds itself.
 	self->retVal = (uint64_t)arg0;
+	// Its stacks are released while its task lives: the pass that files it
+	// hands it to the reap (thread_reap.h). Set before `exited`, which is
+	// what sends it there.
+	self->reapOnExit = true;
 	self->exited = true;
 
 	// Off the run queue and never coming back: hand the core to someone
