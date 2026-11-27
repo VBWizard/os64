@@ -765,9 +765,11 @@ void restore_user_cr3(void)
 //     paging waiting to happen. For copy-OUT the VMA must also be writable —
 //     a store to a read-only page would be a ring-0 protection violation,
 //     another panic door. (CoW pages pass correctly: their VMA says
-//     PROT_WRITE and the write fault resolves through the CoW branch.) The
-//     VMA's facts hold for the rest of it, so the pages of the range inside
-//     it need no further lookup of the list, only the supervisor check.
+//     PROT_WRITE and the write fault resolves through the CoW branch.) Each
+//     such page is looked up on its own: where mappings overlap (an ELF
+//     image's segments sharing a page) the next page may be another
+//     mapping's, and a lookup of the mapping just found is a step or two,
+//     since it was just moved to the head.
 //   - Neither → wild pointer; reject, so the syscall fails with
 //     SYSCALL_RESULT_BAD_USER_DATA instead of the kernel faulting.
 // WHAT IT DOES NOT PROMISE: what it reads is true AT THE CHECK and not
@@ -795,8 +797,7 @@ static bool user_range_accessible(const void *user_ptr, size_t length, bool for_
 	uintptr_t end = addr + length;   // <= USER_CANONICAL_MAX: no overflow, nothing above the ceiling
 
 	uint64_t by_table = 0;
-	bool ok = true, have_facts = false;
-	vma_facts_t facts;
+	bool ok = true;
 	for (uintptr_t page = addr & ~(uintptr_t)(PAGE_SIZE - 1); page < end; page += PAGE_SIZE)
 	{
 		if (paging_user_page_reachable((pt_entry_t *)task->pml4v, page, for_write))
@@ -810,16 +811,8 @@ static bool user_range_accessible(const void *user_ptr, size_t length, bool for_
 			ok = false;
 			break;
 		}
-		if (!have_facts || page < facts.start || page >= facts.end)
-		{
-			if (!vma_lookup_facts(task, page, &facts))
-			{
-				ok = false;
-				break;
-			}
-			have_facts = true;
-		}
-		if (for_write && !(facts.prot & PROT_WRITE))
+		vma_facts_t facts;
+		if (!vma_lookup_facts(task, page, &facts) || (for_write && !(facts.prot & PROT_WRITE)))
 		{
 			ok = false;
 			break;

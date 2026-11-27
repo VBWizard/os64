@@ -165,10 +165,10 @@ walked everything, found nothing, and fell back to the page table.
   could reach right now (present and USER at every level of the walk,
   WRITE too for a copy into it) is vouched for without the list. Only a
   page not yet reachable, a demand page not faulted or a CoW page asked
-  for writing, asks the mapping, and a mapping that answers holds for the
-  rest of itself, so a `read()` into a fresh megabyte is one lookup, not
-  256 (the list asked once; each page still gets the supervisor check
-  below). The check it replaced as the fallback looked at the leaf's
+  for writing, asks the mapping, page by page: where mappings overlap the
+  next page may be another mapping's (Codex #759 rd2), and move to front
+  makes a repeat lookup of the same mapping a step or two. The check it
+  replaced as the fallback looked at the leaf's
   present and write bits only, so a supervisor page in the task's lower
   half, a thread's kernel stack, passed it. Now a page present without
   USER is refused whatever covers it, which matters on this base: a kernel
