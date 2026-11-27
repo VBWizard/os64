@@ -222,15 +222,16 @@ static void ring_reader_locked(yonder_media_t *m)
     (void)os64_bell_ring(&m->bell);
 }
 
-// Starts a thread that is never joined: its handle is let go at once, so a
-// page with many players does not spend the program's handles on them. A
-// failure does NOT mean the thread is not running: out of handles, the
-// kernel starts it detached and still answers an error. So the caller of a
-// failed start keeps alive everything the thread may touch, and waits for
-// its done flag as it would for a started one.
-static bool thread_start(int64_t (*fn)(void *), void *arg)
+// Starts a thread, named for its job, that is never joined: its handle is
+// let go at once, so a page with many players does not spend the program's
+// handles on them. A failure means no thread was made: the kernel takes the
+// handle before it makes the thread. The callers below still treat a failed
+// start as one that may be running, keeping alive what it would touch and
+// waiting for a done flag that will not come (DEBTS: yonder's failed media
+// thread start).
+static bool thread_start(int64_t (*fn)(void *), void *arg, const char *name)
 {
-    int64_t handle = os64_thread(fn, arg);
+    int64_t handle = os64_thread_named(fn, arg, name);
     if (handle < 0)
         return false;
     os64_close((int32_t)handle);
@@ -802,7 +803,7 @@ static bool loader_start(yonder_media_t *m, uint64_t from)
     os64_lock_acquire(&m->lock);
     m->loader_started = true;
     os64_lock_release(&m->lock);
-    if (!thread_start(loader_main, m)) {
+    if (!thread_start(loader_main, m, "loader")) {
         os64_lock_acquire(&m->lock);
         m->loader_quit = true;
         os64_lock_release(&m->lock);
@@ -1231,10 +1232,10 @@ yonder_media_t *yonder_media_open(const yonder_media_request_t *r)
     m->next = s_audio.sessions;
     s_audio.sessions = m;
     os64_lock_release(&s_audio.lock);
-    if (!thread_start(opener_main, m)) {
-        // The opener may be running all the same (thread_start): the
-        // session is closed and left on the list, for the reap to free
-        // once the opener says it is done.
+    if (!thread_start(opener_main, m, "opener")) {
+        // Treated as an opener that may be running (thread_start says why
+        // that is now never so): the session is closed and left on the
+        // list, for the reap to free once the opener says it is done.
         os64_lock_acquire(&m->lock);
         m->stop = true;
         m->closed = true;
@@ -1435,16 +1436,15 @@ bool yonder_media_plane_ask(yonder_media_t *m, int64_t win)
         m->plane_helper_done = false;
         m->plane_win = win;
         // Started before the thread runs, and kept even when the start
-        // fails: a failed start may still be running (thread_start).
+        // fails, as if the helper might be running (thread_start).
         m->plane_helper_started = true;
     }
     os64_lock_release(&m->lock);
     if (!ask)
         return false;
-    if (!thread_start(plane_helper, m)) {
-        // Out of handles the kernel may start the thread detached and still
-        // answer an error, so whether it runs is unknown: the session waits
-        // for its done flag either way, as for the opener.
+    if (!thread_start(plane_helper, m, "plane")) {
+        // The session waits for the helper's done flag either way, as for
+        // the opener (thread_start).
         return false;
     }
     return true;
