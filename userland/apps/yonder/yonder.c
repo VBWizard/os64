@@ -16592,6 +16592,7 @@ static void media_failed_told(void *opaque, const os64_html_node_t *node, void *
 {
     static const char *const kClass[] = {"error", "aborted", "network", "decode", "not supported"};
     char line[OS64_FETCH_URL_MAX + 512];
+    line[0] = '\0';        // written before every true answer below; said for the compiler
     if (session != NULL) {
         if (yonder_media_failure_take(session, code, line, sizeof(line)))
             media_failed((uint64_t)(uintptr_t)opaque, line, NULL, NULL, NULL, NULL);

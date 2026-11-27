@@ -34,10 +34,6 @@
 #include "os64/thread_name.h"   // OS64_THREAD_NAME_MAX, os64_thread_name_valid
 
 // Start a thread running fn(arg). Returns a HANDLE (>= 0), or negative.
-// NEGATIVE DOES NOT MEAN IT IS NOT RUNNING: a program out of handles gets
-// its thread started detached and still hears an error, the same error as
-// a thread that could not be made. Whoever frees what fn touches after a
-// failed start wants os64_thread_or_nothing.
 int64_t os64_thread(int64_t (*fn)(void *), void *arg);
 
 // The same, naming the thread for its job ("decode", "worker-03"): its
@@ -46,13 +42,6 @@ int64_t os64_thread(int64_t (*fn)(void *), void *arg);
 // bytes (os64/thread_name.h); one that is not is refused, no thread made.
 // The name is copied: the caller's buffer is its own again on return.
 int64_t os64_thread_named(int64_t (*fn)(void *), void *arg, const char *name);
-
-// os64_thread with a failure that means what it says: on a negative answer
-// fn never runs, even when the kernel started the thread. The thread starts
-// in a stub that waits for this call's verdict and returns at once when it
-// is a failure, touching nothing of fn's. The price: a small note leaks
-// when the kernel truly could not start the thread.
-int64_t os64_thread_or_nothing(int64_t (*fn)(void *), void *arg);
 
 // Wait for a thread and collect its value. Returns 0, or negative if the
 // handle isn't a thread. (Convenience only — os64_read on the handle does

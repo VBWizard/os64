@@ -347,12 +347,13 @@ keeps that alive:
 | audio (the output) | `os64_media_output_create`, the output built | the output's buffers, its lock, the voices | `destroy`, after joining it; a voice by its owner only once `gone` | the join; `gone` |
 | loader (yonder) | `loader_start`, the job and pipe set | the session's job | the job after `loader_done`; the pipe has two holders | `loader_done` |
 
-Each is started with `os64_thread_or_nothing` (libos64): a start that
-fails never runs its function. `os64_thread`'s failure meant "maybe
-running" (out of handles, the kernel starts the thread detached), which
-left a picture thread unjoined under a freed player, and a failed create's
-session never freed, holding yonder's exit. `/tests/threadtest` proves
-both halves. None of this is the address-0 crash (DEBTS, Video).
+A start that fails made no thread: the kernel reserves a thread's handle
+before it makes the thread, so a refusal makes none (`/tests/handletest`).
+Each start's failure is undone at once by the one who asked: no picture
+means no player, a refused decoding thread frees the player, and yonder's
+loader and plane helper give back what they were handed
+(`tools/test_yonder_media_threads_host.sh`). None of this is the address-0
+crash (DEBTS, Video).
 
 gplay is the window, the letterbox, the keys, the title and the readout.
 

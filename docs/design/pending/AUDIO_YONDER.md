@@ -570,10 +570,11 @@ above:
   sounds at a time.** No media thread is joined: their handles are
   closed at birth, a session is freed once each of its threads has said
   it is done, and yonder's end waits for the audio thread to say so too.
-  A start that answers an error is treated as
-  one that may be running, because out of handles the kernel starts the
-  thread detached and still answers an error; freeing the fetch job under
-  such a loader was a crash on a page with eighteen players. The fetches
+  A start that answers an error made no thread (the kernel reserves the
+  handle before it makes the thread), so the loader's job and slot are
+  given back at once. Before that, out of handles the kernel started the
+  thread detached and still answered an error, and freeing the fetch job
+  under such a loader was a crash on a page with eighteen players. The fetches
   queue for four loader slots, below libfetch's six connections to a host
   (DEBTS.md § A page's sound has what a slot held by a long sound costs).
 - **The source keeps every byte that has arrived**, up to 256 MiB, so a seek

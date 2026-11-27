@@ -139,9 +139,9 @@ struct yonder_media {
     // facts. The window's alone.
     int64_t opened_us, told_us, read_us;
     // The threads, which hold no handles (thread_start). A session is
-    // freed only once each one that may be running has said it is done.
+    // freed only once each one started has said it is done.
     void *product;                  // the loader's, set once as it ends
-    bool loader_started;            // a loader may be running
+    bool loader_started;            // a loader was started (or is about to be)
     bool loader_quit;               // the bytes' reader gave up on it: cancel the fetch
     bool loader_done;               // the loader's last touch of the session
     // Its plane (VIDEO_PLANE.md § 5): a helper thread asks for it, since
@@ -149,7 +149,7 @@ struct yonder_media {
     // close while it asks is the helper's to carry out when the ask
     // returns: the player must outlive the call.
     bool plane_asked;               // yonder_media_plane_ask was made
-    bool plane_helper_started;      // a helper may be running
+    bool plane_helper_started;      // a helper was started (or is about to be)
     bool plane_helper_in_ask;       // the helper is inside os64_media_player_plane
     bool plane_helper_done;         // the helper's last touch of the session
     bool plane_close_owed;          // closed while the helper asked: it closes the player
@@ -227,11 +227,9 @@ static void ring_reader_locked(yonder_media_t *m)
 
 // Starts a thread, named for its job, that is never joined: its handle is
 // let go at once, so a page with many players does not spend the program's
-// handles on them. A failure means no thread was made: the kernel takes the
-// handle before it makes the thread. The callers below still treat a failed
-// start as one that may be running, keeping alive what it would touch and
-// waiting for a done flag that will not come (DEBTS: yonder's failed media
-// thread start).
+// handles on them. A failure means no thread was made (the kernel takes the
+// handle before it makes the thread), so the caller undoes the start at
+// once: nothing waits for a done flag that will not come.
 static bool thread_start(int64_t (*fn)(void *), void *arg, const char *name)
 {
     int64_t handle = os64_thread_named(fn, arg, name);
@@ -1521,16 +1519,20 @@ bool yonder_media_plane_ask(yonder_media_t *m, int64_t win)
         m->plane_asked = true;
         m->plane_helper_done = false;
         m->plane_win = win;
-        // Started before the thread runs, and kept even when the start
-        // fails, as if the helper might be running (thread_start).
+        // Started before the thread runs, so the session's free waits
+        // for its done flag from the moment it may run.
         m->plane_helper_started = true;
     }
     os64_lock_release(&m->lock);
     if (!ask)
         return false;
     if (!thread_start(plane_helper, m, "plane")) {
-        // The session waits for the helper's done flag either way, as for
-        // the loader (thread_start).
+        // No helper was made (thread_start): the ask is over as one whose
+        // helper asked nothing, so the session's free does not wait for it
+        // and a later ask may be made.
+        os64_lock_acquire(&m->lock);
+        m->plane_helper_done = true;
+        os64_lock_release(&m->lock);
         return false;
     }
     return true;
