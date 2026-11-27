@@ -72,7 +72,7 @@ mutants = [
     ('hidden-by-an-ancestors-opacity', STYLE, '(up != NULL && up->transparent && !f_top_layer(n))',
      '(up != NULL && up->transparent)', FLOW_CASES),
     # The hidden rows out of keyboard traversal.
-    ('the-rows-stay-in-tab', YONDER, '    if (!staged)\n        fs_rows_keys(s_fs.active);', '    if (!staged)\n        (void)0;'),
+    ('the-rows-stay-in-tab', YONDER, '    if (!staged)\n        fs_rows_keys(s_fs.active);', '    if (!staged)\n        fs_rows_keys(false);'),
     # The user-agent rules.
     ('no-user-agent-rules', STYLE, '        if (f_top_layer(n))\n            fullscreen_rules(c, n, &sp);',
      '        if (0)\n            fullscreen_rules(c, n, &sp);'),
