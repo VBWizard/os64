@@ -6,6 +6,8 @@
 #include "dlist.h"
 #include "thread.h"
 #include "spinlock.h"   // spinlock_t — the per-task signal-delivery lock
+#include "counted_lock.h"     // the mappings' lock (mapLock)
+#include "memory/maplist.h"   // the mappings' list (mmaps)
 #include "time.h"
 #include "env.h"
 #include "handle.h"
@@ -325,7 +327,29 @@
         uint32_t argvPages;
         struct rusage usage;
         void* stdin, *stdout, *stderr;        //standard input/output/error pointers
-        dlist_t* mmaps;
+        // The task's mappings (memory/vma.h's doors; MAPPING_LIST.md), and
+        // the lock every read and write of them takes: a leaf, irqsave,
+        // held for a walk, counted for /proc/<id>/status. A mapping handed
+        // out of the lock carries a hold and is freed at its last release
+        // once delisted; burial takes them all at once.
+        maplist_t mmaps;
+        counted_lock_t mapLock;
+        // THE TASK'S PAGE LOCK: what serializes writes to this task's leaf
+        // page-table entries inside its mappings. A fault installs a page
+        // under it, after rechecking that its mapping is still listed;
+        // unmap, having delisted the mapping first, walks and removes each
+        // page under it. So a page is either installed before unmap's walk
+        // of it (and unmap frees it) or not at all. Irqsave, as mapLock is:
+        // a holder preempted with a sibling spinning on it from a fault on
+        // the same CPU would never get the CPU back. Its hold is one page's
+        // walk and one store, plus whatever table pages the store draws
+        // (the allocator's locks, taken under it). Order: signalLock, then
+        // pageLock, then mapLock. Nothing under it touches user memory
+        // through a user address.
+        // IT RESTS ON ONE TASK, ONE ADDRESS SPACE: the lock is per task
+        // because the page tables are. The day two tasks share a PML4, this
+        // lock no longer serializes that PML4's writers and is wrong.
+        counted_lock_t pageLock;
         int errno;
         char* cwd;                              //Current working directory for the process
         void* startHandler[TASK_MAX_EXIT_HANDLERS];
