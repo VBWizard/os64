@@ -54,13 +54,9 @@ reap_node_t *reaplist_claim_next(reaplist_t *l)
 	return n;
 }
 
+// Only a PENDING node is on the list, so the walk is the state check.
 bool reaplist_claim(reaplist_t *l, reap_node_t *n)
 {
-	if (n->state != REAP_PENDING)
-	{
-		l->refused++;
-		return false;
-	}
 	reap_node_t *prev = NULL;
 	for (reap_node_t *at = l->head; at != NULL; prev = at, at = at->next)
 		if (at == n)
@@ -69,7 +65,7 @@ bool reaplist_claim(reaplist_t *l, reap_node_t *n)
 			l->claimed_named++;
 			return true;
 		}
-	// PENDING and not on this list: a node handed to another list.
+	// Not PENDING, or handed to another list.
 	l->refused++;
 	return false;
 }

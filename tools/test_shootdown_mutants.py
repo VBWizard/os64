@@ -37,7 +37,7 @@ mutants = [
     # A flush that claims more than it covers.
     ('covers-next-round', '\treturn __atomic_load_n(&s->round, __ATOMIC_ACQUIRE);\n}\n\n// One handler',
      '\treturn __atomic_load_n(&s->round, __ATOMIC_ACQUIRE) + 1;\n}\n\n// One handler'),
-    ('flushed-not-said', '\t\t__atomic_store_n(&s->flushed[cpu], covers, __ATOMIC_RELEASE);\n', ''),
+    ('flushed-not-said', '&s->flushed[cpu], covers, __ATOMIC_RELEASE', '&s->flushed[cpu], covers * 0, __ATOMIC_RELEASE'),
     ('flushed-wrong-cpu', '&s->flushed[cpu], covers', '&s->flushed[0], covers'),
     # Answered: at least as new, for that CPU.
     ('answered-strictly-newer', ' >= round;', ' > round;'),
@@ -52,8 +52,8 @@ mutants = [
     ('total-most-not-raised', '\tif (raise_to(&s->wait_most_us, waited_us))', '\tif (false)'),
     ('window-most-not-raised', '\tif (raise_to(&s->window_wait_most_us, waited_us))', '\tif (false)'),
     ('raise-lowers', '\twhile (value > now)\n', '\twhile (value != now)\n'),
-    ('most-cpu-kept', '\t\t__atomic_store_n(&s->wait_most_cpu, last_cpu, __ATOMIC_RELAXED);\n', ''),
-    ('window-most-cpu-kept', '\t\t__atomic_store_n(&s->window_wait_most_cpu, last_cpu, __ATOMIC_RELAXED);\n', ''),
+    ('total-most-cpu-kept', '\t\t__atomic_store_n(&s->wait_most_cpu, last_cpu, __ATOMIC_RELAXED);\n', '\t\t(void)0;\n'),
+    ('window-most-cpu-kept', '\t\t__atomic_store_n(&s->window_wait_most_cpu, last_cpu, __ATOMIC_RELAXED);\n', '\t\t(void)0;\n'),
     ('most-cpu-any-round', '\tif (raise_to(&s->wait_most_us, waited_us))\n\t\t__atomic_store_n', '\traise_to(&s->wait_most_us, waited_us);\n\t\t__atomic_store_n'),
     ('read-window-kept', 'out->window_rounds = __atomic_exchange_n(&s->window_rounds, 0, __ATOMIC_RELAXED);',
      'out->window_rounds = __atomic_load_n(&s->window_rounds, __ATOMIC_RELAXED);'),

@@ -46,7 +46,11 @@ static model_t s_model;
 static void reset(void)
 {
 	memset(&s_list, 0, sizeof(s_list));
-	memset(s_nodes, 0, sizeof(s_nodes));
+	// Junk in every field but the state a node starts in: the core must set
+	// every field it reads.
+	memset(s_nodes, 0xA5, sizeof(s_nodes));
+	for (int k = 0; k < NODES; k++)
+		s_nodes[k].state = REAP_NONE;
 	memset(s_owners, 0, sizeof(s_owners));
 	memset(&s_model, 0, sizeof(s_model));
 }

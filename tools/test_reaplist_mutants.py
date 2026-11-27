@@ -53,9 +53,8 @@ mutants = [
      '\treap_node_t *n = l->head, *p = NULL;\n\tif (n == NULL)\n\t\treturn NULL;\n\twhile (n->next) { p = n; n = n->next; }\n\tunlink_after(l, p, n);'),
     ('claim-next-count', '\tl->claimed_next++;\n', ''),
     # A named claim of a node in the wrong state, or not unlinked.
-    ('claim-any-state', '\tif (n->state != REAP_PENDING)\n\t{\n\t\tl->refused++;\n\t\treturn false;\n\t}\n\treap_node_t *prev',
-     '\treap_node_t *prev'),
-    ('claim-wrong-prev', '\t\t\tunlink_after(l, prev, n);\n\t\t\tl->claimed_named++;', '\t\t\tunlink_after(l, NULL, n);\n\t\t\tl->claimed_named++;'),
+    ('claim-wrong-prev', '\t\t\tunlink_after(l, prev, n);\n\t\t\tl->claimed_named++;', '\t\t\t(void)prev;\n\t\t\tunlink_after(l, NULL, n);\n\t\t\tl->claimed_named++;'),
+    ('claim-any-on-list', '\t\tif (at == n)\n', '\t\tif (at == n || (at->next == NULL && n->state != REAP_DONE))\n'),
     ('claim-named-count', '\t\t\tl->claimed_named++;\n', ''),
     # Finishing: only a claimed node, once, and the owner's count.
     ('finish-any-state', '\tif (n->state != REAP_RUNNING)\n\t{\n\t\tl->refused++;\n\t\treturn false;\n\t}\n\tn->state = REAP_DONE;',
