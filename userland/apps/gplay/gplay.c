@@ -1,8 +1,10 @@
 // gplay — play a video file in a window, picture and sound in step.
 //
-//     gplay film.mp4                 play it; q or Escape leaves
+//     gplay film.mp4                 play it; q leaves, and so does Escape
+//                                    when the window is not full screen
 //     gplay --exit-at-end film.mp4   and leave when it has played
 //     gplay --maximized film.mp4     start with the window maximised
+//     gplay --full-screen film.mp4   start full screen
 //     gplay --no-plane film.mp4      paint every picture in the window,
 //                                    asking the player for no plane
 //
@@ -12,14 +14,16 @@
 // device was refused and then regained; --cover opens a window of its own over
 // the whole screen, so gplay's is answered no frames; --script "ms:action,..."
 // performs keys at times from the start (pause, back, forward, backfar,
-// forwardfar, mute, louder, softer, later, earlier, readout, quit, or
-// resize=WxH).
+// forwardfar, mute, louder, softer, later, earlier, readout, fullscreen,
+// escape, quit, or resize=WxH).
 //
 // Keys: space pauses and resumes; left and right seek five seconds, with
 // Shift a minute (presses while a seek is under way count from its target);
 // m mutes; up and down move /dev/volume; [ and ] move the sound against the
 // picture by 10 ms (the sync dial, shown in the readout, not saved); i
-// shows the readout over the picture; q or Escape leaves. The headphones'
+// shows the readout over the picture; f, or a double-click on the picture,
+// goes full screen and back; Escape leaves full screen, and gplay when it is
+// not full screen; q leaves. The headphones'
 // buttons (/dev/mediakeys): Play and Pause toggle, Previous goes to the
 // start, Stop leaves. Every number the readout shows prints at exit.
 //
@@ -69,7 +73,8 @@
 #define SYNC_STEP ((int64_t)RATE / 100)   // 10 ms (signed: it is negated)
 #define MARGIN 48                         // the first window leaves this much of the screen
 #define ACTIONS 16
-#define READOUT_LINES 8                   // what readout_lines writes at most
+#define DOUBLE_CLICK_US 400000            // two left presses this close are a double-click
+#define READOUT_LINES 9                   // what readout_lines writes at most
 #define READOUT_CHARS 96                  // a line's buffer, its NUL included
 // Over a placed plane the readout is an overlay rectangle, and the kernel
 // refuses a publish whose overlays blend more than GUI_PLANE_OVERLAY_PIXELS
@@ -77,7 +82,7 @@
 // readout can make must stay inside it, or every refresh would be refused.
 // This is the readout's own bound, well under the kernel's, which it does
 // not need to follow up.
-#define READOUT_OVERLAY_BUDGET 98304u
+#define READOUT_OVERLAY_BUDGET 131072u
 _Static_assert((READOUT_CHARS - 1) * 8 * READOUT_LINES * 16 <= READOUT_OVERLAY_BUDGET,
                "the readout's widest box outgrows a plane's overlay budget");
 #define OPEN_WAIT_MS 30000                // a probe that says nothing for this long fails the open
@@ -110,7 +115,7 @@ typedef struct {
     uint64_t display_missed, last_frame_number;
 } app_t;
 
-static bool s_exit_at_end, s_check, s_cover, s_maximized, s_expect_refusal, s_no_plane;
+static bool s_exit_at_end, s_check, s_cover, s_maximized, s_full_screen, s_expect_refusal, s_no_plane;
 static const char *s_script;
 
 static int64_t now_us(void)
@@ -172,6 +177,7 @@ static bool script_step(const char **cursor, int64_t *ms, action_t *a)
         {"backfar", GPLAY_KEY_BACK_FAR}, {"forwardfar", GPLAY_KEY_FORWARD_FAR}, {"mute", GPLAY_KEY_MUTE},
         {"louder", GPLAY_KEY_LOUDER}, {"softer", GPLAY_KEY_SOFTER}, {"later", GPLAY_KEY_SOUND_LATER},
         {"earlier", GPLAY_KEY_SOUND_EARLIER}, {"readout", GPLAY_KEY_READOUT}, {"quit", GPLAY_KEY_QUIT},
+        {"fullscreen", GPLAY_KEY_FULL_SCREEN}, {"escape", GPLAY_KEY_ESCAPE},
     };
     *a = (action_t){GPLAY_KEY_NONE, 0, 0};
     if (len > 7 && os64_memcmp(word, "resize=", 7) == 0) {
@@ -252,6 +258,7 @@ typedef struct {
     bool dirty;                           // the canvas needs drawing and publishing
     bool poked;                           // the player said look: ask for a frame even while not playing
     uint8_t key_seq;                      // an arrow's burst, part read (gplay_key)
+    uint64_t click_us;                    // the last left press, for a double-click (0: none)
     os64_media_player_frame_t shown;      // the picture on the canvas (the player's pixels)
     // On a plane: the show thread paces and main does no per-picture work.
     bool plane;
@@ -259,6 +266,25 @@ typedef struct {
     gplay_rect_t hole;                    // the picture's rectangle in the content: the plane's place
     uint32_t refresh;                     // frames since the readout was last painted over a plane
 } view_t;
+
+// The scaler's way for a readout (os64/media.h's OS64_MEDIA_SCALED_*).
+static const char *scaled_name(int way)
+{
+    switch (way) {
+    case OS64_MEDIA_SCALED_UNSCALED:      return "unscaled";
+    case OS64_MEDIA_SCALED_BILINEAR:      return "bilinear";
+    case OS64_MEDIA_SCALED_FAST_BILINEAR: return "fast bilinear";
+    default:                              return "none yet";
+    }
+}
+
+// A conversion's cost as "average/worst ms a picture", hundredths shown.
+static void conversion_text(const os64_media_player_conversion_t *c, char *out, size_t cap)
+{
+    uint64_t avg = c->count ? c->total_us / c->count : 0;
+    os64_snprintf(out, cap, "%lu.%02lu/%lu.%02lu ms", (unsigned long)(avg / 1000), (unsigned long)(avg % 1000 / 10),
+                  (unsigned long)(c->worst_us / 1000), (unsigned long)(c->worst_us % 1000 / 10));
+}
 
 // `placed`: whether gplay's last publish placed the plane.
 static void readout_lines(app_t *a, const os64_media_player_facts_t *f, bool placed, char lines[][READOUT_CHARS],
@@ -280,11 +306,17 @@ static void readout_lines(app_t *a, const os64_media_player_facts_t *f, bool pla
     os64_snprintf(lines[n++], READOUT_CHARS, "resyncs %lu (%lu ms holding), display missed %lu",
                   (unsigned long)f->pace.resyncs, (unsigned long)(f->pace.far_behind_us / 1000),
                   (unsigned long)(f->plane_state == OS64_MEDIA_PLANE_ON ? f->frames_missed : a->display_missed));
-    os64_snprintf(lines[n++], READOUT_CHARS, "queues: decoded %u/%u ready %u/%u sound %lu ms", f->decoded, f->decoded_depth,
-                  f->ready, f->ready_depth, (unsigned long)(f->sound_queued * 1000ull / RATE));
+    os64_snprintf(lines[n++], READOUT_CHARS, "queues: decoded %u/%u ready %u/%u sound %lu ms; frames %u, %lu KB",
+                  f->decoded, f->decoded_depth, f->ready, f->ready_depth,
+                  (unsigned long)(f->sound_queued * 1000ull / RATE), f->frames_held,
+                  (unsigned long)(f->frames_bytes / 1024));
     os64_snprintf(lines[n++], READOUT_CHARS, "ear: stills %lu, held ahead %lu, stepped behind %lu",
                   (unsigned long)f->clock.stills, (unsigned long)f->clock.held_ahead,
                   (unsigned long)f->clock.jumped_behind);
+    char cost[48];
+    conversion_text(&f->convert, cost, sizeof(cost));
+    os64_snprintf(lines[n++], READOUT_CHARS, "convert %ux%u from %ux%u, %s, %s", f->convert.w, f->convert.h,
+                  f->convert.src_w, f->convert.src_h, scaled_name(f->convert.way), cost);
     os64_snprintf(lines[n++], READOUT_CHARS, "sync %ld ms  sink delay %u ms%s%s%s", (long)(f->sync * 1000 / RATE),
                   f->delay_us / 1000, f->muted ? "  muted" : "", f->refused ? "  sound: " : "",
                   f->refused && f->refused_why ? f->refused_why : "");
@@ -473,12 +505,39 @@ static void volume_step(int delta)
     }
 }
 
+// Full screen (os64_gui_window_set_full_screen): what the window manager says
+// it is, and a change asked of it. The window manager tells the answer back
+// as WINDOW_FULL_SCREEN and WINDOW_RESIZE, which lay the picture out again;
+// a refusal (another window has focus) is said once, and nothing changes.
+static bool full_screen_now(const app_t *a)
+{
+    os64_gui_window_state_t st;
+    return os64_gui_window_get_state(a->win, &st) == 0 && (st.flags & OS64_GUI_WINDOW_FULL_SCREEN) != 0;
+}
+
+static void full_screen_set(const app_t *a, bool on)
+{
+    int64_t rc = os64_gui_window_set_full_screen(a->win, on);
+    if (rc != 0)
+        os64_printf("gplay: full screen %s refused (%ld)\n", on ? "entering" : "leaving", (long)rc);
+}
+
 // One key's ask, as a player call.
 static void do_key(app_t *a, view_t *v, gplay_key_t key, bool to_start, int state)
 {
     switch (key) {
     case GPLAY_KEY_QUIT:
         a->quit = true;
+        break;
+    case GPLAY_KEY_FULL_SCREEN:
+        full_screen_set(a, !full_screen_now(a));
+        break;
+    case GPLAY_KEY_ESCAPE:
+        // Every player's Escape: out of full screen first, then out.
+        if (full_screen_now(a))
+            full_screen_set(a, false);
+        else
+            a->quit = true;
         break;
     case GPLAY_KEY_READOUT:
         v->readout = !v->readout;
@@ -616,6 +675,25 @@ static void run(app_t *a, view_t *v, const os64_media_info_t *info, const char *
                              (ev.key.modifiers & OS64_GUI_MOD_SHIFT) != 0),
                    false, f.state);
             break;
+        case OS64_GUI_EVENT_MOUSE_BUTTON_DOWN:
+            // A double-click on the picture: full screen, or back.
+            if (ev.mouse.button == OS64_GUI_MOUSE_LEFT) {
+                uint64_t now = os64_micros();
+                if (v->click_us != 0 && now - v->click_us <= DOUBLE_CLICK_US) {
+                    full_screen_set(a, !full_screen_now(a));
+                    v->click_us = 0;
+                } else {
+                    v->click_us = now;
+                }
+            }
+            break;
+        // Entering or leaving full screen is a resize as far as the picture
+        // goes, and the window manager shows the window black until it
+        // publishes again (os64_gui_window_set_full_screen), so it is laid
+        // out here whether or not the size changed. The WINDOW_RESIZE that
+        // follows a size change lays it out again: an edge is rare, and that
+        // event, in the ring, is the one a full queue can drop.
+        case OS64_GUI_EVENT_WINDOW_FULL_SCREEN:
         case OS64_GUI_EVENT_WINDOW_RESIZE:
             os64_draw_ctx_refresh(&v->ctx);
             if (v->plane) {
@@ -685,6 +763,12 @@ static void say_counts(app_t *a, const os64_media_player_facts_t *f, bool placed
     os64_printf("  report ages: to 20 ms %lu, 40 %lu, 60 %lu, 80 %lu, 120 %lu, over %lu\n", (unsigned long)age[0],
                 (unsigned long)age[1], (unsigned long)age[2], (unsigned long)age[3], (unsigned long)age[4],
                 (unsigned long)age[5]);
+    char cost[48];
+    conversion_text(&f->convert, cost, sizeof(cost));
+    os64_printf("  conversion: %lu pictures, the last %ux%u from %ux%u, %s; average/worst %s\n",
+                (unsigned long)f->convert.count, f->convert.w, f->convert.h, f->convert.src_w, f->convert.src_h,
+                scaled_name(f->convert.way), cost);
+    os64_printf("  converted frames: %u held, %lu bytes\n", f->frames_held, (unsigned long)f->frames_bytes);
     os64_printf("  media: picture packets %lu, run-in %lu, resync-dropped %lu\n",
                 (unsigned long)f->media.picture_packets, (unsigned long)f->media.pictures_run_in,
                 (unsigned long)f->media.pictures_resync);
@@ -783,6 +867,8 @@ int main(int argc, char **argv)
             s_expect_refusal = true;
         else if (os64_strcmp(argv[first], "--maximized") == 0)
             s_maximized = true;
+        else if (os64_strcmp(argv[first], "--full-screen") == 0)
+            s_full_screen = true;
         else if (os64_strcmp(argv[first], "--cover") == 0)
             s_cover = true;
         else if (os64_strcmp(argv[first], "--no-plane") == 0)
@@ -794,7 +880,7 @@ int main(int argc, char **argv)
         first++;
     }
     if (first != argc - 1) {
-        os64_printf("usage: gplay [--exit-at-end] [--maximized] [--no-plane] [--check [--expect-refusal]] "
+        os64_printf("usage: gplay [--exit-at-end] [--maximized] [--full-screen] [--no-plane] [--check [--expect-refusal]] "
                     "[--cover] [--script steps] file\n");
         return 1;
     }
@@ -894,6 +980,10 @@ int main(int argc, char **argv)
     } else {
         draw_canvas(a, &v);
     }
+    // Born focused, so the window manager takes the ask; its answer arrives
+    // as events, which run() lays out.
+    if (s_full_screen)
+        full_screen_set(a, true);
 
     int64_t keys = os64_thread(keys_thread, a);
     run(a, &v, &info, name);

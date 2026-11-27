@@ -26,6 +26,7 @@ header=r'''
 #define GUI_ERR_NO_RESOURCES OS64_GUI_ERR_NO_RESOURCES
 #define GUI_WINDOW_DESKTOP OS64_GUI_WINDOW_DESKTOP
 #define GUI_WINDOW_MAXIMIZED OS64_GUI_WINDOW_MAXIMIZED
+#define GUI_WINDOW_FULL_SCREEN OS64_GUI_WINDOW_FULL_SCREEN
 #define GUI_WINDOW_POPUP (1u<<24)
 #define GUI_LOCK_WINDOW 1
 #define INPUT_EVENT_WINDOW_RESIZE OS64_GUI_EVENT_WINDOW_RESIZE
@@ -35,7 +36,7 @@ header=r'''
 typedef os64_gui_rect_t rect_t;
 typedef os64_gui_surface_t surface_t;
 typedef os64_gui_event_t input_event_t;
-typedef struct {unsigned flags,id;rect_t frame,restoreFrame;uint32_t min_content_w,min_content_h,canvas_cap_w,canvas_cap_h;surface_t content,canvas;} window_t;
+typedef struct {unsigned flags,id;rect_t frame,restoreFrame,fullFrom;uint32_t min_content_w,min_content_h,canvas_cap_w,canvas_cap_h;surface_t content,canvas;} window_t;
 static struct {uint32_t width,height;} kFrameBuffer={800,600};
 static uint64_t kTicksSinceStart;
 static window_t window;
@@ -82,13 +83,20 @@ int main(void)
  assert(!gui_window_set_content_size(1,300,200));assert(!memcmp(&visible,&window.frame,sizeof(visible)) && notifications==n);
  assert(window.restoreFrame.x==498 && window.restoreFrame.y==379 && window.restoreFrame.w==302 && window.restoreFrame.h==221);
  assert(window.flags==(GUI_WINDOW_MAXIMIZED|OS64_GUI_WINDOW_PINNED|OS64_GUI_WINDOW_MINIMIZED));
+ reset();n=notifications;window.flags=GUI_WINDOW_FULL_SCREEN;window.frame=(rect_t){0,0,800,600};
+ window.fullFrom=(rect_t){60,70,202,181};visible=window.frame;
+ assert(!gui_window_set_content_size(1,300,200));assert(!memcmp(&visible,&window.frame,sizeof(visible)) && notifications==n);
+ assert(window.fullFrom.x==60 && window.fullFrom.y==70 && window.fullFrom.w==302 && window.fullFrom.h==221);
+ window.flags=GUI_WINDOW_FULL_SCREEN|GUI_WINDOW_MAXIMIZED;window.restoreFrame=(rect_t){10,10,202,181};rect_t back=window.fullFrom;
+ assert(!gui_window_set_content_size(1,250,150));assert(!memcmp(&back,&window.fullFrom,sizeof(back)) && notifications==n);
+ assert(window.restoreFrame.w==252 && window.restoreFrame.h==171);
  reset();owned=false;refused(200,100,GUI_ERR_NOT_OWNER);owned=true;
  assert(gui_window_set_content_size(2,200,100)==GUI_ERR_INVALID_HANDLE);
  window.flags=GUI_WINDOW_POPUP;refused(200,100,GUI_ERR_BAD_ARGS);window.flags=GUI_WINDOW_DESKTOP;refused(200,100,GUI_ERR_BAD_ARGS);
  reset();decor_width=300;refused(200,100,GUI_ERR_BELOW_MINIMUM);decor_width=80;
  border=4;top=36;assert(!gui_window_set_content_size(1,250,180));assert(window.frame.w==258 && window.frame.h==220);
  reset();border=1;top=20;invariant_failure=true;assert(gui_window_set_content_size(1,300,200)==GUI_ERR_NO_RESOURCES);assert(window.canvas.width==200 && window.content.width==200);
- puts("window content size: raw arguments, owner/policy gates, bounds, anchoring, no-op, maximize, chrome, invariant refusal PASS");
+ puts("window content size: raw arguments, owner/policy gates, bounds, anchoring, no-op, maximize, full screen, chrome, invariant refusal PASS");
 }
 '''
 src=header+'\n'+function('kernel/src/gui/window.c','wm_clamp_frame')+'\n'+function('kernel/src/gui/window.c','wm_resize')+'\n'+function('kernel/src/gui/gui_client.c','gui_window_set_content_size')+'\n'+function('kernel/src/syscall.c','syscall_gui_window_set_content_size')+'\n'+body

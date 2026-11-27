@@ -209,6 +209,13 @@ static uint64_t syscall_gui_window_set_pinned(uint64_t a0,uint64_t a1,uint64_t a
     // Keep raw arg1 intact: values outside 0/1 must be refused, not narrowed.
     return (uint64_t)gui_window_set_pinned((int64_t)a0,a1);
 }
+static uint64_t syscall_gui_window_set_full_screen(uint64_t a0,uint64_t a1,uint64_t a2,
+    uint64_t a3,uint64_t a4,uint64_t a5)
+{
+    (void)a2;(void)a3;(void)a4;(void)a5;
+    // Raw arg1, as set_pinned: a value other than 0 or 1 is refused there.
+    return (uint64_t)gui_window_set_full_screen((int64_t)a0,a1);
+}
 static uint64_t syscall_gui_window_set_content_size(uint64_t a0,uint64_t a1,uint64_t a2,
     uint64_t a3,uint64_t a4,uint64_t a5)
 {
@@ -341,6 +348,7 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_GUI_EVENT_WAIT,         "gui_event_wait",         syscall_gui_event_wait,         false, 0x00),  // arg1 = input_event_t out OR NULL (nullable: NULL = wait, don't take — handler validates); BLOCKS (like read)
     SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_SET_CONTENT_SIZE,"gui_window_set_content_size",syscall_gui_window_set_content_size,false,0),
     SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_SET_PINNED,"gui_window_set_pinned",syscall_gui_window_set_pinned,false,0),
+    SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_SET_FULL_SCREEN,"gui_window_set_full_screen",syscall_gui_window_set_full_screen,false,0),
     SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_FOCUS,"gui_window_focus",syscall_gui_window_focus,false,0),
     SYSCALL_DEFINE(SYSCALL_GUI_EVENT_WAIT_ANY,"gui_event_wait_any",syscall_gui_event_wait_any,false,0),
     SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_GET_CONTENT_RECT,"gui_window_get_content_rect",syscall_gui_window_get_content_rect,false,0),
@@ -766,9 +774,11 @@ void restore_user_cr3(void)
 //     paging waiting to happen. For copy-OUT the VMA must also be writable —
 //     a store to a read-only page would be a ring-0 protection violation,
 //     another panic door. (CoW pages pass correctly: their VMA says
-//     PROT_WRITE and the write fault resolves through the CoW branch.) The
-//     VMA's facts hold for the rest of it, so the pages of the range inside
-//     it need no further lookup of the list, only the supervisor check.
+//     PROT_WRITE and the write fault resolves through the CoW branch.) Each
+//     such page is looked up on its own: where mappings overlap (an ELF
+//     image's segments sharing a page) the next page may be another
+//     mapping's, and a lookup of the mapping just found is a step or two,
+//     since it was just moved to the head.
 //   - Neither → wild pointer; reject, so the syscall fails with
 //     SYSCALL_RESULT_BAD_USER_DATA instead of the kernel faulting.
 // WHAT IT DOES NOT PROMISE: what it reads is true AT THE CHECK and not
@@ -797,8 +807,7 @@ static bool user_range_accessible(const void *user_ptr, size_t length, bool for_
 	uintptr_t end = addr + length;   // <= USER_CANONICAL_MAX: no overflow, nothing above the ceiling
 
 	uint64_t by_table = 0;
-	bool ok = true, have_facts = false;
-	vma_facts_t facts;
+	bool ok = true;
 	for (uintptr_t page = addr & ~(uintptr_t)(PAGE_SIZE - 1); page < end; page += PAGE_SIZE)
 	{
 		if (paging_user_page_reachable((pt_entry_t *)task->pml4v, page, for_write))
@@ -812,16 +821,8 @@ static bool user_range_accessible(const void *user_ptr, size_t length, bool for_
 			ok = false;
 			break;
 		}
-		if (!have_facts || page < facts.start || page >= facts.end)
-		{
-			if (!vma_lookup_facts(task, page, &facts))
-			{
-				ok = false;
-				break;
-			}
-			have_facts = true;
-		}
-		if (for_write && !(facts.prot & PROT_WRITE))
+		vma_facts_t facts;
+		if (!vma_lookup_facts(task, page, &facts) || (for_write && !(facts.prot & PROT_WRITE)))
 		{
 			ok = false;
 			break;

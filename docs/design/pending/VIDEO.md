@@ -866,6 +866,37 @@ API. Ruled into THIS arc, as its last slice (Rulings 4): a video player
 without it is not one, and 2560x1440 full screen is the worst case
 everything above was sized for.
 
+**As built (V8 slice 1): the window manager's call, and gplay.** The
+design state with Chris's four rulings (2026-11-26) is kept in the kit;
+what it decided, in the code's own words:
+
+- `os64_gui_window_set_full_screen` (syscall 78, os64/gui.h) and
+  Ctrl+Alt+F are one verb (`wm_set_full_screen`). Entering asks that the
+  window or its popup has focus and the glass is the desktop's, so a
+  program in the background cannot take the screen; leaving always
+  succeeds and returns the window exactly where it was.
+- Full screen is a layer over the window's state
+  (`GUI_WINDOW_FULL_SCREEN`, window.h): no chrome, the screen's size,
+  `MAXIMIZED` kept beneath, the geometry verbs declined. It ranks above
+  every band while it or its popup has focus; another program taking
+  focus drops it beneath that program's window, still full screen, and
+  focus coming back raises it again (Chris: "it stays!").
+- The canvas was reserved at the screen's size, so entering allocates
+  nothing; the claim walk and the cover sweep already compose nothing
+  beneath it and stop the clocks of what it covers.
+- Across each edge the window shows black and none of its planes until
+  its next publish, so the old picture never shows at the new size.
+- gplay: `f` and a double-click toggle, Escape leaves full screen before
+  it quits, `--full-screen` starts there. Its readout and exit lines say
+  what converting costs (sizes, the scaler's way, average and worst) and
+  how much the converted frames hold, which libmedia gives back when a
+  picture is made less than two thirds as large (`frame_fit`).
+- `/tests/fullscreentest` is the contract (`--chord` and `--vt` take a
+  person's keys); `/sys/gui`'s `full screen:` line counts the edges.
+
+Slice 2 is libdom's Fullscreen API and yonder obeying it; slice 3 the
+player widget's button.
+
 ## 10. Slices (a first cut, to be argued)
 
 | | Slice | Proves |

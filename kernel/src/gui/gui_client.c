@@ -535,7 +535,8 @@ int64_t gui_window_get_state(int64_t handle, os64_gui_window_state_t *out)
 	                            GUI_WINDOW_DESKTOP |   // the band is state too (Codex #31 rd3): without it a saved-and-recreated desktop came back an ordinary window
 	                            GUI_WINDOW_MAXIMIZED |
 	                            GUI_WINDOW_MINIMIZED |
-	                            GUI_WINDOW_COVERED | GUI_WINDOW_TITLE_UTF8 | GUI_WINDOW_HAS_SETTINGS);   // can anyone see me? — the frame clock's question
+	                            GUI_WINDOW_COVERED | GUI_WINDOW_TITLE_UTF8 | GUI_WINDOW_HAS_SETTINGS |   // can anyone see me? — the frame clock's question
+	                            GUI_WINDOW_FULL_SCREEN);   // a layer over the rest: the frame above is the live one, the screen
 	gui_unlock(irqflags);
 	return 0;
 }
@@ -574,6 +575,32 @@ int64_t gui_window_set_pinned(int64_t handle,uint64_t pinned)
     return win?0:err;
 }
 
+int64_t gui_window_set_full_screen(int64_t handle, uint64_t on)
+{
+    if (on > 1)
+        return GUI_ERR_BAD_ARGS;
+    int64_t err;
+    uint64_t flags = gui_lock(GUI_LOCK_WINDOW);
+    window_t *win = handle_lookup_owned(handle, &err);
+    if (win) {
+        switch (wm_set_full_screen(win, on != 0, false)) {
+        case WM_FULL_SCREEN_DONE:      err = 0; break;
+        case WM_FULL_SCREEN_DECLINED:  err = GUI_ERR_BAD_ARGS; break;
+        case WM_FULL_SCREEN_UNFOCUSED: err = GUI_ERR_NOT_FOCUSED; break;
+        case WM_FULL_SCREEN_NO_FIT:    err = GUI_ERR_SCREEN_FIT; break;
+        }
+    }
+    gui_unlock(flags);
+    return err;
+}
+
+void gui_full_screen_status(wm_full_screen_status_t *out)
+{
+    uint64_t flags = gui_lock(GUI_LOCK_WINDOW);
+    wm_full_screen_status(out);
+    gui_unlock(flags);
+}
+
 int64_t gui_window_focus(int64_t handle)
 {
     int64_t err;
@@ -609,15 +636,19 @@ int64_t gui_window_set_content_size(int64_t handle,uint64_t width,uint64_t heigh
     window_t *w=handle_lookup_owned(handle,&err);
     if(!w)goto done;
     if(w->flags & (GUI_WINDOW_DESKTOP|GUI_WINDOW_POPUP)){err=GUI_ERR_BAD_ARGS;goto done;}
-    uint64_t frame_w=width+2u*wm_border_width(w->flags);
-    uint64_t frame_h=height+wm_chrome_top(w->flags)+wm_border_width(w->flags);
+    // A full-screen window's frame is the screen's; the size asked is for
+    // the frame it goes back to, with the chrome of the state beneath.
+    bool full=(w->flags & GUI_WINDOW_FULL_SCREEN)!=0;
+    uint32_t beneath=w->flags & ~GUI_WINDOW_FULL_SCREEN;
+    uint64_t frame_w=width+2u*wm_border_width(beneath);
+    uint64_t frame_h=height+wm_chrome_top(beneath)+wm_border_width(beneath);
     if(frame_w>INT32_MAX || frame_h>INT32_MAX){err=GUI_ERR_BAD_ARGS;goto done;}
     if(width<w->min_content_w || height<w->min_content_h ||
-       frame_w<wm_decoration_min_width(w->flags)){err=GUI_ERR_BELOW_MINIMUM;goto done;}
+       frame_w<wm_decoration_min_width(beneath)){err=GUI_ERR_BELOW_MINIMUM;goto done;}
     if(width>w->canvas_cap_w || height>w->canvas_cap_h){err=GUI_ERR_ABOVE_CAPACITY;goto done;}
     if(frame_w>kFrameBuffer.width || frame_h>kFrameBuffer.height){err=GUI_ERR_SCREEN_FIT;goto done;}
     bool maximized=(w->flags & GUI_WINDOW_MAXIMIZED)!=0;
-    rect_t target=maximized?w->restoreFrame:w->frame;
+    rect_t target=maximized?w->restoreFrame:full?w->fullFrom:w->frame;
     target.w=(int32_t)frame_w;target.h=(int32_t)frame_h;
     int32_t max_x=(int32_t)(kFrameBuffer.width-frame_w),max_y=(int32_t)(kFrameBuffer.height-frame_h);
     if(target.x<0)target.x=0;
@@ -628,6 +659,7 @@ int64_t gui_window_set_content_size(int64_t handle,uint64_t width,uint64_t heigh
     // geometry and drains the remaining releases of a cancelled resize.
     gui_geometry_changing(w);gui_cancel_resize(w);
     if(maximized)w->restoreFrame=target;
+    else if(full)w->fullFrom=target;
     else {
         (void)wm_resize(w,target);
         // wm_resize returns false for both no-op and invariant refusal.
@@ -684,6 +716,10 @@ void gui_window_snapshot_locked(window_t *win, rect_t local)
 	// this is what fuses the mid-draw torn ball back into one ball. Cost is
 	// one damage-bounded row-wise copy, the same order as the composite blit
 	// that follows it.
+	//
+	// The first publish after a full-screen edge ends the black, whatever
+	// its damage (wm_full_screen_blank_end).
+	bool ends_blank = wm_full_screen_blank_end(win, local);
 	for (int32_t y = 0; y < local.h; y++)
 		memcpy(win->content.pixels + (size_t)(local.y + y) * win->content.pitch_px + local.x,
 		       win->canvas.pixels  + (size_t)(local.y + y) * win->canvas.pitch_px  + local.x,
@@ -696,6 +732,10 @@ void gui_window_snapshot_locked(window_t *win, rect_t local)
 	rect_t screen_damage = (rect_t){content_screen.x + local.x,
 	                                content_screen.y + local.y,
 	                                local.w, local.h};
+	// Ending the black changes everything the window shows, its planes
+	// included, so all of it is damaged, not this rect.
+	if (ends_blank)
+		screen_damage = content_screen;
 
 	// Occlusion (OCCLUSION.md): only the part of this rect no window above
 	// covers can change the glass, so only that is damaged. None of it: no

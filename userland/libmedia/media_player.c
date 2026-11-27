@@ -97,6 +97,9 @@ struct os64_media_player {
     os64_media_clock_t clock;
     os64_media_pace_t pace;
     frame_t frame[FRAMES];
+    uint64_t frames_bytes;                // the converted frames' pixels held (frame_fit), read atomically by facts
+    uint32_t frames_held;                 // frames holding pixels
+    os64_media_player_conversion_t convert; // under the lock: what converting has cost (facts)
     frame_t *free_frames;
     frame_t *shown;                       // the caller's: the picture on the screen
     frame_t *reconverted;                 // the shown one converted again at a new size
@@ -599,14 +602,34 @@ static void retire_unasked(os64_media_player_t *p, int64_t now, collect_t *c)
 
 // ---------------------------------------------------------------- the picture thread
 
-static bool frame_fit(frame_t *f, uint32_t w, uint32_t h)
+// A frame's pixels for w x h: kept when they hold it, regrown when they do
+// not, and given back and made again when they hold more than one and a
+// half times what it needs. That last is the way back from full screen: a
+// 2560x1440 picture is 14.7 MB a frame, FRAMES of them, and returns within
+// FRAMES pictures, as each frame comes round. Why 1.5: a 1080p clip
+// leaving a 2560x1440 full screen for its own window holds 1.78 times its
+// need and must give it back, while a 1440p clip in its near-screen window
+// (1.03) must not churn; and a drag that shrinks a window frees only each
+// time it crosses two thirds of the last size, so it cannot thrash. At a
+// steady size nothing here allocates. The picture thread's alone, so the
+// counts are written atomically for facts, which reads them under no lock
+// of this thread's.
+static bool frame_fit(os64_media_player_t *p, frame_t *f, uint32_t w, uint32_t h)
 {
     size_t need = (size_t)w * h;
-    if (need <= f->capacity)
+    if (need <= f->capacity && f->capacity * 2 <= need * 3)
         return true;
+    if (f->pixels != NULL) {
+        __atomic_sub_fetch(&p->frames_bytes, (uint64_t)f->capacity * sizeof(uint32_t), __ATOMIC_RELAXED);
+        __atomic_sub_fetch(&p->frames_held, 1, __ATOMIC_RELAXED);
+    }
     os64_free(f->pixels);
     f->pixels = os64_malloc_aligned(need * sizeof(uint32_t), 64);
     f->capacity = f->pixels != NULL ? need : 0;
+    if (f->pixels != NULL) {
+        __atomic_add_fetch(&p->frames_bytes, (uint64_t)need * sizeof(uint32_t), __ATOMIC_RELAXED);
+        __atomic_add_fetch(&p->frames_held, 1, __ATOMIC_RELAXED);
+    }
     return f->pixels != NULL;
 }
 
@@ -686,13 +709,30 @@ static int64_t picture_thread(void *arg)
                 scaler_h = h;
             }
         }
-        if (scaler != NULL && frame_fit(f, w, h))
+        int64_t convert_us = 0;
+        if (scaler != NULL && frame_fit(p, f, w, h)) {
+            int64_t t1 = now_us();
             made = os64_media_scaler_convert(scaler, source, f->pixels, w * 4) == 0;
+            convert_us = now_us() - t1;
+        }
         int64_t cost = now_us() - t0;
 
         os64_lock_acquire(&p->lock);
         p->converting = false;
         p->conversion_us = cost;
+        if (made) {
+            // The readout's account of the conversion alone (a scaler built
+            // or a frame regrown at a size change is in `cost`, not here).
+            p->convert.count++;
+            p->convert.total_us += (uint64_t)convert_us;
+            if ((uint64_t)convert_us > p->convert.worst_us)
+                p->convert.worst_us = (uint64_t)convert_us;
+            p->convert.w = w;
+            p->convert.h = h;
+            p->convert.src_w = source->width;
+            p->convert.src_h = source->height;
+            p->convert.way = os64_media_scaler_last(scaler);
+        }
         f->w = w;
         f->h = h;
         f->at = at;
@@ -1734,6 +1774,9 @@ void os64_media_player_facts(os64_media_player_t *p, os64_media_player_facts_t *
     f.ready = os64_media_pictures_count(&p->ready);
     f.decoded_depth = DECODED_DEPTH;
     f.ready_depth = READY_DEPTH;
+    f.convert = p->convert;
+    f.frames_held = __atomic_load_n(&p->frames_held, __ATOMIC_RELAXED);
+    f.frames_bytes = __atomic_load_n(&p->frames_bytes, __ATOMIC_RELAXED);
     f.sound_queued = os64_media_queue_count(&p->pcm);
     f.delay_us = p->voice.delay_us;
     f.sync = p->sync;
