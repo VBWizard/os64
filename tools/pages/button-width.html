@@ -4,7 +4,9 @@
 <!--
   A button the page leaves alone is drawn by yonder's own widget, and is as
   wide as its caption needs, as other browsers draw it. Each row names what
-  to see.
+  to see. Once loaded, the page prints each button's box (its
+  getBoundingClientRect) on yonder's output, so a run leaves numbers beside
+  what the glass showed.
 -->
 <style>
   body { font: 16px sans-serif; margin: 16px; }
@@ -30,3 +32,14 @@
 
 <div class="row"><button>Full screen</button> <button>Full screen, then remove</button>
   <div class="note">Side by side, as on the full screen page: each as wide as its own caption.</div></div>
+
+<script>
+  addEventListener('load', () => {
+    const all = document.querySelectorAll('button, input');
+    all.forEach((b, i) => {
+      const r = b.getBoundingClientRect();
+      console.log('button-width: ' + i + ' "' + (b.textContent || b.value || b.type) + '" ' +
+                  r.left.toFixed(1) + ',' + r.top.toFixed(1) + ' ' + r.width.toFixed(1) + 'x' + r.height.toFixed(1));
+    });
+  });
+</script>
