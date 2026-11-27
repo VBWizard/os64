@@ -3654,6 +3654,7 @@ typedef struct {
     yonder_media_t *session;
     uint32_t width, height;             // the picture's size as shown, CSS pixels; 0 not yet known
     bool playing;                       // its clock runs
+    bool played;                        // its clock has run at least once: only then is its plane asked for
     bool poked;                         // its facts moved: one frame is asked for even while paused
     uint32_t sizing;                    // a new size was told: frames are asked for until the picture
                                         // at it comes (counted down, so a size never answered ends)
@@ -13387,6 +13388,22 @@ static PosterSlot *poster_seen(Page *p, const os64_html_node_t *node)
     return slot;
 }
 
+// `node`'s poster when it is shown in its box: its picture has arrived, and
+// the show poster flag is set or the video has no picture in hand yet (an
+// autoplay shows no gap between them). NULL otherwise. A video showing its
+// poster is no cover (video_cover_rect), so it never asks for its plane and
+// is never placed while the poster is up: the page paints the poster.
+static const PosterSlot *poster_showing(const Video *v, const os64_html_node_t *node)
+{
+    const PosterSlot *poster = poster_seen(&g.page, node);
+    if (poster == NULL || poster->pic < 0 || g.page.pics[poster->pic].state != PIC_SHOWN)
+        return NULL;
+    const uint32_t *px;
+    uint32_t w, h;
+    bool picture = v != NULL && v->width > 0 && video_picture(v, &px, &w, &h);
+    return poster->flag || !picture ? poster : NULL;
+}
+
 // After a layout is published: each laid-out video's poster read as it
 // stands, on the view or not (paint meets only what is on the view). A
 // video with a poster gets its slot, so a poster below the fold is asked
@@ -13516,6 +13533,7 @@ static void videos_turn(void)
             g.pictures_moved = true;
         }
         v->playing = f.running;
+        v->played |= f.running;
         v->poked |= f.seeked != v->seen.seeked || f.current != v->seen.current || f.probed != v->seen.probed ||
                     f.ended != v->seen.ended || f.running != v->seen.running;
         v->seen = f;
@@ -13877,7 +13895,9 @@ static void videos_tick(void)
 // player's own show thread, and the page paints a hole where its picture
 // goes: a new picture then costs the page's thread nothing, and a script
 // holding that thread no longer holds the picture. The plane is asked for
-// at the video's first cover, from a thread of its own (the ask waits for
+// at the video's first cover once it has played (`played`: a window's
+// planes are few, and a paused first picture gains nothing from one), from
+// a thread of its own (the ask waits for
 // the plane to be made: yonder_media_plane_ask), and kept until its
 // session closes; a plane that ends while its session plays is asked for
 // again, no sooner than a second apart, PLANE_ASKS_AGAIN times a session.
@@ -14470,7 +14490,12 @@ static void planes_prepare(void)
         }
         if (f.plane_state == OS64_MEDIA_PLANE_NONE || (f.plane_state == OS64_MEDIA_PLANE_ENDED && !v->plane_asked)) {
             os64_gui_rect_t c;
-            if (s_planes && !v->plane_asked && on_view && v->seen.picture && b != NULL && video_cover_rect(v, b, &c)) {
+            // Only once it has played: a paused first picture gains nothing
+            // from a plane, and a window has few (GUI_WINDOW_PLANES), kept
+            // until the session closes, so a page of videos nobody plays
+            // must not spend them.
+            if (s_planes && !v->plane_asked && v->played && on_view && v->seen.picture && b != NULL &&
+                video_cover_rect(v, b, &c)) {
                 v->plane_asked = true;
                 v->frame_fresh = false;
                 s_plane_counts.asks++;
@@ -22205,12 +22230,11 @@ static void pane_video(GlassPane *gp, const flow_box_t *b, os64_gui_rect_t c, os
     // The poster while the show poster flag is set, and after it until the
     // first picture (an autoplay shows no gap between them): drawn as a
     // picture is, on the general path.
-    const PosterSlot *poster = poster_seen(&g.page, b->node);
-    bool poster_ready = poster != NULL && poster->pic >= 0 && g.page.pics[poster->pic].state == PIC_SHOWN;
+    const PosterSlot *poster = poster_showing(v, b->node);
     const uint32_t *pixels = NULL;
     uint32_t pw = 0, ph = 0;
     bool picture_ready = v != NULL && v->width > 0 && video_picture(v, &pixels, &pw, &ph);
-    bool showing_poster = poster_ready && (poster->flag || !picture_ready);
+    bool showing_poster = poster != NULL;
     if (showing_poster) {
         for (int32_t k = 0; k < gp->n; ++k) {
             Glass *gl = gp->now[k];
@@ -23076,7 +23100,8 @@ static void timed_pixels(void *ctx, os64_gui_rect_t rect, const uint32_t *argb)
 // clip, as pane_video cuts them — when that frame is converted at the
 // fitted size, the walk opens no group around its draw (cover_groups),
 // the page draws videos at all (modern), the box is drawn, no line's
-// ellipsis cuts it, and covers are on (`--cover=off`). False otherwise.
+// ellipsis cuts it, its poster is not shown (poster_showing), and covers
+// are on (`--cover=off`). False otherwise.
 //
 // The groups the walk opens round `b`'s draw: flow_paint_path's, less those
 // round the full-screen element, which the top layer's walk does not lay
@@ -23103,7 +23128,8 @@ static int32_t cover_groups(const flow_box_t *b)
 static bool video_cover_rect(const Video *v, const flow_box_t *b, os64_gui_rect_t *out)
 {
     if (!s_covers || !g.page.modern || g.page.tree == NULL || b == NULL || !b->replaced || b->unpainted ||
-        b->style->visibility != FLOW_VISIBLE || v->width == 0 || v->height == 0 || cover_groups(b) != 0)
+        b->style->visibility != FLOW_VISIBLE || v->width == 0 || v->height == 0 ||
+        poster_showing(v, b->node) != NULL || cover_groups(b) != 0)
         return false;
     flow_cut_memo_t cuts;
     flow_cut_memo_open(&cuts, g.page.tree);

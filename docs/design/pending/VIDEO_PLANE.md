@@ -576,10 +576,16 @@ long as a page keeps its video disqualified, so the record counts the time
 wanted and not placed by reason, and that number decides whether the long-
 lived reasons should drop `want` later.
 
-The plane is asked for at a video's **first cover**, from a thread of its
-own (the ask waits for the plane to be made), and kept until the session
-closes: a video that stops qualifying keeps its plane hidden, painted by
-the page from `shown`. A plane that **ends** while its session plays (the
+The plane is asked for at a video's **first cover once it has played**
+(its clock has run once: a window holds `GUI_WINDOW_PLANES` planes, kept
+until each session closes, and a page of paused first pictures would
+spend them on videos nobody plays, while a paused picture gains nothing
+from a plane), from a thread of its own (the ask waits for the plane to
+be made), and kept until the session closes. A video showing its poster
+(the show poster flag set, or no picture in hand yet) is no cover at all,
+so the page paints the poster and the plane is never asked meanwhile. A
+video that stops qualifying keeps its plane hidden, painted by the page
+from `shown`. A plane that **ends** while its session plays (the
 show thread's frame wait answered an error; the answer is in the record
 and on the console) is not meant to happen; it is asked for again, no
 sooner than a second after the end (and only once it is a cover in view

@@ -727,6 +727,7 @@ static void plane_cases(void)
      * second after the end, at most three times; a refused one is not. */
     plane_page(kPlanePage);
     v->frame = (os64_media_player_frame_t){plane_pic, 320, 180, 1, true};
+    v->played = true;
     planes_prepare();
     planes_release();
     v->plane_asked = true;
@@ -970,14 +971,20 @@ static void plane_cases(void)
           "planes: scrolled since the close, the copy not painted, and let go");
     plane_drop();
 
-    /* No plane yet: asked at the first cover, once; not at all with planes
-     * off. */
+    /* No plane yet: a cover that has never played asks nothing (a paused
+     * first picture gains nothing from a plane, and a window's are few);
+     * once it has played, asked at the first cover, once; not at all with
+     * planes off. */
     plane_page(kPlanePage);
     fake_plane.facts.plane_state = OS64_MEDIA_PLANE_NONE;
     v->frame = (os64_media_player_frame_t){plane_pic, 320, 180, 1, true};
     planes_prepare();
     planes_prepare();
-    check(fake_plane.asks == 1 && v->plane_asked, "planes: asked at the first cover, once");
+    check(fake_plane.asks == 0 && !v->plane_asked, "planes: a cover that has never played asks nothing");
+    v->played = true;
+    planes_prepare();
+    planes_prepare();
+    check(fake_plane.asks == 1 && v->plane_asked, "planes: once played, asked at the first cover, once");
     plane_drop();
     plane_page(kPlanePage);
     fake_plane.facts.plane_state = OS64_MEDIA_PLANE_NONE;
