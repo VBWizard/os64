@@ -195,7 +195,9 @@ run_under() {
     "${cc[@]}" -Wno-sign-compare -DOUTSIDE_SPEEX -DRANDOM_PREFIX=os64_speex -DFLOATING_POINT -DEXPORT= \
         -I $S/upstream/include/speex -I $S/upstream/libspeexdsp -c $S/upstream/libspeexdsp/resample.c -o "$out/speex.o"
     "${cc[@]}" -I $M/include -c tools/test_media_picture_host.c -o "$out/test.o"
-    gcc $flags "$out"/*.o -L "$ff/lib" -lswscale -lavformat -lavcodec -lavutil -lm -lpthread -o "$out/test"
+    # FFmpeg's allocators wrapped, for the test's count (its step 13).
+    local wrap=-Wl,--wrap=av_malloc,--wrap=av_mallocz,--wrap=av_calloc,--wrap=av_realloc,--wrap=av_malloc_array
+    gcc $flags "$out"/*.o -L "$ff/lib" -lswscale -lavformat -lavcodec -lavutil -lm -lpthread "$wrap" -o "$out/test"
     echo "test_media_picture_host: under $toolchain" >&2
     $runner "$out/test" "$ROOT/tools/pages/bbb-480p-3s-av.mp4" "$work"
 }

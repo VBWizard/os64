@@ -119,8 +119,11 @@ timeline as sound. yonder, and any other player, see no FFmpeg type.
 - **libswscale is in libav.so**, its routines chosen at run time. Its
   experimental "ops" backend is built and never used (DEBTS: 9.0.2 does
   not link without it). `avbench -x WxH` times decode and conversion on
-  the call path libmedia uses; on the 3900X that path costs what the
-  table above measured, and on the P5 what its own table (§ 1) says.
+  libswscale's own call, as libmedia's scaler makes it; on the 3900X that
+  path costs what the table above measured, and on the P5 what its own
+  table (§ 1) says. It does not take the scaler's cure for an odd width
+  (media_scale.c, THE ODD WIDTH), so an odd W there is FFmpeg's slow path,
+  four to five times what a player pays (DEBTS).
 - **The header** (`os64/media.h` § THE PICTURE SIDE): `os64_media_open_for`
   with WANT_SOUND and/or WANT_PICTURE. An unwanted stream is discarded at
   the demuxer, so a sound-only probe makes and decodes none of the
@@ -154,9 +157,14 @@ timeline as sound. yonder, and any other player, see no FFmpeg type.
   buffer of the scaler's own: FFmpeg's unscaled converter works eight
   pixels at a time and would otherwise write past the row (media_scale.c,
   THE UNSCALED EDGE).
-  FAST is FFmpeg's fast bilinear only when shrinking. Enlarging, that
-  path runs x86 code it writes into the heap, and os64's data memory does
-  not execute: it was the P5's first fault, `avbench -x 2560x1440`.
+  FAST is FFmpeg's fast bilinear only when shrinking, where it is a
+  two-tap filter rather than FFmpeg's fast code. To the same width or
+  wider, a multiple of 32, that path runs x86 code it writes into the
+  heap, and os64's data memory does not execute: it was the P5's first
+  fault, `avbench -x 2560x1440`. A picture converted to an odd width
+  other than its own is converted one pixel narrower, its last column
+  repeated, since FFmpeg's odd widths cost four to five times the even
+  ones (media_scale.c, THE ODD WIDTH).
 - **Cover art** (an attached picture) is never the media's picture, nor
   part of its zero.
 - **`canPlayType`**: `video/mp4` naming `avc1` or `avc3` answers
