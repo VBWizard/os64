@@ -298,9 +298,10 @@ uintptr_t ktask_reserve_virt(task_t* task, size_t size)
 // unmapped, so running off either end faults in a guard (stack_guard_side
 // names it). The range comes from the task's one door, task_va_reserve
 // (ktask's from ktask_reserve_virt), and like every range either hands out
-// is never handed out again. A thread is made
-// in three steps so that a refusal leaves nothing behind: the frames for
-// both stacks, then both ranges, then the mappings, which cannot fail. Only
+// is never handed out again. A thread is made in three steps so that a
+// refusal leaves nothing behind: the frames for both stacks, then both
+// ranges, then the mappings, which refuse nothing (a page-table page the
+// kernel cannot find memory for panics, as every table draw does). Only
 // what was already taken is given back, and a range is never given back.
 
 uintptr_t task_stack_frames(size_t usable, bool mayRefuse)
@@ -321,6 +322,8 @@ bool task_stack_reserve(task_t* task, size_t usable, uintptr_t* base)
 	}
 	else if (!task_va_reserve(task, bytes, &at))
 		return false;
+	else
+		bytes += PAGE_SIZE;   // the door's own guard page past the range
 	__atomic_add_fetch(&task->stackBytes, bytes, __ATOMIC_RELAXED);
 	__atomic_add_fetch(&task->stackRanges, 1, __ATOMIC_RELAXED);
 	*base = at + guards;

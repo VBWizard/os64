@@ -774,9 +774,10 @@ void restore_user_cr3(void)
 // WHAT IT DOES NOT PROMISE: what it reads is true AT THE CHECK and not
 // after: the page table's entries, read with no lock, and the mapping's
 // facts, copied under the task's mapLock. A sibling's unmap between the
-// check and the copy is the program's own race, but its cost is the
-// kernel's: the copy faults in ring 0 on a region no mapping covers, and
-// that panics (DEBTS, "A copy can outlive the check that allowed it").
+// check and the copy, or a sibling's exit whose stack held the buffer, is
+// the program's own race, but its cost is the kernel's: the copy faults in
+// ring 0 on a page no longer there, and that panics (DEBTS, "A copy can
+// outlive the check that allowed it").
 static bool user_range_accessible(const void *user_ptr, size_t length, bool for_write)
 {
 	uintptr_t addr = (uintptr_t)user_ptr;

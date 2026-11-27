@@ -608,11 +608,14 @@ static void proc_gen_task_status(synth_text_t *t, task_t *task)
 	// burial. Live: those whose stacks are not yet released (thread_reap.h);
 	// a released one never runs again. The first number is what this line
 	// has always said, so a reader taking one number reads the same.
-	uint32_t threads_live = 0;
+	uint32_t threads_made = 0, threads_live = 0;
 	for (thread_t *th = task->threads; th != NULL; th = th->taskNext)
+	{
+		threads_made++;
 		if (__atomic_load_n(&th->reap.state, __ATOMIC_RELAXED) != REAP_DONE)
 			threads_live++;
-	synth_text_addf(t, "threads\t%u made, %u live\n", proc_task_thread_count(task), threads_live);
+	}
+	synth_text_addf(t, "threads\t%u made, %u live\n", threads_made, threads_live);
 	synth_text_addf(t, "reaps_pending\t%u\n", __atomic_load_n(&task->reaps.pending, __ATOMIC_RELAXED));
 	// The heap range holds the task's mappings and its threads' stacks; the
 	// next line says how much of it the stacks took, guards included.

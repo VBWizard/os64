@@ -1,7 +1,9 @@
 // stackchurn — a thread's stacks end with the thread (THREAD_STACKS.md).
-// Thousands of threads are made and joined in one program, more than its
-// stacks could ever have held at once when an ended thread kept them until
-// the program exited, and each proves its stack is its own:
+// Thousands of threads are made and joined in one program, more than the
+// address space once held: when every ended thread kept its stacks until
+// the program exited, a program's stacks ran into its own image or the
+// fixed windows after about 1,350 threads at most. Each proves its stack is
+// its own:
 //
 //   1. threads one at a time: each fills a quarter megabyte of its stack
 //      with a tag of its own, page by page, yields, and checks every tag;
@@ -23,7 +25,8 @@
 // `stackchurn` makes TURN_THREADS + MAKERS * EACH threads; `stackchurn long`
 // four times as many.
 //
-// Exit codes: 0x57AC0000 success, 0x57AC00NN the step that failed.
+// Exit codes: 0x57AC0000 success, 0x57AC00NN the step that failed, 0x57AC0005
+// when /sys/memory/frames could not be read at the start.
 
 #include "os64/os64.h"
 #include "os64/fmt.h"
@@ -188,7 +191,7 @@ int main(int argc, char **argv)
     os64_strcopy(path_env, sizeof(path_env), path ? path : "");
     uint64_t free_before = free_bytes();
     if (free_before == 0)
-        FAIL(4);
+        FAIL(5);
 
     for (uint32_t i = 0; i < TURN_THREADS * scale; i++)
         if (!make_and_join(i, LIVE_SLOTS)) {

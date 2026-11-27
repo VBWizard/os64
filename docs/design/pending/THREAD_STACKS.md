@@ -154,9 +154,9 @@ line is what would name one.
 
 - `/sys/memory/reap`: pending now, the most, the most since the last read;
   handed; released by kworker and by burial; kworker's rounds (one
-  invalidation each); stack bytes and scratch blocks given back; ticks
-  thread makers parked for the backlog, how many proceeded past the bound,
-  and the longest park; nodes refused for a wrong state.
+  invalidation each); stack bytes and scratch blocks given back; how many
+  times thread makers parked for the backlog, how many proceeded past the
+  bound, and the longest park; nodes refused for a wrong state.
 - `/sys/memory/shootdown`: rounds, the late ones, the longest wait and the
   CPU that answered it last, each since boot and since the last read.
 - `/proc/<id>/status`: `threads <made> made, <live> live` (the first number
@@ -182,6 +182,13 @@ line is what would name one.
   DEBTS has the row and the arithmetic.
 - **The thread_t until burial**, 3,840 bytes a thread (above).
 - **unmap's invalidation** stays on the calling CPU until its own slice.
+- **A sibling's syscall into a dead thread's stack.** A thread's stack
+  holding a buffer a sibling's syscall is copying into can now be released
+  under it: the reap unmaps it between the copy's check and the copy, and a
+  copy that misses in the TLB faults in ring 0 and panics. A program bug the
+  machine pays for, the same class and window as an unmap racing a copy
+  (DEBTS, "A copy can outlive the check that allowed it", whose cure, a
+  copy that survives its fault, cures both).
 
 ## As built
 

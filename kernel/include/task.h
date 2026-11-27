@@ -228,7 +228,9 @@
         // hands out and only ever advances; task_va_reserve is the one door
         // that moves it, so two threads never claim one range. The range
         // holds the task's mappings and its threads' stacks: stackBytes and
-        // stackRanges count what the stacks took of it, guards included.
+        // stackRanges count the ranges taken for stacks, guards included (a
+        // range taken for a thread then refused still counts: it is never
+        // handed out again).
         uint64_t heapStart, heapEnd;
         uint64_t stackBytes, stackRanges;
         // Its threads handed to the reap list and not yet released

@@ -119,7 +119,7 @@ static uintptr_t user_stack_frames(thread_t *thread, uint64_t asked, bool mayRef
 }
 
 // Both stacks, in task.c § Stacks' three steps: every frame, then every
-// range, then the mappings, which cannot fail. A refusal frees the frames it
+// range, then the mappings, which refuse nothing. A refusal frees the frames it
 // took, none of which was ever mapped, so no CPU can hold a translation of
 // them; a range taken is address space, and is never handed out again.
 static bool make_stacks(thread_t *t, task_t *task, bool kernelThread, uint64_t asked, bool mayRefuse)
