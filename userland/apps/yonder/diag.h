@@ -88,12 +88,40 @@ typedef struct yonder_diag yonder_diag_t;
  * reads keep incomplete evidence distinguishable from a fast successful run.
  * Model counts cover rebuilds, not the initial loader's model construction. */
 // flow_reuse_reason_t order; the layout wrapper checks the count at compile time.
-#define YONDER_LAYOUT_REUSE_REASONS 16
+#define YONDER_LAYOUT_REUSE_REASONS 18
+// flow_role_t order (the graft's role counter); checked at compile time too.
+#define YONDER_LAYOUT_ROLES 12
+// flow_intrinsic_refusal_t order; checked at compile time too.
+#define YONDER_LAYOUT_INTRINSIC_REFUSALS 4
 // Why a layout's cascade was built fresh rather than updated: yonder's own
 // reasons, then libgarb's refusals (garb_update_refusal_t past DONE). The
 // names come with the sample (`cascade_reason_names`), from the code that
 // knows them; the layout wrapper checks the count at compile time.
-#define YONDER_LAYOUT_CASCADE_REASONS 20
+#define YONDER_LAYOUT_CASCADE_REASONS 18
+// Why a restyle kept in the shown tree was declined (flow_restyle_reason_t
+// order); the layout wrapper checks the count at compile time.
+#define YONDER_LAYOUT_RESTYLE_REASONS 12
+// The reads that met only paint-only writes pending and still made the page
+// current (yonder.c, reads_counted): rectangles, scroll members with a
+// transform pending, computed styles, hit tests.
+#define YONDER_LAYOUT_READ_KINDS 4
+// WHAT A LAYOUT NEEDED, from what came out different (flow_profile_t),
+// for a layout that finished: no style changed and no box moved, came or
+// went (a repaint at most); only paint styles changed and no box moved;
+// styles placement reads changed and still no box moved; one node's boxes
+// moved, came or went; more than that; not compared (no previous tree of
+// the document). Each for the layouts made while the page's own script ran
+// (its read forced them), which its ledger tells (with yonder's ledger off,
+// every layout counts with the rest), and the rest, with the elements
+// whose style came out different across those layouts (`restyled`).
+typedef enum {
+    YONDER_NEEDED_NOTHING, YONDER_NEEDED_PAINT, YONDER_NEEDED_STILL, YONDER_NEEDED_ONE,
+    YONDER_NEEDED_MORE, YONDER_NEEDED_UNCOMPARED, YONDER_NEEDED_KINDS
+} yonder_needed_t;
+typedef struct {
+    uint64_t count[2][YONDER_NEEDED_KINDS], us[2][YONDER_NEEDED_KINDS];
+    uint64_t restyled[2];
+} yonder_layout_needed_t;
 typedef struct {
     uint64_t model_us, cascade_us, style_us, boxes_us, layout_us, public_us;
     uint64_t elements, boxes, measures, reused;
@@ -101,11 +129,58 @@ typedef struct {
     uint64_t model_calls, layouts, refusals, clock_errors;
     uint64_t intrinsic_hits, marker_measures;
     uint64_t metadata_peak; // Maximum new snapshot/match/staging bytes, not a sum.
+    // The most anchored :has() compounds a layout's cascade held, and the
+    // most of them bare (maxima, not sums); and what the bare ones cost the
+    // updates (garb_bare_work_t, sums): asked again, turned, elements newly
+    // marked.
+    uint64_t anchors_peak, anchors_bare_peak;
+    uint64_t bare_tested, bare_turned, bare_marked;
+    // What each finished layout needed, its count and its time (style,
+    // boxes, placement and the public tree), forced by a read ([1]) or not.
+    yonder_layout_needed_t needed;
+    // The restyles kept in the shown tree (flow_restyle_in_place): those
+    // that found nothing to change, those that wrote paint-only values,
+    // those that moved boxes that only moved (and the boxes), and the
+    // declined by reason (names with the sample, as the cascade's).
+    uint64_t kept_nothing, kept_paint, kept_moved, kept_moved_boxes;
+    uint64_t kept_declined[YONDER_LAYOUT_RESTYLE_REASONS];
+    const char *const *restyle_reason_names;
+    // The geometry reads answered from the shown tree with no work (N2);
+    // the reads that met only paint-only writes and still made the page
+    // current, by kind (names with the sample); the rendering steps a
+    // covered window owed instead of rebuilding; and the rebuilds owed for
+    // changes that moved nothing the tree was styled from, made with no
+    // layout (flow_pending_advance), by the read that asked, or as another
+    // rebuild's (a rendering step, a task's end, the window seen).
+    uint64_t reads_kept, reads_laid[YONDER_LAYOUT_READ_KINDS], owed_covered;
+    uint64_t reads_unchanged[YONDER_LAYOUT_READ_KINDS], others_unchanged;
+    const char *const *read_kind_names;
     uint64_t reuse_refused[YONDER_LAYOUT_REUSE_REASONS];
     uint64_t cascade_refused[YONDER_LAYOUT_CASCADE_REASONS];
     const char *const *cascade_reason_names;
+    // The cascades renewed for their bytes (libgarb's `retained` and
+    // `attributes`): how many, the updates each had lived (summed, and the
+    // most), and the bytes they had retained against their budget (summed).
+    uint64_t renewals, renew_updates, renew_updates_most, renew_bytes, renew_budget;
+    // The graft's role counter (libflow's flow_reuse_stats_t.role_*): the
+    // equal subtrees refused only for their role, by role, the boxes in
+    // them, the placement time inside them, and the roots holding each role
+    // anywhere; names with the sample.
+    uint64_t role_roots[YONDER_LAYOUT_ROLES], role_boxes[YONDER_LAYOUT_ROLES], role_us[YONDER_LAYOUT_ROLES];
+    uint64_t role_inside[YONDER_LAYOUT_ROLES];
+    uint64_t role_clock_errors;
+    const char *const *role_names;
+    // The intrinsic widths copied (flow_reuse_stats_t.intrinsic_*): the
+    // copies, by their root's own first role (the last for a root with
+    // none), and the copies refused, by why; names with the sample.
+    uint64_t intrinsic_roots, intrinsic_role_roots[YONDER_LAYOUT_ROLES + 1];
+    uint64_t intrinsic_refused[YONDER_LAYOUT_INTRINSIC_REFUSALS];
+    const char *const *intrinsic_refusal_names;
 } yonder_layout_stats_t;
 void yonder_diag_layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample);
+// What layouts needed, as a record's line (`layout needed` and its
+// readings): each kind's count and time, the forced ones apart.
+void yonder_diag_needed_text(const yonder_layout_needed_t *n, char *out, size_t cap);
 /* ONE LAYOUT, whole: its wall time (`total_us`, everything
  * page_lay_out_run did) and what it went on: the cascade and what became
  * of it (its time includes gathering the page's sheets for it), then the
@@ -118,8 +193,11 @@ typedef struct {
     uint64_t elements, boxes, reused, attempts;
     uint64_t at_us;             // when it ended (os64_micros), placed against the record's start
     // YONDER_LAYOUT_CASCADE_KEPT (nothing to update), _UPDATED, or why it
-    // was built fresh: an index into `cascade_reason_names`.
+    // was built fresh: an index into `cascade_reason_names`; `cascaded`
+    // says the layout reached its cascade at all, and so whether the rest
+    // says anything.
     int32_t cascade_why;
+    bool cascaded;
     const char *const *cascade_reason_names;
     uint64_t reuse_refused[YONDER_LAYOUT_REUSE_REASONS];
 } yonder_layout_one_t;
@@ -171,10 +249,35 @@ void yonder_diag_fact(yonder_diag_t *d, const char *key, const char *value);
 // takes a place in the other.
 #define YONDER_DIAG_HEAD_FACTS 24
 void yonder_diag_head_fact(yonder_diag_t *d, const char *key, const char *value);
+// The same line, for a reading the reading chord keeps (its paint, its
+// script ledger, where the thread went, what its layouts needed): a reading
+// comes after the page has set its other lines, so a page whose scripts and
+// faces fill the ordinary room would lose every one. They have a room of
+// their own, YONDER_DIAG_READING_FACTS, room for about a dozen readings
+// with every line the layout profile adds to each.
+#define YONDER_DIAG_READING_FACTS 256
+void yonder_diag_reading_fact(yonder_diag_t *d, const char *key, const char *value);
+// The same line, for the load's timeline (load_timeline.h), written whole
+// at each write of the record, and for --cascade-check's count of kept
+// reads checked: they come after a busy page has filled the ordinary room,
+// so they have a room of their own, YONDER_DIAG_TIMELINE_FACTS, room for
+// every line they write (yonder.c checks the sum at compile time).
+#define YONDER_DIAG_TIMELINE_FACTS 80
+void yonder_diag_timeline_fact(yonder_diag_t *d, const char *key, const char *value);
+// The same line, for a measuring switch's summary (`--layout-profile`'s
+// layout lines, `--geometry-check`'s verdicts): written as the page runs,
+// so on a page whose scripts and faces fill the ordinary room first they
+// would be lost, and they are what such a run is for. A room of their own,
+// YONDER_DIAG_SUMMARY_FACTS.
+#define YONDER_DIAG_SUMMARY_FACTS 32
+void yonder_diag_summary_fact(yonder_diag_t *d, const char *key, const char *value);
 // The plain lines whose keys begin `prefix` let go, the rest kept in
 // order — and so are those of them that met no room, so a set of lines
 // rewritten whole, when there may be fewer now, is counted once.
 void yonder_diag_forget(yonder_diag_t *d, const char *prefix);
+// The plain line whose key is exactly `key` let go, as forget does, and no
+// line whose key merely begins with it.
+void yonder_diag_forget_key(yonder_diag_t *d, const char *key);
 
 // A line the caller could not even name for want of memory: the file
 // says some lines are not on it, as it counts those that met no room.

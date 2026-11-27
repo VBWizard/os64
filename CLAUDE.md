@@ -686,7 +686,15 @@ virtio because its drain waits for the tick.
   built in V.5.3 to V.6.3:
   `apps/yonder/yonder.c`'s videos section feeds the frame planner and
   paints the plain path or the general one, counted in yonder's `d`
-  reading; `/tests/pages/video*.html`)
+  reading; `/tests/pages/video*.html`; and a video is shown on a plane of
+  the window by its player's show thread, the page painting a hole there
+  that holds the layer of what it draws over the picture (two paints, over
+  black and over white), which the kernel blends over each picture inside
+  overlay rectangles, so a script holding the page's thread holds the
+  picture not at all: VIDEO_PLANE.md § 5, the section Videos on planes,
+  `--plane=off` or `planes = off` to compare, `--plane-check` to compose
+  each hole with the kernel's own blend against the page's pixels,
+  `/tests/pages/video-held.html` and `video-controls.html`)
   (`apps/yonder/media.c`: a player per element, which makes its bytes
   ready on its own decoding thread (`prepare`), a loader thread for a
   network address,
@@ -1943,6 +1951,6 @@ if (phys_rsp && phys_rsp != 0xbadbadba)
 **The general rule this leaves behind:** a fixed per-task virtual address is
 only safe in an address space that belongs to exactly one task. If you ever
 make two tasks share a PML4 again, every fixed lower-half VA in `task_create`
-becomes a collision, and the shared-counter dodge in `task_alloc_aligned` /
-`task_reserve_task_virt` will NOT save you — it only covers counter draws, not
-constants.
+becomes a collision, and a shared counter (ktask's `ktask_reserve_virt` is
+the one left, and it serves ktask alone) will NOT save you — it only covers
+counter draws, not constants.

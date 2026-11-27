@@ -37,7 +37,7 @@ So the engine's limit cannot rise by itself: the thread under it has to.
 
 ## 3. What a stack costs today
 
-`task_alloc_guarded_stack` (kernel `task.c`) allocates a stack **physically,
+A stack (kernel `task.c` § Stacks, THREAD_STACKS.md) is allocated **physically,
 up front and contiguous**, with unmapped guard pages on each side. Raising
 the constant for everyone multiplies that by every thread of every program
 (yonder alone runs a window thread and a pool of workers). So the change is
@@ -71,7 +71,7 @@ the header with a MemSiz of 0 (`-z noexecstack`), so the rule is: absent or
 - **A refused allocation degrades, never fails exec.** The stack is
   allocated inside `task_initialize`, after the task exists, and nothing
   unwinds a half-built task. So `createThread` asks for the declared size
-  of the allocator that may refuse (`task_try_guarded_stack`, over
+  of the allocator that may refuse (`task_stack_frames` with `mayRefuse`, over
   `allocate_memory_try`; `allocate_memory_aligned` panics where no run of
   frames is free, Codex #441 rd1), and when it is refused, asks for the
   default and logs one line naming the thread and both sizes. yonder reads
@@ -127,7 +127,7 @@ gives today's 128 KiB, never more than fits.
 |---|---|---|
 | exec of a program with no `PT_GNU_STACK` size | 1 MiB, as today | (not yonder) |
 | exec of yonder (declares 4 MiB) | 4 MiB, allocated at exec | read once at start: 2 MiB |
-| the declared allocation is refused (`task_try_guarded_stack` answers NULL) | the default 1 MiB, logged with both sizes | read at start: the clamp's 128 KiB |
+| the declared allocation is refused (`task_stack_frames` answers 0) | the default 1 MiB, logged with both sizes | read at start: the clamp's 128 KiB |
 | a thread yonder spawns (workers) | 1 MiB, as today | workers run no scripts |
 | a script recurses past 2 MiB | the engine's own check | `InternalError: stack overflow`, as today, said on the console |
 
@@ -172,13 +172,13 @@ gives today's 128 KiB, never more than fits.
 - **Kernel.** `elf_can_load(path, &declared)` reads `PT_GNU_STACK`'s
   `p_memsz` (`elf.h` now names `PT_GNU_STACK`), looking through at most
   `ELF_STACK_PHDRS_MAX` headers. `task_create` carries it through
-  `task_initialize` into `createThread(task, kernel, userStack)`, whose
-  `user_stack` keeps a size from `THREAD_USER_STACK_SIZE` up to
-  `THREAD_USER_STACK_MAX`, asks it of `task_try_guarded_stack` (the
-  fallible twin of `task_alloc_guarded_stack`), falls back to the default
+  `task_initialize` into `createThread(task, kernel, userStack, mayRefuse)`,
+  whose `user_stack_frames` keeps a size from `THREAD_USER_STACK_SIZE` up to
+  `THREAD_USER_STACK_MAX`, asks it of `task_stack_frames` with `mayRefuse`
+  (the allocator that may refuse), falls back to the default
   when the frames are not there, logs each, and records what it gave in
   `esp3Size`. The pre-boot test `stack_try_refuses` proves a refusal is
-  clean: NULL, nothing reserved, the books unchanged, the refusal counted. The RSP seed, `stack_guard_side` with the forensics
+  clean: 0, nothing reserved, the books unchanged, the refusal counted. The RSP seed, `stack_guard_side` with the forensics
   line, and `/proc/<pid>/maps` read `esp3Size`. Spawned threads
   (`thread_join.c`) ask 0, the default.
 - **Build.** `BIG_STACK_PROGRAMS` (`userland/GNUmakefile`, yonder and

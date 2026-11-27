@@ -39,7 +39,7 @@ def replay(address, state, body='verdict: clean\n', detail='', why=''):
     head = f'address: {address}\nREPLAY state: {state}{" " + why if why else ""}\n'
     if state == 'unjudged':
         return head + 'end\n'
-    return head + body + detail + 'REPLAY not reproduced: font-fetch image picture-fetch\nREPLAY budget: 60 s\nend\n'
+    return head + body + detail + 'REPLAY not reproduced: font-fetch image media picture-fetch\nREPLAY budget: 60 s\nend\n'
 
 
 def as_replay(text):
@@ -47,7 +47,7 @@ def as_replay(text):
     writes it."""
     first, _, rest = text.partition('\n')
     return (f'{first}\nREPLAY state: verdict\n{rest}'
-            'REPLAY not reproduced: font-fetch image picture-fetch\nREPLAY budget: 60 s\nend\n')
+            'REPLAY not reproduced: font-fetch image media picture-fetch\nREPLAY budget: 60 s\nend\n')
 
 
 BEFORE = {
@@ -141,7 +141,7 @@ class DiffCases(unittest.TestCase):
         (self.after / 'better-0002.txt').write_text(
             'address: https://better.test/\nREPLAY state: verdict\nverdict: clean\n'
             'REPLAY inputs defaulted: cookies clock\n'
-            'REPLAY not reproduced: font-fetch image picture-fetch\nREPLAY budget: 60 s\nend\n')
+            'REPLAY not reproduced: font-fetch image media picture-fetch\nREPLAY budget: 60 s\nend\n')
         rc, out = self.run_main(self.before, self.after)
         self.assertEqual(rc, 2)
         self.assertIn('progress: 0 pages\n', out)
@@ -153,7 +153,7 @@ class DiffCases(unittest.TestCase):
         (self.after / 'better-0002.txt').write_text(
             'address: https://better.test/\nREPLAY state: verdict\nverdict: clean\n'
             'REPLAY inputs stated: zoom=1500\n'
-            'REPLAY not reproduced: font-fetch image picture-fetch\nREPLAY budget: 60 s\nend\n')
+            'REPLAY not reproduced: font-fetch image media picture-fetch\nREPLAY budget: 60 s\nend\n')
         rc, out = self.run_main(self.before, self.after)
         self.assertEqual(rc, 2)
         self.assertIn('its replays were run with different --window statements, none and zoom=1500', out)
@@ -163,7 +163,7 @@ class DiffCases(unittest.TestCase):
         self.settle_the_rest()
         (self.after / 'better-0002.txt').write_text(
             'address: https://better.test/\nREPLAY state: verdict\nverdict: clean\n'
-            'REPLAY not reproduced: font-fetch image picture-fetch\nREPLAY budget: 0 s\nend\n')
+            'REPLAY not reproduced: font-fetch image media picture-fetch\nREPLAY budget: 0 s\nend\n')
         rc, out = self.run_main(self.before, self.after)
         self.assertEqual(rc, 2)
         self.assertIn('its replays were given different budgets, 60 s and 0 s', out)
@@ -267,7 +267,7 @@ class DiffCases(unittest.TestCase):
         rc, out = self.run_main(self.before, self.after)
         self.assertEqual(rc, 0)
         self.assertIn('regressions: 0 pages\nprogress: 0 pages\n', out)
-        self.assertIn('; not compared, as the replay does not reproduce them: font-fetch image picture-fetch', out)
+        self.assertIn('; not compared, as the replay does not reproduce them: font-fetch image media picture-fetch', out)
 
     def test_a_picture_decided_without_a_fetch_is_compared(self):
         # A refused address and a font no face names are what the page did,

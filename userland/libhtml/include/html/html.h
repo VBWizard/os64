@@ -88,6 +88,14 @@ typedef struct os64_html_node {
     /* A shadow root's OS64_HTML_SHADOW_* options (SHADOW TREES, below);
      * zero on every other node. Set once, by os64_html_attach_shadow. */
     uint8_t shadow;
+    /* The script binding's own bits (libdom's D_BINDING_*): zero at birth,
+     * kept across adoption, never read by libhtml. Only
+     * os64_html_set_binding changes them. */
+    uint8_t binding;
+    /* An element's OS64_HTML_STATE_* bits (ELEMENT STATE, below), which
+     * selectors read: zero at birth and on a clone. Only
+     * os64_html_set_state changes them. */
+    uint8_t state;
     const char *public_id, *system_id;
     const char *text;
     size_t text_len;
@@ -376,6 +384,49 @@ typedef uint64_t os64_html_pin_t;
  * detached subtree, so the node must not be read after release. Document
  * teardown refuses outstanding holds as well as live snapshot pins. */
 void os64_html_hold(const os64_html_document_t *doc, const os64_html_node_t *node);
+/* Sets the node's `binding` bits. No version moves: they are no part of
+ * the tree. */
+void os64_html_set_binding(const os64_html_node_t *node, uint8_t bits);
+/* WHERE EVERY NODE IS: each live node whose document is `doc`, by where it
+ * sits, and the elements among them, each in one of these: in the document
+ * (`connected`); inside a template's contents or a shadow tree hanging from
+ * the document (`hosted`); in the tree of another Document node the host
+ * made in this document's arena (`documents`: a DOMParser's, a
+ * createHTMLDocument's); detached, in a unit something holds (a counted hold
+ * or a parser's reference, `held`), or in a unit nothing holds that waits to
+ * be collected (`pinned`: a snapshot pin keeps it, or the next collection has
+ * not come); or in a subtree never inserted (`unattached`: made, or taken
+ * out by the parser, and charged until teardown). And the freed node slots
+ * `doc`'s own arena keeps for reuse (`free_slots`). A walk of every live
+ * node, for a record: not a call to make per frame. */
+typedef struct {
+    size_t connected, hosted, documents, held, pinned, unattached;
+} os64_html_census_part_t;
+typedef struct {
+    os64_html_census_part_t nodes, elements;
+    size_t free_slots;
+} os64_html_census_t;
+void os64_html_census(const os64_html_document_t *doc, os64_html_census_t *out);
+/* WHO HOLDS THE DETACHED: the census's `held` units, each counted (units,
+ * nodes, elements) by what holds it: one holding a node of the caller's
+ * `marked` list (yonder's: the nodes script wrappers hold) is `marked`; else
+ * one whose every hold is a reference from the change log (an entry's
+ * target, its added or removed nodes and the siblings it names, which the
+ * log keeps until every reader has passed it) is `log_only`; else `other` (a counted hold no list names, or a parser's
+ * reference). And the log: its readers, those lost (which hold nothing
+ * back), how many versions the oldest of the others lags the document,
+ * its entries and their bytes. A walk of every live node, for a record. */
+typedef struct {
+    size_t units, nodes, elements;
+} os64_html_holders_part_t;
+typedef struct {
+    os64_html_holders_part_t marked, log_only, other;
+    size_t readers, lost_readers, log_entries, log_bytes;
+    uint64_t oldest_lag;
+    bool short_of_memory;       // the walk had no room for its units: none is counted, the log is
+} os64_html_holders_t;
+void os64_html_holders(const os64_html_document_t *doc, const os64_html_node_t *const *marked, size_t nmarked,
+                       os64_html_holders_t *out);
 void os64_html_release(const os64_html_document_t *doc, const os64_html_node_t *node);
 uint64_t os64_html_version(const os64_html_document_t *doc);
 /* Owned HTML input nodes carrying an unnamespaced form attribute. Includes
@@ -543,8 +594,9 @@ typedef enum {
     OS64_HTML_CHANGE_ATTR,         /* an attribute of target was set or removed */
     OS64_HTML_CHANGE_TEXT,         /* target's text was replaced or appended to */
     /* Something the cascade reads changed at target though no node did: an
-     * element's custom state (os64_html_set_ce, which `:defined` reads), or
-     * a tree's adopted style sheets (os64_html_touch, target the document
+     * element's custom state (os64_html_set_ce, which `:defined` reads), its
+     * state bits (os64_html_set_state, which `:fullscreen` reads), or a
+     * tree's adopted style sheets (os64_html_touch, target the document
      * node or a shadow root). The standard records no mutation for either,
      * so no listener is told. The kind is for a log of the document's
      * changes (RELAYOUT.md), whose every entry stands for a move of the
@@ -639,6 +691,18 @@ typedef enum {
     OS64_HTML_CE_FAILED     /* its constructor threw, or returned something else */
 } os64_html_ce_t;
 int64_t os64_html_set_ce(os64_html_document_t *doc, os64_html_node_t *element, os64_html_ce_t ce);
+
+/* ── ELEMENT STATE ──────────────────────────────────────────────────────
+ *
+ * Facts about an element that selectors match and no attribute carries,
+ * as bits: FULLSCREEN is the element the Fullscreen API put in the top
+ * layer (`:fullscreen`). `set_state` replaces the bits, moves the version
+ * when they change (the cascade restyles the element's subtree) and tells
+ * no listener. An element only, of `doc`, and only bits named here;
+ * anything else is OS64_HTML_BAD_ARGUMENT. */
+#define OS64_HTML_STATE_FULLSCREEN (1u << 0)
+#define OS64_HTML_STATE_ALL        OS64_HTML_STATE_FULLSCREEN
+int64_t os64_html_set_state(os64_html_document_t *doc, os64_html_node_t *element, uint8_t state);
 bool os64_html_custom_name(const char *name);
 
 /* `touch` says something a reader of the document's version depends on

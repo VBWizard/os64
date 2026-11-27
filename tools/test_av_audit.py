@@ -10,7 +10,11 @@ import hashlib
 import json
 import re
 import subprocess
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import image_notices  # noqa: E402  (tools/image_notices.py)
 
 ROOT = Path(__file__).resolve().parents[1]
 USERLAND = ROOT / 'userland'
@@ -171,8 +175,9 @@ check((upstream / 'LICENSE.md').read_text() in notice, 'license/ffmpeg-LICENSE d
 check((upstream / 'COPYING.LGPLv2.1').read_text() in notice, 'license/ffmpeg-LICENSE does not carry the LGPL')
 check('userland/libav' in notice and 'https://github.com/VBWizard/os64' in notice,
       'license/ffmpeg-LICENSE does not say where the source is')
+installed, why = image_notices.installed_on_both_images(ROOT, 'ffmpeg.txt', 'license/ffmpeg-LICENSE')
+check(installed, f'the notice is not installed on both images: {why}')
 root_make = (ROOT / 'GNUmakefile').read_text()
-check(root_make.count('/etc/licenses/ffmpeg.txt') == 2, 'the notice is not installed on both images')
 check('userland/bin/libav.so' in root_make, 'libav.so is not in the images')
 
 # ONE DOOR TO FFMPEG: libmedia.so is the library programs play sound

@@ -1,41 +1,49 @@
 <!doctype html>
-<!-- V.6.3's page: a <video controls>' strip over its picture (VIDEO.md § 8).
-     A: plain, looping. Its strip is drawn while paused, and hides 3 s after
-        the last pointer move once playing; a click on the picture plays or
-        pauses it.
-     B: the same, with a click listener that prevents the default: a click on
-        the picture does nothing but count (the title's B).
-     C: no known end: audio-tone.mp3 served by
-        `tools/pages_serve.py --no-length --port 8732` (a sound, so the box is
-        the strip on white): its strip has no bar.
-     D: for the P5, empty until "The 1080p60 clip" puts
-        /home/clips/h264_1080p60_av.mp4 in it (960x540, looping, with its
-        sound), to measure the strip shown against hidden.
-     The title says each one's state: P paused, p playing; the duration
-     (inf for no known end, nan for not yet known); B's clicks. -->
-<title>video controls</title>
-<body style="margin:0;background:#fff;font:14px sans-serif">
-<div style="display:flex;gap:12px;padding:12px">
-<video id=a controls loop muted src="bbb-480p-3s.mp4" width=320 height=180></video>
-<video id=b controls loop muted src="bbb-480p-3s.mp4" width=320 height=180></video>
-<video id=c controls muted src="http://10.0.2.2:8732/audio-tone.mp3" width=320 height=180></video>
+<meta charset="utf-8">
+<title>A video under its controls and captions</title>
+<!--
+  VIDEO_PLANE.md § 5.2, P3b's fixture for what a page draws over a picture.
+  The video stays on its plane with all of it over the picture: the page
+  paints the layer of what lies over it, and the kernel blends that over
+  each picture inside the overlay rectangles.
+
+  Over the picture: a see-through control bar (black at half) across its
+  foot, an opaque play button overlapping the bar, and a caption's white
+  text. A badge moves across the top every half second, and a notice
+  blinks on and off every two seconds: each is a partial repaint, and an
+  overlay that moves or goes away must leave nothing behind.
+
+  What to read: the record's video line (`d`): placed, the layers made, the
+  overlays. Under `--plane-check=1`, its plane-check counts (wrong must be
+  0) and any `plane-check:` line on the console.
+-->
+<style>
+  body { font: 16px sans-serif; margin: 16px; background: #223; color: #ddd; }
+  #box { position: relative; width: 480px; height: 270px; }
+  video { display: block; width: 480px; height: 270px; background: #000; }
+  #bar { position: absolute; left: 0; bottom: 0; width: 480px; height: 40px; background: rgba(0, 0, 0, .5); }
+  #play { position: absolute; left: 12px; bottom: 6px; width: 28px; height: 28px; background: #e33; border-radius: 4px; }
+  #caption { position: absolute; left: 0; bottom: 48px; width: 480px; margin: 0; text-align: center;
+             color: #fff; font-size: 18px; }
+  #badge { position: absolute; top: 10px; left: 10px; padding: 2px 6px; background: #3a6; color: #fff; font-size: 12px; }
+  #notice { position: absolute; top: 40px; right: 10px; padding: 2px 6px; background: rgba(255, 200, 0, .7);
+            color: #000; font-size: 12px; }
+</style>
+<h1>A video under its controls and captions</h1>
+<div id="box">
+  <video id="v" src="bbb-480p-3s-av.mp4" autoplay muted loop></video>
+  <div id="bar"></div><div id="play"></div>
+  <p id="caption">A caption over the picture</p>
+  <div id="badge">LIVE</div>
+  <div id="notice">A notice that blinks</div>
 </div>
-<div style="padding:0 12px"><input type="button" id="clip" value="The 1080p60 clip"></div>
-<video id=d controls loop width=960 height=540 style="margin:12px"></video>
 <script>
-document.getElementById("clip").addEventListener("click", function () {
-  var d = document.getElementById("d");
-  d.src = "file:///home/clips/h264_1080p60_av.mp4";
-  d.play();
-});
-var clicks = 0;
-document.getElementById("b").addEventListener("click", function (e) { e.preventDefault(); clicks++; });
-function say(v) {
-  var d = v.duration;
-  return (v.paused ? "P" : "p") + (d === Infinity ? "inf" : d !== d ? "nan" : d.toFixed(1));
-}
-setInterval(function () {
-  document.title = "A" + say(document.getElementById("a")) + " B" + say(document.getElementById("b")) + clicks +
-                   " C" + say(document.getElementById("c"));
-}, 500);
+  const badge = document.getElementById('badge'), notice = document.getElementById('notice');
+  let x = 10, dx = 20;
+  setInterval(function () {
+    x += dx;
+    if (x > 400 || x < 10) dx = -dx;
+    badge.style.left = x + 'px';
+  }, 500);
+  setInterval(function () { notice.style.display = notice.style.display === 'none' ? '' : 'none'; }, 2000);
 </script>

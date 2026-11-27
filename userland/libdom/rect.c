@@ -184,7 +184,7 @@ static JSValue client_rects(JSContext *ctx, JSValueConst self, int argc, JSValue
     if (node == NULL) return JS_EXCEPTION;
     if (node->kind != OS64_HTML_ELEMENT) return JS_ThrowTypeError(ctx, "Geometry requires an element");
     os64_dom_geometry_t box;
-    if (!d_geometry_read(dom, ctx, node, &box)) return JS_EXCEPTION;
+    if (!d_geometry_read(dom, ctx, node, OS64_DOM_NEED_ALL, &box)) return JS_EXCEPTION;
     JSValue list = JS_NewObjectClass(ctx, (int)os64_js_class_id(&list_slot));
     if (JS_IsException(list)) return list;
     uint32_t length = box.boxed ? 1 : 0;

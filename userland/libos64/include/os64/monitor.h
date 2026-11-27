@@ -4,6 +4,7 @@
 #include "os64/procfs.h"
 #include "os64/memory.h"
 #include "os64/ticks.h"
+#include "os64/thread_name.h"
 
 // Sampling state belongs to the caller, so separate monitors may refresh at
 // different rates. Serialize access to one instance; different instances are
@@ -111,6 +112,18 @@ bool os64_monitor_core_split(const os64_monitor_t *monitor, uint32_t id,
                              os64_monitor_core_split_t *out);
 bool os64_monitor_machine_split(const os64_monitor_t *monitor,
                                 os64_monitor_core_split_t *out);
+
+// A thread's name (os64/thread_name.h) from the latest sample: NULL when the
+// thread was not in it or is unnamed. Borrowed, read-only, valid until the
+// next sample or destruction. Read from the same status file as the rest of
+// the thread's record, so naming costs a sample no extra read.
+const char *os64_monitor_thread_name(const os64_monitor_t *monitor, uint64_t pid,
+                                     uint64_t tid);
+// What a thread's row is labelled: its name when it has one, otherwise
+// task_name, the owning task's (returned as given). One answer for every
+// monitor, so top, htop and sysstat cannot label a thread differently.
+const char *os64_monitor_thread_label(const os64_monitor_t *monitor, uint64_t pid,
+                                      uint64_t tid, const char *task_name);
 
 // Event counts since the preceding sample, not lifetime totals or rates.
 // A missing task returns false. First sighting, a sampling gap, or a reset

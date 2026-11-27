@@ -28,6 +28,13 @@ typedef struct {
     void (*release)(void *,os64_dom_image_view_t *);
     void *opaque;
     void (*update)(void *);         // task-boundary request submission, without script reentry
+    /* A number that moves whenever any acquire's answer could, asked after
+     * update and before each pass os64_dom_image_event makes over the
+     * wrapped image elements, without script reentry. While it and what the
+     * binding saw itself stay the same, a pass that found nothing owed
+     * leaves the next nothing to find, and the next is not made. NULL, or 0
+     * returned, makes every pass. */
+    uint64_t (*answers)(void *);
 } os64_dom_image_provider_t;
 /* The host resolves its existing font families and lays out a retained run.
  * No script reentry. Inputs are borrowed for the call; success transfers run
@@ -41,7 +48,9 @@ typedef struct {
 void os64_dom_set_text(os64_dom_t *,const os64_dom_text_provider_t *);
 void os64_dom_set_images(os64_dom_t *,const os64_dom_image_provider_t *);
 /* Poll wrapped image elements for a completed request. No script enters here;
- * consume marks one event delivered before the host dispatches it as a task. */
+ * consume marks one event delivered before the host dispatches it as a task.
+ * With the provider's answers, a poll when nothing could have changed since
+ * one that found nothing walks no element. */
 bool os64_dom_image_event(os64_dom_t *,const os64_html_node_t **,bool *failed,bool consume);
 /* Borrow a read-only premultiplied bitmap from an existing context; never
  * creates a JS context. Applies pending resets. False for absent/lost/closed

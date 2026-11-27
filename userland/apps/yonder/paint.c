@@ -28,6 +28,7 @@ typedef struct {
         PaintGroupKind kind;
         bool layered;               // a layer is open inside it (layer_try)
         os64_gui_rect_t layer;      // that layer's bounds, which a mask's captures share
+        flow_point_t grid;          // and where its corner lies from the group's (layer_close)
         os64_gui_rect_t shown;      // the Painter's, to put back
         // G_THROUGH: how it was opened (YONDER_KEEP_*); for MAKE, whether
         // something inside spoiled what it paints for keeping (spoil), and
@@ -37,8 +38,10 @@ typedef struct {
         uint32_t refused;
     } open[PAINT_GROUPS];
     int32_t depth;                  // may pass PAINT_GROUPS; those are not kept
-    // Past the deepest kept, a group drawn through its matrix is not painted
-    // at all: the depth it opened at, plus one, or 0.
+    // The group nothing inside which is painted, its open and close
+    // included: one laid at alpha 0 (yonder_group_alpha), at any depth; past the
+    // deepest kept, also one drawn through its matrix or whose mask hides
+    // it whole. The depth it opened at, plus one, or 0.
     int32_t hidden;
     // What is left of the paint's budget for layers (filtered, masked and
     // blended groups', and a mask's captures) and backdrops, in pixels of
@@ -1196,6 +1199,8 @@ static bool shadow_kept(const Painter *p, const Round *shape, const Round *times
 
 void (*yonder_paint_stage)(yonder_paint_stage_t stage, bool begin);
 uint64_t yonder_paint_cuts;
+uint64_t yonder_paint_boxes;
+int32_t yonder_paint_groups_open;
 uint32_t yonder_paint_layers_refused;
 
 static void shadow_cast(const Painter *p, const flow_box_t *b, const Round *outer, const Round *inner,
@@ -1906,8 +1911,10 @@ static void backdrop_filtered(const Painter *p, const flow_box_t *b, const Round
         }
     }
     os64_gui_rect_t at = {sum32(r.x, p->off.x), sum32(r.y, p->off.y), r.w, r.h};
+    flow_point_t grid = {sum32(r.x, -(int64_t)b->rect.x), sum32(r.y, -(int64_t)b->rect.y)};
     if (area > p->groups->filter_left ||
-        !p->v->backdrop_filter(p->v->ctx, at, mask, s->backdrop_filter, s->nbackdrop_filter, s->color))
+        !p->v->backdrop_filter(p->v->ctx, at, mask, s->backdrop_filter, s->nbackdrop_filter, s->color,
+                               grid))
         yonder_paint_layers_refused++;
     else
         p->groups->filter_left -= area;
@@ -2230,6 +2237,7 @@ static void paint_outline(void *ctx, const flow_box_t *b)
 
 static void paint_box(void *ctx, const flow_box_t *b)
 {
+    yonder_paint_boxes++;
     Painter clipped;
     if (!box_painter(ctx, b, &clipped))
         return;
@@ -2341,13 +2349,6 @@ static os64_gui_rect_t held(int64_t x0, int64_t y0, int64_t x1, int64_t y1)
     }
     return (os64_gui_rect_t){(int32_t)x0, (int32_t)y0, (int32_t)max64(0, x1 - x0),
                              (int32_t)max64(0, y1 - y0)};
-}
-
-// `r` one pixel wider all round, held (above).
-static os64_gui_rect_t widened(os64_gui_rect_t r)
-{
-    return held((int64_t)r.x - 1, (int64_t)r.y - 1, (int64_t)r.x + r.w + 1,
-                (int64_t)r.y + r.h + 1);
 }
 
 // `r` grown by `d` on each side, in CSS's side order.
@@ -2616,6 +2617,11 @@ static os64_gui_rect_t shifted(os64_gui_rect_t r, flow_point_t by)
     return (os64_gui_rect_t){sum32(r.x, by.x), sum32(r.y, by.y), r.w, r.h};
 }
 
+uint8_t yonder_group_alpha(const flow_box_t *box)
+{
+    return (uint8_t)(((uint32_t)box->style->opacity * 255 + 500) / 1000);
+}
+
 // Whether the verbs composite a group at its opacity: both, or neither.
 static bool opacity_verbs(const Painter *p)
 {
@@ -2750,9 +2756,14 @@ static bool layer_try(Painter *p, const flow_box_t *box, os64_gui_rect_t b, os64
     bool masked = mask_drawn(p, box);
     if (!filter_drawn(p, box) && blend_of(p, box, d) == FLOW_BLEND_NORMAL && !masked)
         return false;
+    // Grown farther by what a large blur's reduced copy reads past the
+    // reach (yonder_filter_reads_more), so a part painted alone reads what
+    // the whole view would, and the two agree to the pixel.
     int32_t out[4];
     flow_filter_reach(box, out);
-    const int32_t in[4] = {out[FLOW_BOTTOM], out[FLOW_LEFT], out[FLOW_TOP], out[FLOW_RIGHT]};
+    int32_t more = filter_drawn(p, box) ? yonder_filter_reads_more(box->style->filter, box->style->nfilter) : 0;
+    const int32_t in[4] = {sum32(out[FLOW_BOTTOM], more), sum32(out[FLOW_LEFT], more),
+                           sum32(out[FLOW_TOP], more), sum32(out[FLOW_RIGHT], more)};
     os64_gui_rect_t layer = cut(cut(b, grown_by(p->view, in)), outside);
     if (layer.w <= 0 || layer.h <= 0) {
         p->view = (os64_gui_rect_t){0, 0, 0, 0};
@@ -2778,6 +2789,7 @@ static bool layer_try(Painter *p, const flow_box_t *box, os64_gui_rect_t b, os64
     p->groups->filter_left -= area;
     p->groups->open[d].layered = true;
     p->groups->open[d].layer = layer;
+    p->groups->open[d].grid = (flow_point_t){sum32(layer.x, -(int64_t)b.x), sum32(layer.y, -(int64_t)b.y)};
     p->view = layer;
     return true;
 }
@@ -2870,9 +2882,16 @@ static bool mask_coverage(const Painter *p, const flow_box_t *box, os64_gui_rect
     return made;
 }
 
-// A group (flow_visit_groups) opens. One below full opacity hands the
-// verbs its bounds, cut to what is painted, to remember what was under
-// them. One DRAWN THROUGH its matrix (flow_box_through) is asked of the
+// A group (flow_visit_groups) opens. One laid at alpha 0
+// (yonder_group_alpha) shows nothing, so nothing of it is painted — no
+// verb is asked: each box the walk hands over inside it is turned away
+// (box_painter, `hidden`), a drawn-through one has its inside culled whole
+// (group_inside), and its close lays nothing — and a canvas or a video
+// inside is not drawn: the
+// face acknowledges such a canvas's damage unseen instead of marking it
+// (yonder.c, canvas_damage_mark). One below full opacity hands the verbs
+// its bounds, cut to what is painted, to remember what was under them. One
+// DRAWN THROUGH its matrix (flow_box_through) is asked of the
 // verbs whole: its bounds — in its own coordinates, cut to the view taken
 // back through the matrix, which is all of it that can show — the matrix
 // to the coordinates being painted, and the clip it is laid inside. Laid
@@ -2895,9 +2914,16 @@ static void group_open(void *ctx, const flow_box_t *box, os64_gui_rect_t bounds)
     Painter *p = ctx;
     PaintGroups *gs = p->groups;
     int32_t d = gs->depth++;
+    yonder_paint_groups_open = gs->depth;
+    if (gs->hidden != 0)
+        return;
+    // Laid at alpha 0, it shows nothing: nothing inside is drawn, on any
+    // sheet, decided here once for the group.
+    if (yonder_group_alpha(box) == 0) {
+        gs->hidden = d + 1;
+        return;
+    }
     if (d >= PAINT_GROUPS) {
-        if (gs->hidden != 0)
-            return;
         // A mask that hides its box whole hides it here too (MASKS.md § 10).
         if (flow_box_through(box, p->scroll, (double[6]){0}, NULL, NULL) || mask_hides_whole(box))
             gs->hidden = d + 1;
@@ -2921,18 +2947,16 @@ static void group_open(void *ctx, const flow_box_t *box, os64_gui_rect_t bounds)
         m[4] += p->shift.x;
         m[5] += p->shift.y;
         clip = cut(shifted(clip, p->shift), p->view);
-        os64_gui_rect_t back = flow_affine_rect_back(m, clip);
-        os64_gui_rect_t own = cut(bounds, back);
-        // Nothing of it shows — a matrix that collapses an axis (scaleX(0),
-        // rotateX(90deg)) draws nothing, and the rest may be out of view —
-        // so nothing is painted: the view is empty until its close.
+        // What shows, one pixel wider all round (flow_through_sheet, the
+        // function flow_paint_asks bounds this sheet with). Nothing of it
+        // shows — a matrix that collapses an axis (scaleX(0), rotateX(90deg))
+        // draws nothing, and the rest may be out of view — so nothing is
+        // painted: the view is empty until its close.
+        os64_gui_rect_t own = flow_through_sheet(bounds, m, clip);
         if (own.w <= 0 || own.h <= 0) {
             p->view = (os64_gui_rect_t){0, 0, 0, 0};
             return;
         }
-        // What shows, one pixel wider all round: a bilinear sample at the
-        // edge of the clip mixes the source pixel beyond it.
-        own = cut(bounds, widened(back));
         // Kept (paint.h, `keep`): made whole, or laid as it was made, with
         // nothing painted inside.
         int keep = YONDER_KEEP_NO;
@@ -2985,12 +3009,15 @@ static void group_open(void *ctx, const flow_box_t *box, os64_gui_rect_t bounds)
 
 // How the walk culls inside the group just opened (flow_inside_t): not at
 // all inside one painted whole to be kept, wholly inside one whose kept
-// drawing is laid, else as it always does.
+// drawing is laid or inside one nothing of which is painted (`hidden`),
+// else as it always does.
 static flow_inside_t group_inside(void *ctx, const flow_box_t *box)
 {
     (void)box;
     const PaintGroups *gs = ((const Painter *)ctx)->groups;
     int32_t d = gs->depth - 1;
+    if (gs->hidden != 0)
+        return FLOW_INSIDE_NONE;
     if (d < 0 || d >= PAINT_GROUPS || gs->open[d].kind != G_THROUGH)
         return FLOW_INSIDE_VIEW;
     return gs->open[d].keep == YONDER_KEEP_MAKE ? FLOW_INSIDE_ALL
@@ -3008,13 +3035,14 @@ static void group_close(void *ctx, const flow_box_t *box)
     Painter *p = ctx;
     PaintGroups *gs = p->groups;
     int32_t d = --gs->depth;
-    uint8_t alpha = (uint8_t)(((uint32_t)box->style->opacity * 255 + 500) / 1000);
+    yonder_paint_groups_open = gs->depth;
+    uint8_t alpha = yonder_group_alpha(box);
+    if (gs->hidden != 0) {
+        if (gs->hidden == d + 1)
+            gs->hidden = 0;
+        return;
+    }
     if (d >= PAINT_GROUPS) {
-        if (gs->hidden != 0) {
-            if (gs->hidden == d + 1)
-                gs->hidden = 0;
-            return;
-        }
         if (!flow_box_through(box, p->scroll, (double[6]){0}, NULL, NULL) && opacity_verbs(p))
             p->v->group_close(p->v->ctx, alpha);
         return;
@@ -3037,7 +3065,8 @@ static void group_close(void *ctx, const flow_box_t *box)
         }
         p->v->layer_close(p->v->ctx, filtered ? box->style->filter : NULL,
                           filtered ? box->style->nfilter : 0, box->style->color,
-                          gs->open[d].kind == G_THROUGH ? 255 : alpha, blend_of(p, box, d), cover);
+                          gs->open[d].kind == G_THROUGH ? 255 : alpha, blend_of(p, box, d), cover,
+                          gs->open[d].grid);
         os64_free(cover);
     }
     if (gs->open[d].kind == G_THROUGH)
@@ -3079,12 +3108,97 @@ const flow_box_t *yonder_canvas_owner(const flow_tree_t *tree, const yonder_verb
 }
 
 
+// The top layer (paint.h): the element yonder named, and the visitor that
+// hands over only the boxes inside the element's. A tree is its document's
+// (top_applies), so a relayout's new tree is still the element's
+// and a frame's or an SVG document's is not. A group's open and close come
+// for the same box, so skipping both for one outside keeps them paired;
+// `inside` is asked only after an open that was made.
+static const os64_html_node_t *s_top_element;
+// The backdrop's black, in libflow's colour (whose top byte is the
+// transparency: 0 is opaque).
+#define TOP_BACKDROP 0x00000000u
+
+void yonder_paint_set_top(const os64_html_node_t *element)
+{
+    s_top_element = element;
+}
+
+static bool top_applies(const flow_tree_t *tree)
+{
+    // The root box is the root element's (flow_root), so its node says
+    // which document the tree is.
+    const flow_box_t *b = s_top_element != NULL ? flow_root(tree) : NULL;
+    return b != NULL && b->node != NULL &&
+           os64_html_node_document(b->node) == os64_html_node_document(s_top_element);
+}
+
+typedef struct {
+    Painter *p;
+    const flow_box_t *top;
+} TopWalk;
+
+static bool in_top(const TopWalk *t, const flow_box_t *b)
+{
+    for (; b != NULL; b = b->parent)
+        if (b == t->top)
+            return true;
+    return false;
+}
+
+static void top_visit(void *ctx, const flow_box_t *b)
+{
+    TopWalk *t = ctx;
+    if (in_top(t, b))
+        paint_box(t->p, b);
+}
+
+static void top_open(void *ctx, const flow_box_t *b, os64_gui_rect_t bounds)
+{
+    TopWalk *t = ctx;
+    if (in_top(t, b))
+        group_open(t->p, b, bounds);
+}
+
+static void top_close(void *ctx, const flow_box_t *b)
+{
+    TopWalk *t = ctx;
+    if (in_top(t, b))
+        group_close(t->p, b);
+}
+
+static void top_outline(void *ctx, const flow_box_t *b)
+{
+    TopWalk *t = ctx;
+    if (in_top(t, b))
+        paint_outline(t->p, b);
+}
+
+// A group round the element is not laid (top_open), and the element's boxes
+// are placed in the view's own coordinates whatever its matrix, so nothing
+// inside it is culled through that matrix: a transform that moves the
+// group far from the view would otherwise cull the element it never moves.
+static flow_inside_t top_inside(void *ctx, const flow_box_t *b)
+{
+    TopWalk *t = ctx;
+    return in_top(t, b) ? group_inside(t->p, b) : FLOW_INSIDE_ALL;
+}
+
 void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, os64_gui_rect_t whole,
                   flow_point_t scroll, uint32_t paper, const yonder_dark_t *dark,
                   yonder_paint_cache_t *cache, yonder_scratch_t *scratch, const yonder_verbs_t *verbs)
 {
+    (void)yonder_paint_from(tree, viewport, whole, scroll, paper, dark, cache, scratch, verbs, NULL);
+}
+
+bool yonder_paint_from(const flow_tree_t *tree, os64_gui_rect_t viewport, os64_gui_rect_t whole,
+                       flow_point_t scroll, uint32_t paper, const yonder_dark_t *dark,
+                       yonder_paint_cache_t *cache, yonder_scratch_t *scratch, const yonder_verbs_t *verbs,
+                       const flow_box_t *cover)
+{
     PaintGroups groups = {.depth = 0,
                           .filter_left = (int64_t)YONDER_FILTER_AREA_VIEWS * whole.w * whole.h};
+    yonder_paint_groups_open = 0;
     flow_cut_memo_t cuts;
     flow_cut_memo_open(&cuts, tree);
     Painter p = {.v = verbs, .tree = tree, .view = viewport, .scroll = scroll, .groups = &groups, .dark = dark,
@@ -3095,6 +3209,22 @@ void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, os64_gui_re
         paint_cache_begin(cache);
     if (dark != NULL)
         paper = dark->paper;
+    if (top_applies(tree)) {
+        // The top layer: the backdrop, then the element's boxes alone.
+        TopWalk t = {&p, flow_box_for(tree, s_top_element)};
+        bool cover_inside = cover != NULL && t.top != NULL && in_top(&t, cover);
+        if (!cover_inside)
+            fill(&p, viewport.x, viewport.y, viewport.w, viewport.h, TOP_BACKDROP);
+        bool found = cover == NULL;
+        if (t.top != NULL && (cover == NULL || cover_inside)) {
+            flow_visitor_t v = {top_visit, top_open, top_close, &t, top_outline, top_inside};
+            flow_visit_groups_from(tree, viewport, scroll, &v, cover_inside ? cover : t.top, &found);
+            found = cover == NULL || found;
+        }
+        yonder_paint_cuts += cuts.worked;
+        flow_cut_memo_close(&cuts);
+        return found;
+    }
     const flow_box_t *root = flow_root(tree);
     if (root != NULL)
         p.canvas_owner = canvas_owner(&p, root);
@@ -3103,9 +3233,12 @@ void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, os64_gui_re
     // there is nothing else.
     uint32_t canvas = owner != NULL && owner->style->has_background ? paper_of(&p, owner->style->background)
                                                                     : paper;
-    if (flow_alpha(canvas) != 255)
+    // Under a cover the canvas and its layers are beneath it, as everything
+    // the walk would emit before it is.
+    if (cover == NULL && flow_alpha(canvas) != 255)
         fill(&p, viewport.x, viewport.y, viewport.w, viewport.h, paper);
-    fill(&p, viewport.x, viewport.y, viewport.w, viewport.h, canvas);
+    if (cover == NULL)
+        fill(&p, viewport.x, viewport.y, viewport.w, viewport.h, canvas);
     // The canvas's layers, from the bottom up, across the whole view, each
     // placed in the ROOT's origin box, whichever element they came from
     // (Backgrounds 3 § 2.11.2: the body's background is drawn as if the
@@ -3115,7 +3248,7 @@ void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, os64_gui_re
     // view whatever each layer's background-clip says, `text` included: the
     // canvas's painting area IS the canvas (§ 2.11.1), and Chrome fills it.
     bool sheet = owner != NULL && flow_background_has_image(owner->style);
-    for (int32_t i = owner != NULL ? flow_background_layers(owner->style) - 1 : -1; i >= 0; i--) {
+    for (int32_t i = owner != NULL && cover == NULL ? flow_background_layers(owner->style) - 1 : -1; i >= 0; i--) {
         flow_layer_t l = flow_background_layer(owner->style, i);
         os64_gui_rect_t origin = yonder_box_edge(root, root->rect, l.origin);
         yonder_tile_t tile;
@@ -3127,10 +3260,15 @@ void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, os64_gui_re
                                   viewport);
         }
     }
+    bool found = cover == NULL;
     if (root != NULL) {
         flow_visitor_t v = {paint_box, group_open, group_close, &p, paint_outline, group_inside};
-        flow_visit_groups(tree, viewport, scroll, &v);
+        if (cover == NULL)
+            flow_visit_groups(tree, viewport, scroll, &v);
+        else
+            flow_visit_groups_from(tree, viewport, scroll, &v, cover, &found);
     }
     yonder_paint_cuts += cuts.worked;
     flow_cut_memo_close(&cuts);
+    return found;
 }

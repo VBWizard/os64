@@ -283,7 +283,7 @@ over_check_signals:
 	# reproducible #DF).
 	#
 	# RSP still points at the interrupted thread's RSP0 kernel stack, which
-	# task_alloc_guarded_stack put at a TASK-LOCAL, lower-half VA (thread.c —
+	# task_stack_map put at a TASK-LOCAL, lower-half VA (thread.c —
 	# its own comment says the stack "is NOT mapped in kKernelPML4"). The
 	# instant the CR3 below lands, that stack ceases to exist in the active
 	# address space, and it stays gone until OverSaveRegisters reloaded RSP

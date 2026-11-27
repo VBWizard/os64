@@ -804,6 +804,14 @@ bool os64_ui_render(os64_ui_t *ui, os64_gui_rect_t *damage);
 // os64_ui_render, handing back the rectangles themselves: their count (0 when
 // clean, nothing painted) and the rectangles in out[0..count).
 uint32_t os64_ui_render_list(os64_ui_t *ui, os64_gui_rect_t out[OS64_UI_DAMAGE_MAX]);
+// Every shown widget that a render paints after `from` (in the tree's
+// order: a parent before its children, children in list order; `from`'s
+// own children are not after it), painted again for `rect` and cut to it:
+// nothing outside `rect` changes, and the damage list and the dirty marks
+// are left as they are. For a caller that needs what the widgets lay over
+// some part painted over a backdrop of its own (yonder's planes: the layer
+// of what lies over a video's picture, VIDEO_PLANE.md § 5.2).
+void os64_ui_paint_after(os64_ui_t *ui, const os64_ui_widget_t *from, os64_gui_rect_t rect);
 
 // The canonical L2 loop, packaged: event_wait → dispatch → paint, until the
 // window dies (event_wait error) or `*running` (may be NULL) goes false —

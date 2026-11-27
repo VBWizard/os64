@@ -139,25 +139,30 @@ typedef struct {
     // (filter.h), the result multiplied by the coverage `cover` gives each
     // of its pixels (bounds.w a row; NULL for all of it), and laid onto
     // what was under it at `alpha` of 255 by `mode`, `current` the colour
-    // of a drop shadow in currentColor. A face that cannot
+    // of a drop shadow in currentColor, `grid` where bounds' corner lies
+    // from the group's own (yonder_filter_run's, which a large blur's
+    // reduction is counted from). A face that cannot
     // blend there — what is under the layer is a group's sheets, not the
     // page — lays it normal and counts it (yonder_paint_layers_refused).
     // False when it cannot be made (no memory, too large): the painter
     // paints the group plain. Either NULL: no layer is drawn.
     bool (*layer_open)(void *ctx, os64_gui_rect_t bounds);
     void (*layer_close)(void *ctx, const flow_filter_t *filter, int32_t n, uint32_t current,
-                        uint8_t alpha, flow_blend_t mode, const uint8_t *cover);
+                        uint8_t alpha, flow_blend_t mode, const uint8_t *cover, flow_point_t grid);
     // A BACKDROP (flow_style_t.backdrop_filter; FILTER.md § 7): what is
     // painted under `rect` (a border box cut to the view, in the
     // coordinates being painted) — read with the list's reach round it —
     // filtered by `filter` (n functions, none a URL; `current` a drop
-    // shadow's currentColor) and laid back inside `rect`, at the coverage
-    // `cover` gives each of its pixels (rect.w a row; NULL for all of it).
+    // shadow's currentColor; `grid` where rect's corner lies from the
+    // border box's own, as layer_close's) and laid back inside `rect`, at
+    // the coverage `cover` gives each of its pixels (rect.w a row; NULL for
+    // all of it).
     // False, and nothing changed, when it cannot be drawn: no memory, a
     // layer past the face's limits, or nothing behind it that is the page
     // (inside a group's sheets). NULL: no backdrop is filtered.
     bool (*backdrop_filter)(void *ctx, os64_gui_rect_t rect, const uint8_t *cover,
-                            const flow_filter_t *filter, int32_t n, uint32_t current);
+                            const flow_filter_t *filter, int32_t n, uint32_t current,
+                            flow_point_t grid);
     // A CAPTURE closed (MASKS.md § 3): a layer opened with layer_open, its
     // painting not laid anywhere but taken back as COVERAGE into `out` (its
     // bounds.w by bounds.h, a row bounds.w) — each pixel's alpha, or with
@@ -177,6 +182,12 @@ typedef struct {
 // `verbs->backdrop` is asked with no area, which only asks.
 const flow_box_t *yonder_canvas_owner(const flow_tree_t *tree, const yonder_verbs_t *verbs);
 
+// The alpha, in 255ths, a group (a stacking context below full opacity) is
+// laid at: its opacity rounded. At 0 the painter paints nothing of the
+// group, its open and close included, so nothing inside it is drawn — a
+// face that must know what cannot show asks the same rule.
+uint8_t yonder_group_alpha(const flow_box_t *box);
+
 // DARK PAGES (yonder.conf's `appearance = dark`): every colour the page
 // paints is drawn at its brightness moved, hue and saturation kept
 // (paint.c's relight). A background or a gradient is PAPER, and goes dark
@@ -190,10 +201,10 @@ typedef struct {
     uint32_t paper;
 } yonder_dark_t;
 
-// THE PAINT CACHE (YONDER_PERF.md § perf-2): a gradient's tile and a
-// blurred shadow's mask, kept between paints in 128-pixel blocks and found
-// by the values that make them, so a paint copies its part out instead of
-// working it out again. What a paint draws from it is what it draws
+// THE PAINT CACHE (YONDER_PERF.md § perf-2): a gradient's tile, a blurred
+// shadow's mask and a canvas's smoothed picture (canvas_keep.h), kept
+// between paints in 128-pixel blocks and found by the values that make
+// them, so a paint copies its part out instead of working it out again. What a paint draws from it is what it draws
 // without it, pixel for pixel. One window's, on its one thread: no lock.
 typedef struct yonder_paint_cache yonder_paint_cache_t;
 // THE BUDGET IS THE SCREEN'S (yonder_paint_cache_budget): what the cache
@@ -255,6 +266,9 @@ extern void (*yonder_paint_stage)(yonder_paint_stage_t stage, bool begin);
 // program started: a count the harness holds to the lines painted, not the
 // pieces on them.
 extern uint64_t yonder_paint_cuts;
+// How many boxes the walk has handed the painter, since the program
+// started: the record's measure of the walk's own part of a paint.
+extern uint64_t yonder_paint_boxes;
 // How many filtered, masked or blended groups and backdrops the last
 // yonder_paint drew plain: past its budget for layers —
 // YONDER_FILTER_AREA_VIEWS times the WHOLE view's pixels, each layer (and
@@ -269,6 +283,39 @@ void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, os64_gui_re
                   flow_point_t scroll,
                   uint32_t paper, const yonder_dark_t *dark, yonder_paint_cache_t *cache,
                   yonder_scratch_t *scratch, const yonder_verbs_t *verbs);
+
+// The same paint of a `viewport` that `cover` draws over (VIDEO.md § 5, The
+// paint beneath the picture): nothing before the cover is drawn — not the
+// canvas, not the root's backgrounds, nothing the walk emits before it
+// (flow_visit_groups_from) — and from the cover on, all as yonder_paint
+// draws it. The caller's to have found a cover whose pixels fill the
+// viewport. False when the walk never handed the cover over: the viewport
+// then holds only what came after it, and the caller paints it again with
+// yonder_paint.
+bool yonder_paint_from(const flow_tree_t *tree, os64_gui_rect_t viewport, os64_gui_rect_t whole,
+                       flow_point_t scroll, uint32_t paper, const yonder_dark_t *dark,
+                       yonder_paint_cache_t *cache, yonder_scratch_t *scratch, const yonder_verbs_t *verbs,
+                       const flow_box_t *cover);
+
+// THE TOP LAYER (the Fullscreen API's, VIDEO.md § 9): while `element` is
+// the fullscreen element, every paint of a tree of its document — a view,
+// a part, a tile, a plane's paints over black and over white — paints the
+// black backdrop and then that element's boxes alone, in their own order,
+// with nothing before or after them in the page's: over everything, and
+// neither dimmed nor culled by any of its ancestors' groups (a matrix that
+// moves an ancestor off the view moves none of the element's boxes). A
+// paint from a cover inside the element starts at the cover; one whose
+// cover is outside it is the backdrop alone, and answers false. An element with no box (display none)
+// leaves the backdrop. NULL clears it; another document's tree is painted
+// as ever. The element is read at every paint, so the caller keeps it
+// alive while it is named (yonder holds it: fs_name).
+void yonder_paint_set_top(const os64_html_node_t *element);
+
+// How many groups the painter has open now: read by a verb as it draws, so
+// a check can hold it to the groups the walk opens round the box it is
+// drawing (flow_paint_path's, less those round the top layer's element,
+// whose walk does not lay them).
+extern int32_t yonder_paint_groups_open;
 
 // One of `box`'s boxes — its border box `rect` (in any coordinates), or
 // the padding or content box inside it. A percentage padding counts as

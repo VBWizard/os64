@@ -239,6 +239,16 @@ static void shadow_updates(void)
     sh_expect(c, f.doc, "lt", "width", "33px", "the slotted element inherits the slot's new value");
     sh_same_as_fresh(c, &f, "after the slot's style");
 
+    // A custom property written on the host: its shadow tree is recomputed
+    // (THE RECOMPUTE), the slot, declaring the name itself, prunes there,
+    // and the element assigned to it keeps the slot's value.
+    os64_html_set_attr(f.doc, h, "style", "--k:44px", 8);
+    shadow_check(garb_cascade_update(c), "a host's custom property updates incrementally");
+    garb_update_marks_t hm = garb_cascade_update_marks(c);
+    shadow_check(hm.recomputed > 0 && hm.recompute_pruned > 0, "the host's tree is recomputed, the slot prunes");
+    sh_expect(c, f.doc, "lt", "width", "33px", "the slotted element keeps the slot's own value");
+    sh_same_as_fresh(c, &f, "after the host's custom property");
+
     // Renaming the slot unassigns the span: no ::slotted(), no slot to inherit from.
     os64_html_set_attr(f.doc, sl, "name", "other", 5);
     shadow_check(garb_cascade_update(c), "a slot's name updates incrementally");
@@ -292,6 +302,37 @@ static void shadow_updates(void)
 
 // A cascade built before any shadow root asks for a fresh one once the
 // document has one: every walk now crosses into shadow trees.
+// THE RECOMPUTE across a slot move: a light child whose `slot` names
+// another slot inherits that slot's map, and what is under it is
+// recomputed against it (no name is known when what it inherits moved).
+static void shadow_slot_move(void)
+{
+    os64_html_document_t *doc = update_doc("<!doctype html><body><aside>" SHADOW_PAD SHADOW_PAD SHADOW_PAD
+                                           "</aside><div id=h><span id=c slot=a><b id=x></b></span></div>");
+    os64_html_node_t *root = doc ? sh_attach(doc, "h", "<slot name=a style='--k:1px'></slot>"
+                                                       "<slot name=b style='--k:2px'></slot>") : NULL;
+    if (!root) { shadow_check(false, "slot move: fixture"); os64_html_document_free(doc); return; }
+    const char *page = "b{width:var(--k)}";
+    garb_parsed_t sheet;
+    garb_parse_sheet_text(page, strlen(page), &sheet);
+    garb_sheet_in_t in = {.sheet = &sheet, .parent = -1};
+    int32_t list[1] = {0};
+    garb_scope_in_t scope = {doc->document, list, 1};
+    garb_cascade_t *c = garb_cascade_scoped(&in, 1, &scope, 1, doc, (garb_env_t){.width = 800, .height = 600}, NULL);
+    sh_expect(c, doc, "x", "width", "1px", "slot move: under slot a");
+    os64_html_set_attr(doc, sh_find(doc, "c"), "slot", "b", 1);
+    shadow_check(garb_cascade_update(c), "slot move: updates incrementally");
+    sh_expect(c, doc, "x", "width", "2px", "slot move: what is under the moved child takes slot b's value");
+    garb_cascade_t *fresh = garb_cascade_scoped(&in, 1, &scope, 1, doc, (garb_env_t){.width = 800, .height = 600}, NULL);
+    static char a1[65536], b1[65536];
+    size_t na = garb_cascade_dump(c, doc, a1, sizeof(a1)), nb = garb_cascade_dump(fresh, doc, b1, sizeof(b1));
+    shadow_check(na == nb && !strcmp(a1, b1), "slot move: same as a fresh cascade");
+    garb_cascade_free(fresh);
+    garb_cascade_free(c);
+    garb_free(&sheet);
+    os64_html_document_free(doc);
+}
+
 static void shadow_first_root(void)
 {
     os64_html_document_t *doc = update_doc(kShadowPage);
@@ -441,12 +482,257 @@ static void shadow_scale(void)
     shadow_check(linear, "many scopes: four times the scopes cost about four times as much");
 }
 
+// THE KEPT READ across a shadow host replaced (KEPT_READ.md, condition 3):
+// a read names its scopes' roots by address and never follows them. A build
+// offered a cascade with the same roots takes its read; once the host is
+// removed and another attached, the new root's scopes differ and the build
+// reads again; and a read held past its giver's free is taken whole (ASan).
+static void shadow_kept_read(void)
+{
+    ShadowFixture f;
+    if (!sh_open(&f)) { shadow_check(false, "kept read: the shadow fixture opens"); return; }
+    garb_env_t env = {.width = 800, .height = 600};
+    garb_cascade_limits_t limits = {GARB_ARENA_MAX, GARB_CASCADE_READ_MAX, GARB_ARENA_MAX, SIZE_MAX, NULL, NULL, true};
+    garb_cascade_t *a = garb_cascade_scoped(f.in, 2, f.scopes, 2, f.doc, env, &limits);
+    garb_read_t *held = garb_cascade_read_hold(a);
+    limits.read_from = held;
+    garb_cascade_t *b = garb_cascade_scoped(f.in, 2, f.scopes, 2, f.doc, env, &limits);
+    garb_read_release(held);
+    shadow_check(b && garb_cascade_read_refusal(b) == GARB_READ_KEPT, "kept read: the same roots take the read");
+    // The host removed, another attached: a new root.
+    os64_html_node_t *host = sh_find(f.doc, "h");
+    os64_html_node_t *parent = host != NULL ? (os64_html_node_t *)host->parent : NULL;
+    os64_html_node_t *next = os64_html_create_element(f.doc, OS64_HTML_NS_HTML, "div", NULL);
+    bool moved = parent && next && os64_html_remove(f.doc, host) == 0 &&
+                 os64_html_set_attr(f.doc, next, "id", "h2", 2) == 0 && os64_html_insert(f.doc, parent, next, NULL) == 0;
+    os64_html_node_t *root = moved ? sh_attach(f.doc, "h2", kShadowTree) : NULL;
+    shadow_check(root != NULL, "kept read: a new host takes a shadow tree");
+    if (root == NULL) { garb_cascade_free(a); garb_cascade_free(b); sh_close(&f); return; }
+    f.root = root;
+    f.scopes[1].root = root;
+    held = garb_cascade_read_hold(b);
+    limits.read_from = held;
+    garb_cascade_t *c = garb_cascade_scoped(f.in, 2, f.scopes, 2, f.doc, env, &limits);
+    garb_read_release(held);
+    shadow_check(c && garb_cascade_read_refusal(c) == GARB_READ_SCOPES, "kept read: a new root reads again, and says scopes");
+    garb_cascade_free(a);
+    garb_cascade_free(b);
+    held = garb_cascade_read_hold(c);
+    garb_cascade_free(c);
+    limits.read_from = held;
+    garb_cascade_t *d = garb_cascade_scoped(f.in, 2, f.scopes, 2, f.doc, env, &limits);
+    garb_read_release(held);
+    shadow_check(d && garb_cascade_read_refusal(d) == GARB_READ_KEPT && !garb_cascade_read_written(d),
+                 "kept read: the new root's read, held past its cascade, is taken unwritten");
+    sh_same_as_fresh(d, &f, "kept read: the taker matches as a fresh cascade with its giver gone");
+    garb_cascade_free(d);
+    sh_close(&f);
+}
+
+// :empty AT A SHADOW HOST OR A SLOT: `:host(:empty) .x` matches in the
+// host's tree, and `slot:empty::slotted(span)` at the slot's assigned
+// nodes, none of them added and none inheriting what turned, so a host or
+// a slot whose :empty turns keeps its whole mark (cascade.c mark_turned).
+// The turned element's own winners do not change here, so nothing but that
+// mark reaches the element probed. `light` is the host #h's children,
+// `tree` its shadow tree's, `turn` the element given a child and then
+// emptied again.
+static void shadow_empty_case(const char *light, const char *tree_html, const char *tree, const char *turn,
+                              const char *probe, const char *what)
+{
+    size_t baseline = live;
+    char page_html[1024];
+    snprintf(page_html, sizeof(page_html), "<!doctype html><body><aside>" SHADOW_PAD SHADOW_PAD SHADOW_PAD
+             "</aside><div id=h>%s</div><p id=out></p>", light);
+    os64_html_document_t *doc = update_doc(page_html);
+    os64_html_node_t *root = doc ? sh_attach(doc, "h", tree_html) : NULL;
+    ShadowFixture f = {.doc = doc, .root = root};
+    const char *page = "p{z-index:1}";
+    char said[160];
+    garb_parse_sheet_text(page, strlen(page), &f.sheets[0]);
+    garb_parse_sheet_text(tree, strlen(tree), &f.sheets[1]);
+    f.in[0] = (garb_sheet_in_t){.sheet = &f.sheets[0], .parent = -1};
+    f.in[1] = (garb_sheet_in_t){.sheet = &f.sheets[1], .parent = -1};
+    f.page_list[0] = 0;
+    f.tree_list[0] = 1;
+    f.scopes[0] = (garb_scope_in_t){doc ? doc->document : NULL, f.page_list, 1};
+    f.scopes[1] = (garb_scope_in_t){root, f.tree_list, 1};
+    garb_cascade_t *c = root ? sh_cascade(&f) : NULL;
+    snprintf(said, sizeof(said), "%s: the fixture cascades", what);
+    shadow_check(c != NULL, said);
+    if (c) {
+        snprintf(said, sizeof(said), "%s: the empty element's reach matches", what);
+        sh_expect(c, doc, probe, "flex-grow", "5", said);
+        os64_html_node_t *at = sh_find(doc, turn), *b = os64_html_create_element(doc, OS64_HTML_NS_HTML, "b", NULL);
+        os64_html_insert(doc, at, b, NULL);
+        snprintf(said, sizeof(said), "%s: a child for it updates", what);
+        shadow_check(garb_cascade_update(c), said);
+        snprintf(said, sizeof(said), "%s: its reach follows the turn to not empty", what);
+        sh_expect(c, doc, probe, "flex-grow", "", said);
+        sh_same_as_fresh(c, &f, said);
+        os64_html_remove(doc, b);
+        snprintf(said, sizeof(said), "%s: the child removed updates", what);
+        shadow_check(garb_cascade_update(c), said);
+        snprintf(said, sizeof(said), "%s: its reach follows the turn to empty", what);
+        sh_expect(c, doc, probe, "flex-grow", "5", said);
+        sh_same_as_fresh(c, &f, said);
+    }
+    garb_cascade_free(c);
+    sh_close(&f);
+    snprintf(said, sizeof(said), "%s: the fixture releases what it holds", what);
+    shadow_check(live == baseline, said);
+}
+
+// A BACK INDEX AT A HOST OR A SLOTTED ELEMENT (cascade.c index_walk): a
+// turn's subtree mark reaches the host's tree (`:host(:last-child) .x`),
+// and a slotted element's turn is its own (`::slotted(:last-child)`). The
+// host #h has #out after it; `light` is its children, `tree` its tree's.
+// `host_turns`: #out is taken away and put back, so #h turns; otherwise a
+// <b> is appended to #h and taken away, so its last light child turns.
+static void shadow_back_case(const char *light, const char *tree_html, const char *tree, bool host_turns,
+                             const char *probe, const char *what)
+{
+    size_t baseline = live;
+    char page_html[1024], said[160];
+    snprintf(page_html, sizeof(page_html), "<!doctype html><body><aside>" SHADOW_PAD SHADOW_PAD SHADOW_PAD
+             "</aside><div id=h>%s</div><p id=out></p>", light);
+    os64_html_document_t *doc = update_doc(page_html);
+    os64_html_node_t *root = doc ? sh_attach(doc, "h", tree_html) : NULL;
+    ShadowFixture f = {.doc = doc, .root = root};
+    const char *page = "p{z-index:1}";
+    garb_parse_sheet_text(page, strlen(page), &f.sheets[0]);
+    garb_parse_sheet_text(tree, strlen(tree), &f.sheets[1]);
+    f.in[0] = (garb_sheet_in_t){.sheet = &f.sheets[0], .parent = -1};
+    f.in[1] = (garb_sheet_in_t){.sheet = &f.sheets[1], .parent = -1};
+    f.page_list[0] = 0;
+    f.tree_list[0] = 1;
+    f.scopes[0] = (garb_scope_in_t){doc ? doc->document : NULL, f.page_list, 1};
+    f.scopes[1] = (garb_scope_in_t){root, f.tree_list, 1};
+    garb_cascade_t *c = root ? sh_cascade(&f) : NULL;
+    snprintf(said, sizeof(said), "%s: the fixture cascades", what);
+    shadow_check(c != NULL, said);
+    if (c) {
+        const char *before = host_turns ? "" : "5", *after = host_turns ? "5" : "";
+        snprintf(said, sizeof(said), "%s: the reach as built", what);
+        sh_expect(c, doc, probe, "flex-grow", before, said);
+        os64_html_node_t *h = sh_find(doc, "h"), *out = sh_find(doc, "out"), *b = NULL;
+        if (host_turns) os64_html_remove(doc, out);
+        else os64_html_insert(doc, h, b = os64_html_create_element(doc, OS64_HTML_NS_HTML, "b", NULL), NULL);
+        snprintf(said, sizeof(said), "%s: the turn updates", what);
+        shadow_check(garb_cascade_update(c), said);
+        snprintf(said, sizeof(said), "%s: the reach follows the turn", what);
+        sh_expect(c, doc, probe, "flex-grow", after, said);
+        sh_same_as_fresh(c, &f, said);
+        if (host_turns) os64_html_insert(doc, h->parent, out, NULL);
+        else os64_html_remove(doc, b);
+        snprintf(said, sizeof(said), "%s: the turn back updates", what);
+        shadow_check(garb_cascade_update(c), said);
+        snprintf(said, sizeof(said), "%s: the reach follows the turn back", what);
+        sh_expect(c, doc, probe, "flex-grow", before, said);
+        sh_same_as_fresh(c, &f, said);
+    }
+    garb_cascade_free(c);
+    sh_close(&f);
+    snprintf(said, sizeof(said), "%s: the fixture releases what it holds", what);
+    shadow_check(live == baseline, said);
+}
+
+// A SLOT'S PLACE MOVED (select.h § A READER): a compound in a selector
+// ending in ::slotted() reaches the slot's subtree mark, which carries what
+// is assigned to it, so the slotted <span id=sp> is restyled when an <i
+// class=x> is put just before the slot in the host's tree (`tree` the
+// tree's sheet).
+static void shadow_slotted_case(const char *tree, const char *what)
+{
+    size_t baseline = live;
+    char said[160];
+    os64_html_document_t *doc = update_doc("<!doctype html><body><aside>" SHADOW_PAD SHADOW_PAD SHADOW_PAD
+                                           "</aside><div id=h><span id=sp></span></div>");
+    os64_html_node_t *root = doc ? sh_attach(doc, "h", "<i></i><slot></slot>") : NULL;
+    ShadowFixture f = {.doc = doc, .root = root};
+    const char *page = "p{z-index:1}";
+    garb_parse_sheet_text(page, strlen(page), &f.sheets[0]);
+    garb_parse_sheet_text(tree, strlen(tree), &f.sheets[1]);
+    f.in[0] = (garb_sheet_in_t){.sheet = &f.sheets[0], .parent = -1};
+    f.in[1] = (garb_sheet_in_t){.sheet = &f.sheets[1], .parent = -1};
+    f.page_list[0] = 0;
+    f.tree_list[0] = 1;
+    f.scopes[0] = (garb_scope_in_t){doc ? doc->document : NULL, f.page_list, 1};
+    f.scopes[1] = (garb_scope_in_t){root, f.tree_list, 1};
+    garb_cascade_t *c = root ? sh_cascade(&f) : NULL;
+    snprintf(said, sizeof(said), "%s: the fixture cascades", what);
+    shadow_check(c != NULL, said);
+    if (c) {
+        snprintf(said, sizeof(said), "%s: the slotted element as built", what);
+        sh_expect(c, doc, "sp", "flex-grow", "", said);
+        os64_html_node_t *x = os64_html_create_element(doc, OS64_HTML_NS_HTML, "i", NULL);
+        os64_html_set_attr(doc, x, "class", "x", 1);
+        os64_html_insert(doc, root, x, root->last_child);
+        snprintf(said, sizeof(said), "%s: the change updates", what);
+        shadow_check(garb_cascade_update(c), said);
+        snprintf(said, sizeof(said), "%s: the slotted element follows its slot", what);
+        sh_expect(c, doc, "sp", "flex-grow", "5", said);
+        sh_same_as_fresh(c, &f, said);
+    }
+    garb_cascade_free(c);
+    sh_close(&f);
+    snprintf(said, sizeof(said), "%s: the fixture releases what it holds", what);
+    shadow_check(live == baseline, said);
+}
+
+// A SIBLING COMBINATOR INSIDE :host()'s ARGUMENT reaches the host: an
+// .a put just before the host #h makes `:host(:is(.a + .b))` match, and its
+// tree's #in is restyled.
+static void shadow_host_sibling(void)
+{
+    size_t baseline = live;
+    os64_html_document_t *doc = update_doc("<!doctype html><body><aside>" SHADOW_PAD SHADOW_PAD SHADOW_PAD
+                                           "</aside><div id=h class=b></div>");
+    os64_html_node_t *root = doc ? sh_attach(doc, "h", "<p id=in></p>") : NULL;
+    ShadowFixture f = {.doc = doc, .root = root};
+    const char *page = "p{z-index:1}", *tree = ":host(:is(.a + .b)) p{flex-grow:5}";
+    garb_parse_sheet_text(page, strlen(page), &f.sheets[0]);
+    garb_parse_sheet_text(tree, strlen(tree), &f.sheets[1]);
+    f.in[0] = (garb_sheet_in_t){.sheet = &f.sheets[0], .parent = -1};
+    f.in[1] = (garb_sheet_in_t){.sheet = &f.sheets[1], .parent = -1};
+    f.page_list[0] = 0;
+    f.tree_list[0] = 1;
+    f.scopes[0] = (garb_scope_in_t){doc ? doc->document : NULL, f.page_list, 1};
+    f.scopes[1] = (garb_scope_in_t){root, f.tree_list, 1};
+    garb_cascade_t *c = root ? sh_cascade(&f) : NULL;
+    shadow_check(c != NULL, ":host() sibling: the fixture cascades");
+    if (c) {
+        sh_expect(c, doc, "in", "flex-grow", "", ":host() sibling: as built");
+        os64_html_node_t *h = sh_find(doc, "h"), *a = os64_html_create_element(doc, OS64_HTML_NS_HTML, "i", NULL);
+        os64_html_set_attr(doc, a, "class", "a", 1);
+        os64_html_insert(doc, h->parent, a, h);
+        shadow_check(garb_cascade_update(c), ":host() sibling: the change updates");
+        sh_expect(c, doc, "in", "flex-grow", "5", ":host() sibling: the host's tree follows its new neighbour");
+        sh_same_as_fresh(c, &f, ":host() sibling: the host's tree follows its new neighbour");
+    }
+    garb_cascade_free(c);
+    sh_close(&f);
+    shadow_check(live == baseline, ":host() sibling: the fixture releases what it holds");
+}
+
 static int cascade_shadow(void)
 {
+    shadow_host_sibling();
+    shadow_slotted_case(".x + slot::slotted(span){flex-grow:5}", "a slot's `+` pair made reaches what is slotted");
+    shadow_slotted_case("slot:nth-child(3)::slotted(span){flex-grow:5}", "a slot's index turned reaches what is slotted");
+    shadow_back_case("", "<p id=in class=x></p>", ":host(:last-child) .x{flex-grow:5}", true, "in",
+                     "back index host");
+    shadow_back_case("<span id=lt></span>", "<slot id=sl></slot>", "::slotted(:last-child){flex-grow:5}", false,
+                     "lt", "back index slotted");
+    shadow_empty_case("", "<p id=in class=x></p>", ":host(:empty) .x{flex-grow:5}", "h", "in", ":empty host");
+    shadow_empty_case("<span id=lt></span>", "<slot id=sl></slot>", "slot:empty::slotted(span){flex-grow:5}", "sl",
+                      "lt", ":empty slot");
+    shadow_kept_read();
     shadow_scale();
     shadow_scoping();
     shadow_imports();
     shadow_updates();
+    shadow_slot_move();
     shadow_first_root();
     shadow_contexts();
     shadow_batch_removal();

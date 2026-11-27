@@ -133,8 +133,23 @@ typedef struct {
 // presentation-value parse. attributes bounds their retained count. Scratch,
 // slot tables and selector/match arrays are separate; these are not a unified
 // allocator budget. Zero limits are literal. Input sheets remain caller-owned.
+// `clock`, when not NULL, is the caller's clock (microseconds, or any unit
+// it likes): the cascade then keeps the caller's measure
+// (garb_cascade_build_cost, garb_cascade_broad_trigger), and without it
+// counts nothing for them.
+// `read_from`, when not NULL, is a READ this build may take (THE KEPT
+// READ, below; garb_cascade_read_hold): everything a build makes before it
+// touches an element, shared when the key is equal, read again when it is
+// not. The build takes its own reference when it takes the read, and keeps
+// no pointer otherwise. `check_read` hashes a read when it is made and
+// again whenever it is taken, so a write into a read already made is
+// caught (garb_cascade_read_written).
+typedef struct garb_read garb_read_t;
 typedef struct {
     size_t state_bytes, read_bytes, attribute_bytes, attributes;
+    uint64_t (*clock)(void);
+    const garb_read_t *read_from;
+    bool check_read;
 } garb_cascade_limits_t;
 garb_cascade_t *garb_cascade_limited(const garb_sheet_in_t *, int32_t,
                                      const os64_html_document_t *, garb_env_t,
@@ -185,23 +200,29 @@ bool garb_cascade_retain(garb_cascade_t *cascade);
  * Reader storage is optional: its absence disables updates, not full builds.
  * The caller serializes updates with queries on its window thread. */
 bool garb_cascade_update(garb_cascade_t *c);
-// The most anchored :has() compounds (garb_anchor_t) a cascade tracks: each
-// is a bit every element's record keeps, what the compound answered there
-// when last asked, so an update can tell where the answer turned. A cascade
-// whose rules hold more is built without a change reader.
-#define GARB_ANCHORS_MAX 64
-// Why the latest garb_cascade_update answered false; GARB_UPDATE_DONE
-// before any and after one that answered true.
+// The cascade brought to the document's version with nothing restyled, for
+// a caller that has judged every change since garb_cascade_version to leave
+// what it styled as it is: each one a write of an element's style attribute
+// whose winners are unchanged (garb_cascade_inline_changes lists none) and
+// which no selector can read (garb_cascade_style_may_read false). The
+// cascade keeps its parse of those attributes, whose winners are the same.
+// This checks only that each change is a style write on an element the
+// cascade styled; the judging is the caller's. The change log is read
+// whatever the answer, so false leaves a fresh cascade owed, as a failed
+// update does, and garb_cascade_update_refusal says why until the next
+// update, which answers GARB_UPDATE_FAILED_BEFORE. Its generation and
+// its count of updates do not move: no value was derived.
+bool garb_cascade_advance(garb_cascade_t *c);
+
+// Why the latest garb_cascade_update or garb_cascade_advance answered false;
+// GARB_UPDATE_DONE before any and after one that answered true.
 typedef enum {
     GARB_UPDATE_DONE,
     GARB_UPDATE_INCOMPLETE,     // the cascade came up short, when built or since
     GARB_UPDATE_FAILED_BEFORE,  // an earlier update failed: a fresh cascade is owed
     GARB_UPDATE_NO_READER,      // no change reader: there was no memory for one
-    GARB_UPDATE_ANCHORS,        // more anchored :has() compounds than GARB_ANCHORS_MAX
-    GARB_UPDATE_BARE_ANCHOR,    // an anchored :has() with nothing cheaper to test first
     GARB_UPDATE_COUNTED_HAS,    // a :has() inside :nth-child(… of S) (has_filtered)
     GARB_UPDATE_SHADOW_ROOT,    // the document's first shadow root arrived
-    GARB_UPDATE_CAP,            // as many updates as one cascade takes
     GARB_UPDATE_RETAINED,       // what updates added reached the retained budget
     GARB_UPDATE_ATTRIBUTES,     // style attributes reparsed reached it
     GARB_UPDATE_HISTORY,        // the document's change log could not be read
@@ -210,22 +231,256 @@ typedef enum {
     GARB_UPDATE_BROAD,          // the changes reached more than half the elements
     GARB_UPDATE_SHORT,          // a recompute came up short
     GARB_UPDATE_NO_MEMORY,      // a record, the dirty list or the document's pin had none
+    GARB_UPDATE_ADVANCE,        // garb_cascade_advance met a change that is no style write
     GARB_UPDATE_REASONS
 } garb_update_refusal_t;
 garb_update_refusal_t garb_cascade_update_refusal(const garb_cascade_t *c);
-// A reason's name for a record ("broad", "anchors"); "?" past the enum.
+// A reason's name for a record ("broad", "counted has"); "?" past the enum.
 const char *garb_update_refusal_name(garb_update_refusal_t reason);
 // Whether this cascade keeps a change reader for incremental updates. False
 // lets hosts skip speculative geometry snapshots whose generation cannot
 // survive a DOM change. True is not a promise that an update will succeed:
 // history loss, dirty breadth and storage budgets still require fallback.
 bool garb_cascade_tracks_changes(const garb_cascade_t *c);
+// How many anchored :has() compounds (garb_anchor_t) the cascade's rules
+// hold, and how many of those are bare. While the cascade takes updates,
+// each is a bit in every element's record, asked at every element it
+// styles; a bare one costs up to a walk each time it is asked (its bound:
+// cascade.c has_visit), and never keeps the cascade from updates.
+void garb_cascade_anchors(const garb_cascade_t *c, int32_t *anchors, int32_t *bare);
+// What the bare anchors cost the latest update that read the document's
+// changes: how many times one was asked again at an element a change could
+// have turned it on (not its asks at restyled elements), how many of those
+// answers turned, and how many elements the turns newly marked for
+// restyling (a reach the change had already marked adds nothing, though it
+// is restyled all the same). Zeros before any update.
+typedef struct {
+    uint64_t tested, turned, marked;
+} garb_bare_work_t;
+garb_bare_work_t garb_cascade_bare_work(const garb_cascade_t *c);
+// What the back forms (:last-child and its kin, select.h § THE BACK FORMS)
+// cost the latest garb_cascade_update: the walks it made, one for each
+// element whose children changed (a shadow root or the document, which
+// keep no count of their own, one for each change of their children), the
+// children those walks counted, and those whose remembered back index
+// turned and were marked. Zeros before any update, after one that read no
+// changes or was refused before reading them, for rules with no bounded
+// back form, and for rules whose `of S` forms mark every child anyway; a
+// count made before a refusal partway stays.
+typedef struct {
+    uint64_t walks, walked, turned;
+} garb_back_work_t;
+garb_back_work_t garb_cascade_back_work(const garb_cascade_t *c);
+// What the subject :has() filter (select.h § A SUBJECT :has()) did in the
+// latest garb_cascade_update: the elements a change's :has() climb visited
+// while the rules hold a subject :has(), how many it let through to be
+// marked alone for their own match (those already marked counted too, so
+// this can pass the update's :has() marks), how many it turned away
+// because no subject compound's filters passed them (`turned_away`), and
+// how many because the compounds whose filters passed could not be turned
+// by the batch's changes so far (`turned_away_change`: a change of children
+// that brought and took nothing a compound's argument matches,
+// garb_has_subject_children_may_turn); and, of the rules, how many subject
+// :has() compounds there are and how many are bare (no filter, so the
+// changes alone decide). The visits are zeros as garb_cascade_back_work's
+// are.
+typedef struct {
+    uint64_t visited, marked, turned_away, turned_away_change, entries, bare;
+} garb_has_subject_work_t;
+garb_has_subject_work_t garb_cascade_has_subject_work(const garb_cascade_t *c);
+// What the readers (select.h § A READER) did in the latest
+// garb_cascade_update, by what asked them: a child whose front index
+// turned, one whose back index turned, the siblings an unbounded front
+// form's walk and an unbounded back form's walk passed over, an :empty that
+// turned, an element brought or taken (`~` and the `+` chains), a pair of
+// siblings broken or made (`+`), and a change of an attribute by its keys
+// (an attribute other than these three, `class`, `id`, `style`: select.h
+// § A READER's keys). For each, the readers asked, those
+// whose filters passed, and the asks that marked a reach (one reader or
+// more passed). With the bounded front indexes counted again as
+// garb_cascade_back_work counts the back ones (`front_walks`,
+// `front_walked`, `front_turned`), the unbounded walks made and the
+// siblings they passed over; and, of the rules, the readers and the bare
+// ones. Zeros as garb_cascade_back_work's are.
+typedef enum {
+    GARB_ASKED_FRONT, GARB_ASKED_BACK, GARB_ASKED_FRONT_WALK, GARB_ASKED_BACK_WALK, GARB_ASKED_EMPTY,
+    GARB_ASKED_ADDED_REMOVED, GARB_ASKED_PAIRS, GARB_ASKED_ATTRIBUTE, GARB_ASKED_CLASS, GARB_ASKED_ID,
+    GARB_ASKED_STYLE, GARB_ASKERS
+} garb_asker_t;
+typedef struct {
+    uint64_t asked[GARB_ASKERS], passed[GARB_ASKERS], reached[GARB_ASKERS];
+    uint64_t front_walks, front_walked, front_turned, walks, walked;
+    int32_t readers, bare;
+} garb_reader_work_t;
+garb_reader_work_t garb_cascade_reader_work(const garb_cascade_t *c);
+const char *garb_asker_name(garb_asker_t asker);
+
+// THE CALLER'S MEASURE, kept only when the cascade was made with a clock
+// (garb_cascade_limits_t.clock): a diagnostic, and with no clock nothing is
+// counted. What the fresh build cost by part, on the caller's clock:
+// reading the sheets (their rules, selectors and values into this
+// cascade's reading of them, the index, the dependencies, the anchors and
+// the keyframes), sizing the element table, and matching every element;
+// with the rules read and the elements matched.
+typedef struct {
+    uint64_t sheets, table, matching;
+    uint32_t rules, elements;
+} garb_build_cost_t;
+garb_build_cost_t garb_cascade_build_cost(const garb_cascade_t *c);
+// Which mark an update made the elements it marked by: for a change, the
+// changed element's own mark and what its readers reach for a change of an
+// attribute other than `class` and `style`, its subtree for a change of a
+// state (and of an attribute whose keys are past naming or read at an
+// ancestor), an added subtree, the siblings a changed or turned element moves (those
+// after a changed element for `+`/`~`, all of them for an `of S`; those
+// the readers of an :empty that turned reach), every child of a parent
+// whose children changed under an `of S`, or with more types of children
+// than an index walk's table keeps (the children's siblings), a
+// :has() asked again (its anchors and their reach), the parent's own state
+// (:empty where its answer turned, a <details> or <fieldset>'s first
+// child), a shadow tree's assignments; restyling itself marks nothing (an
+// element restyled alone whose custom property map came out different has
+// what inherits from it recomputed, THE RECOMPUTE), so `inherited` counts
+// none; for a change of an
+// attribute, its element and the reach of the readers of its keys, under
+// `class`, `style`, or for any other attribute the kind of an attribute or
+// a state; and, at a change
+// of children, the reach of the readers (select.h § A READER) of a child
+// whose back index or front index turned, of the children an unbounded
+// position form's walk passed over, of an element brought or taken
+// (`~` and the `+` chains), and of a pair of siblings broken or made (`+`).
+typedef enum {
+    GARB_MARK_CHANGED, GARB_MARK_ADDED, GARB_MARK_SIBLINGS, GARB_MARK_HAS, GARB_MARK_PARENT,
+    GARB_MARK_SLOTS, GARB_MARK_INHERITED, GARB_MARK_CLASS, GARB_MARK_STYLE, GARB_MARK_BACK, GARB_MARK_SUFFIX,
+    GARB_MARK_FRONT, GARB_MARK_POSITION, GARB_MARK_NEIGHBOURS, GARB_MARK_ADJACENT,
+    GARB_MARKS
+} garb_mark_t;
+const char *garb_mark_name(garb_mark_t mark);
+// What the latest garb_cascade_update restyled: the elements its changes
+// marked, those restyling marked (`inherited`, `by[GARB_MARK_INHERITED]`:
+// none, since what is under an element whose custom property map changed
+// is recomputed, not marked: THE RECOMPUTE, below), and every mark made, by
+// the mark that made it. Zeros
+// before any update, after one that read no changes, and for one refused
+// before it read them; one refused partway says what it had marked by then.
+typedef struct {
+    uint64_t marked, inherited;
+    uint64_t by[GARB_MARKS];
+    // THE RECOMPUTE: the elements below a changed custom property map
+    // recomputed (not counted toward the half), those where it stopped
+    // because their own map came out as it was, those whose winners came out
+    // changed, and those a recompute took to their own whole cascade, matched
+    // again: a pseudo-element's var(), keyframes read with the map or a
+    // changed or inherited animation-name, or a var() winner whose new value
+    // sets other longhands than it did.
+    uint64_t recomputed, recompute_pruned, recompute_changed, recompute_whole;
+} garb_update_marks_t;
+garb_update_marks_t garb_cascade_update_marks(const garb_cascade_t *c);
+// The custom property names the latest update's recompute followed, space
+// apart, "(more)" after them when it lost count (none is then known), into
+// `out` (cut to `cap`, always terminated); its length. Empty when it
+// recomputed nothing. A record's: the names are a page's own.
+size_t garb_cascade_recompute_names(const garb_cascade_t *c, char *out, size_t cap);
+// When the latest update was refused GARB_UPDATE_BROAD: the change of the
+// batch that marked the most elements (the batch's marking stops at the
+// one that crossed half, so a later change never ran): its kind
+// (os64_html_change_kind_t), its target (tag, #id, first .class, cut to
+// fit) and the target's depth below the document, the attribute for an
+// attribute's change, how many elements it marked and by which mark; with
+// the changes the batch held and had marked, the dirty count at refusal
+// and the elements the cascade holds. False when the latest update was not
+// refused so, or no clock was given.
+typedef struct {
+    int32_t kind;
+    char target[64], attr[32];
+    uint32_t depth, marked, by[GARB_MARKS];
+    uint32_t changes, marked_changes, dirty, slots;
+} garb_broad_trigger_t;
+bool garb_cascade_broad_trigger(const garb_cascade_t *c, garb_broad_trigger_t *out);
+
+// THE KEPT READ (docs/design/pending/KEPT_READ.md). A build's READ is
+// everything it makes before it touches an element: the sheets' rules read
+// with their declarations, the selector index, the keyframes and faces,
+// the anchors and style readers, the dependencies, the scopes. A build
+// handed `read_from` takes that read, refcounted and never
+// written after it was made, when the KEY is equal: the same document, the
+// same sheets by their parse serials (garb_parsed_t.serial) with the same
+// parents, imports and media, the same scopes, every garb_env_t field
+// (`@media` is decided while reading), the same quirks mode and limits.
+// Otherwise it reads again. A read that came up short, or whose
+// declarations had no arena of their own, is never taken.
+// Why the latest build read again, or that it took a read
+// (GARB_READ_KEPT). The first key member found different is named.
+typedef enum {
+    GARB_READ_KEPT, GARB_READ_NOT_OFFERED, GARB_READ_NOT_KEEPABLE, GARB_READ_DOCUMENT, GARB_READ_LIMITS,
+    GARB_READ_QUIRKS, GARB_READ_ENVIRONMENT, GARB_READ_SHEETS, GARB_READ_SCOPES, GARB_READ_REASONS
+} garb_read_refusal_t;
+garb_read_refusal_t garb_cascade_read_refusal(const garb_cascade_t *c);
+const char *garb_read_refusal_name(garb_read_refusal_t reason);
+// A reference to the cascade's read (NULL for none), which a caller hands a
+// later build as `read_from`; it outlives the cascade until released.
+garb_read_t *garb_cascade_read_hold(const garb_cascade_t *c);
+void garb_read_release(garb_read_t *r);
+// The read's shape hashed, with no address in it (its counts, rule order,
+// declaration names, the index's keys, the keyframes', faces' and skipped
+// names): two reads of the same sheets in the same environment hash equal,
+// whichever cascade made them. A first check only: a different value or
+// selector need not show, which garb_cascade_compare does.
+uint64_t garb_cascade_read_content(const garb_cascade_t *c);
+// With `check_read`: true when the read this cascade took had been written
+// since it was made (its raw hash then and now differ). False without the
+// check, or for a read the cascade made itself.
+bool garb_cascade_read_written(const garb_cascade_t *c);
+
 uint64_t garb_cascade_generation(const garb_cascade_t *c);
 uint64_t garb_cascade_updates(const garb_cascade_t *c);
+// What this cascade's updates have added, in bytes (its own arena, the
+// records of the style attributes they parsed again included, and those
+// parses' own arenas), and at
+// `budget` (when not NULL) what it renews at: an update past it is refused
+// (GARB_UPDATE_RETAINED, GARB_UPDATE_ATTRIBUTES) and a fresh cascade owed.
+size_t garb_cascade_retained(const garb_cascade_t *c, size_t *budget);
 uint64_t garb_cascade_version(const garb_cascade_t *c);
 // Whether this element's winners were recomputed after an earlier update.
 bool garb_style_updated_since(const garb_cascade_t *c, const os64_html_node_t *node,
                               uint64_t update);
+
+// WHAT AN INLINE STYLE WRITE CHANGED, asked before the cascade is updated
+// for it: the element's `style` attribute as it is now against the cascade's
+// own parse of it, the one its winners were computed from. Each longhand
+// whose winning inline declaration (an `!important` one over the rest, then
+// the last written) was added, removed, or changed in name, tokens or
+// importance is listed once. A value equal in meaning but written otherwise
+// counts as changed. `declared`: a declaration sets it now; `keyword`: that
+// declaration's value when it is one identifier of fewer than 16 bytes,
+// lowercased (`none`, `collapse`), else empty; `var`: it holds var() or
+// env(), so its value is not known until it is substituted. The answer is
+// how many were listed, or -1 when it cannot be said: no element the
+// cascade styled, a custom property changed (var() can reach any longhand),
+// a parse that failed or was cut short, or more than `cap`.
+typedef struct {
+    garb_prop_t prop;
+    bool declared, var;
+    char keyword[16];
+} garb_inline_change_t;
+int32_t garb_cascade_inline_changes(const garb_cascade_t *c, const os64_html_node_t *el,
+                                    garb_inline_change_t *out, int32_t cap);
+// Whether the cascade reads the `style` attribute's text itself: a selector
+// of its sheets tests the attribute (inside :is(), :where(), :not() and
+// :has() as well), or a declaration it has read holds attr(style) (generated
+// content's text). Then a write of an inline style can change which rules
+// match, or a box's text, whatever it declares.
+bool garb_cascade_reads_style_attribute(const garb_cascade_t *c);
+// Narrower (BRIEF_LAYOUT_NEEDS.md N2a): whether an inline style write on
+// `element` may change what matches, because a style reader of the sheets
+// (garb_style_reader_t) may match it, or the readers narrow to no element
+// (garb_cascade_style_readers_bare: one is bare, there are more than
+// GARB_STYLE_READERS, or a declaration reads attr(style)). False when no
+// selector of the sheets can turn on this element's style. Rules are
+// counted whatever their scope, which only widens the answer.
+#define GARB_STYLE_READERS 64
+bool garb_cascade_style_may_read(const garb_cascade_t *c, const os64_html_node_t *element);
+bool garb_cascade_style_readers_bare(const garb_cascade_t *c);
 
 // The viewport the cascade was judged against: what a `vw` or `vh` in its
 // winners is a hundredth of.
@@ -278,14 +533,20 @@ void garb_cascade_free(garb_cascade_t *c);
 /* What a cascade holds (MEMORY_CENSUS.md § 3), in bytes reserved: its own
  * arena (its rules, entries, keyframes, attribute table and selector
  * indexes), the arena of what it read from the sheets, each `style`
- * attribute's parse, and the slot table and dirty list it keeps on the
- * heap, at their capacity. Scratch a call frees before it returns is not
+ * attribute's parse, and the slot table (with its rows of anchor bits), the
+ * dirty list and an update's arrays and bits it keeps on the heap, at their
+ * capacity. Scratch a call frees before it returns is not
  * held, and not counted. NULL answers 0. Cheap: a pass over the style
  * attributes, no walk of the rules. The sum of garb_cascade_parts. */
 size_t garb_cascade_bytes(const garb_cascade_t *c);
+// The elements the cascade holds a style for (its element table): 0 for
+// NULL.
+uint32_t garb_cascade_elements(const garb_cascade_t *c);
 /* The same, by part: `state` is the cascade's own arena and the record
  * itself, `reads` what it read from the sheets, `attributes` the `style`
- * attributes' parses, `tables` the slot table and dirty list on the heap.
+ * attributes' parses, `tables` the slot table, its rows of anchor bits, the
+ * dirty list, and the batch's arrays and the subject :has() bits an update
+ * keeps, on the heap.
  * The first two are held to ceilings of their own and each attribute's
  * parse to another (garb_cascade_limits_t), which is why they are told
  * apart. NULL answers zeros. */
@@ -415,6 +676,15 @@ char *garb_media_text_serialized(const char *text, size_t *length, garb_grow_t g
 // ...`), for the harness and a probe. Like snprintf.
 size_t garb_cascade_dump(const garb_cascade_t *c, const os64_html_document_t *doc, char *out,
                          size_t cap);
+// Whether two cascades of `doc` give every element, and its ::before and
+// ::after, the same winners: a diagnostic, for checking an updated cascade
+// against one built fresh. Where they differ, `why` says where first (like
+// snprintf): the element's path, the property, the value in `c` against
+// the value in `other`, and up to three rules of `other` that match there
+// and set it, as written. Those are read from the sheets `other` was built
+// from, which must still be alive.
+bool garb_cascade_compare(const garb_cascade_t *c, const garb_cascade_t *other, const os64_html_document_t *doc,
+                          char *why, size_t cap);
 
 #pragma GCC visibility pop
 

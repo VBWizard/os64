@@ -23,11 +23,13 @@
 #include "gdt.h"
 #include "tss.h"
 #include "thread.h"
+#include "task.h"      // taskID — the flush handler's note of what it interrupted
 #include "accounting.h"
 #include "idt.h"
 #include "panic.h"
 #include "fpu.h"
 #include "gui/frame_clock.h"   // frame_clock_timer — the frame wake's count
+#include "micros.h"   // micros_now — the waited invalidation's clock
 
 extern struct IDTPointer kIDTPtr;
 extern void syscall_Enter();
@@ -1251,6 +1253,73 @@ void mpSendInvTLB()
     }
 }
 
+// The waited invalidation's rounds and books (smp_core.h, shootdown.h).
+static shootdown_t s_shootdown;
+// The thread and task each CPU's latest flush interrupted, written by that
+// CPU's handler alone before it says it flushed, read by a waiter after it
+// has seen that: who held a slow round up.
+static volatile uint64_t s_flush_thread[MAX_CPUS], s_flush_task[MAX_CPUS];
+_Static_assert(SHOOTDOWN_MAX_CPUS == MAX_CPUS, "shootdown.h's table is one slot per CPU number");
+
+void tlb_shootdown_wait(void)
+{
+    uint64_t flags;
+    __asm__ volatile("pushfq\n\tpop %0" : "=r"(flags) :: "memory");
+    if (!(flags & 0x200))
+        panic("tlb_shootdown_wait: called with interrupts off; the CPUs it waits for could be waiting for this one\n");
+
+    // The round is numbered after the caller's table changes, which it
+    // therefore covers (shootdown_begin's ordering), and before any IPI.
+    // From the number to this CPU's own flush the caller stays on this CPU
+    // (interrupts off for those few instructions, never across the wait):
+    // the CPU it skips is the one it flushed. If it is moved while it
+    // waits, the CPU it moves to was sent the IPI and answers it as soon as
+    // the caller runs there, interrupts on.
+    __asm__ volatile("cli" ::: "memory");
+    uint64_t round = shootdown_begin(&s_shootdown);
+    uint32_t self = cpu_self();
+    if (kSMPInitDone)
+        for (uint32_t cpu = 0; cpu < kCPUCount; cpu++)
+            if (cpu != self)
+                send_ipi(cpu, IPI_INVALIDATE_TLB_VECTOR, 0, 1, 0);
+    __asm__ volatile("mov rax, cr3\n\tmov cr3, rax" ::: "rax", "memory");
+    __asm__ volatile("sti" ::: "memory");
+    if (!kSMPInitDone)
+        return;
+
+    // The CPU it last found unanswered is the one that answered last: every
+    // CPU after it had answered by the time the scan reached it.
+    uint64_t began = micros_now();
+    bool told = false;
+    uint32_t last = self;
+    for (uint32_t cpu = 0; cpu < kCPUCount; cpu++)
+    {
+        if (cpu == self || shootdown_answered(&s_shootdown, cpu, round))
+            continue;
+        last = cpu;
+        while (!shootdown_answered(&s_shootdown, cpu, round))
+        {
+            __builtin_ia32_pause();
+            if (!told && micros_now() - began > SHOOTDOWN_LATE_US)
+            {
+                told = true;
+                printd(DEBUG_EXCEPTIONS, "tlb_shootdown_wait: CPU %u has not flushed for round %lu after %u ms; still waiting\n",
+                       cpu, round, SHOOTDOWN_LATE_US / 1000);
+            }
+        }
+    }
+    uint64_t waited = micros_now() - began;
+    shootdown_last_t who = { last, last != self ? s_flush_thread[last] : 0, last != self ? s_flush_task[last] : 0 };
+    if (shootdown_settled(&s_shootdown, waited, who, SHOOTDOWN_LATE_US))
+        printd(DEBUG_EXCEPTIONS, "tlb_shootdown_wait: round %lu settled after %lu us; CPU %u answered last, "
+               "from thread %lu of task %lu\n", round, waited, who.cpu, who.thread, who.task);
+}
+
+void tlb_shootdown_read(shootdown_counts_t *out)
+{
+    shootdown_read(&s_shootdown, out);
+}
+
 void enableApicTimerInterrupt() {
     uint32_t val = read_apic_register(APIC_LVT_TIMER); // Use the read function
     val &= ~(1U << APIC_LVT_MASK_BIT);  // Clear the mask bit to enable
@@ -1291,10 +1360,22 @@ void mpFreezeOtherCores(void)
     }
 }
 
+// The flush, and its answer to tlb_shootdown_wait: the round is read BEFORE
+// the CR3 reload, so the reload covers every round up to it (shootdown.h).
+// What this CPU was running is two plain stores, made before the answer so a
+// waiter that sees the answer sees them: no lock, nothing logged from here.
 void inv_tlb_ISR()
 {
-    
     printd(DEBUG_SMP,"Flush\n");
-        __asm__("mov rax,cr3\ncmp rax,0\nje overflush\nmov cr3,rax\noverflush:\n");
-        write_eoi();
+    uint64_t covers = shootdown_flush_covers(&s_shootdown);
+    __asm__ volatile("mov rax,cr3\ncmp rax,0\nje overflush\nmov cr3,rax\noverflush:\n" ::: "rax", "memory");
+    uint32_t cpu = (uint32_t)cpu_self();
+    core_local_storage_t *cls = try_get_core_local_storage();
+    if (cpu < MAX_CPUS && cls != NULL)
+    {
+        s_flush_thread[cpu] = cls->currentThread != NULL ? cls->currentThread->threadID : 0;
+        s_flush_task[cpu] = cls->task != NULL ? cls->task->taskID : 0;
+    }
+    shootdown_flushed(&s_shootdown, cpu, covers);
+    write_eoi();
 }

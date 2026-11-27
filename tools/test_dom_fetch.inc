@@ -1622,7 +1622,8 @@ static void dom_xhr_zero_bound_case(void)
  * 64 MiB and whose body bound is `bound_mib` MiB. The bytes are the body
  * bound's, not the runtime's (XHR_BYTES.md): the first `loaded` complete,
  * each a Blob of every byte it received, and the rest fail as network
- * errors, and the page runs on either way. */
+ * errors, and the page runs on either way. The page keeps its Blobs, so
+ * the bytes the binding counts as held are still held after a collection. */
 static void dom_xhr_downloads_case(int n, int mib, bool declared, int bound_mib, int loaded)
 {
     FakeNet net = {0};
@@ -1631,9 +1632,10 @@ static void dom_xhr_downloads_case(int n, int mib, bool declared, int bound_mib,
     if (!fixture_ready(&f)) return;
     char script[640];
     snprintf(script, sizeof(script),
-             "globalThis.seen=0;globalThis.loads=[];globalThis.errors=0;for(let i=0;i<%d;i++){"
+             "globalThis.seen=0;globalThis.loads=[];globalThis.kept=[];globalThis.errors=0;for(let i=0;i<%d;i++){"
              "const x=new XMLHttpRequest();x.open('GET','/r'+i);x.responseType='blob';"
-             "x.onprogress=e=>{seen=Math.max(seen,e.loaded)};x.onload=()=>loads.push(x.response.size);"
+             "x.onprogress=e=>{seen=Math.max(seen,e.loaded)};"
+             "x.onload=()=>{kept.push(x.response);loads.push(x.response.size)};"
              "x.onerror=()=>errors++;x.send()}", n);
     dom_script(&f, script, "downloads: a speed test's requests");
     char length[64];

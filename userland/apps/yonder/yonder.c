@@ -50,15 +50,19 @@
 #include "keys.h"
 #include "os64/mediakeys.h"
 #include "media.h"
+#include "plane_place.h"
 #include "paint.h"
 #include "player.h"
 #include "strip.h"
 #include "keep.h"
+#include "load_timeline.h"
+#include "thread_reading.h"
 #include "picture.h"
 #include "svg.h"
 #include "webfont.h"
 #include "sheet.h"
 #include "scale.h"
+#include "canvas_keep.h"
 #include "warp.h"
 #include "filter.h"
 #include "census.h"
@@ -72,6 +76,7 @@
 #include "geometry.h"
 #include "events.h"
 #include "frame_plan.h"
+#include "task_order.h"
 #include "ticker.h"
 #include "trip.h"
 #include "download.h"
@@ -95,6 +100,14 @@ static const yonder_dark_t kDark = {.paper = 0x101010u};
 static bool s_dark;
 // --layout-profile enables phase clocks and the page record's layout totals.
 static bool s_layout_profile;
+// --cascade-check[=N] checks every Nth cascade update that changed
+// something (10 when no N is given), counted across every page this yonder
+// shows, against a cascade built fresh beside it (garb_cascade_compare); a
+// difference is printed on the terminal yonder was started from and, when
+// the page has a record, kept in it as `cascade check`. A measuring switch:
+// each check costs a whole cascade, which the layout profile leaves out of
+// the layout's own time.
+static uint32_t s_cascade_check, s_cascade_checked, s_cascade_differed;
 
 // THE PERSON'S MOTION SETTINGS (yonder.conf): `motion = reduce` has pages
 // told `prefers-reduced-motion: reduce`, and `animations = off` hands no
@@ -211,6 +224,7 @@ static yonder_cookies_mode_t s_cookies_asked;
 #define BELL_BODY (1u << 6)       // a script's request has more of its answer: bodies_turn hands it over
 #define BELL_MEDIA (1u << 7)      // a media element's sound has news: media_turn folds it in (media.h)
 #define BELL_KEYS (1u << 8)       // a media key was pressed for this window: keys_turn does it (keys.h)
+#define BELL_FULLSCREEN (1u << 9) // a page asked to enter or leave full screen: fs_turn answers it
 
 // A GIF frame that asks for 10 ms or less is shown for this long, as every
 // browser shows the ones that ask for "as fast as you can".
@@ -401,6 +415,17 @@ static struct {
     uint64_t chars_version, chars_layout;
     uint64_t chars[0x110000 / 64];
     uint16_t chars_upto[0x110000 / 64];
+    // Every character the document `met_doc` has held across its layouts
+    // since another document's last (webfonts_newly_met), the same way:
+    // what a face's ranges are met against (webfonts_meet), so text taken
+    // away does not unmeet a face. A face
+    // newly met changes the lists of text it does not draw (the list's first
+    // font gives a line its metrics, and a face coming holds a place), so
+    // the layouts' font revision moves then and only then
+    // (layout_font_dependencies).
+    const os64_html_document_t *met_doc;
+    uint64_t met[0x110000 / 64];
+    uint16_t met_upto[0x110000 / 64];
     // The answer page_fonts lends until its next call.
     os64_text_font_t *list[OS64_TEXT_FALLBACK_MAX];
     // What served each family the tree on screen asked for, for the
@@ -638,12 +663,15 @@ static uint64_t s_exit_started, s_exit_quiet_from;
 // record could claim no name, have been said, each said once a run.
 // `keep`: yonder.conf's `keep_pages`, which keeps each page beside its file
 // (diag.h), read with the directory; a page that could not be kept is said
-// once a run too.
+// once a run too. `on`: the setting names a directory, usable or not, read
+// once at the start; the status row's diagnostic texts are said only then
+// (status_set).
 static struct {
     char dir[OS64_PATH_MAX];
     uint32_t next;
     bool write_said, claim_said;
     bool keep, keep_said;
+    bool on;
 } s_diag = {.next = 1};
 
 // ── Pages ───────────────────────────────────────────────────────────────
@@ -824,6 +852,12 @@ typedef struct {
     bool flag;                      // libdom's show poster flag at the last turn (true with no scripts)
 } PosterSlot;
 
+// A page's ordinary task sources, in the order of priority among the young
+// (task_order.h; ordinary_task chooses among them).
+typedef enum {
+    TS_SCRIPT, TS_IMAGE, TS_MEDIA, TS_SHEET, TS_INTERSECTION, TS_QUEUED, TS_VIEW, TS_CLEANUP, TS_COUNT
+} TaskSource;
+
 // A page as the window holds it: libway's page (the tree, what it means,
 // the reader's flips) and its layout at the size it was laid out at. A
 // text/plain page has no tree of its own, so it is given one.
@@ -860,6 +894,9 @@ typedef struct Page {
     flow_timeline_t *timeline;
     int32_t laid_width, laid_height;    // device pixels
     uint32_t laid_zoom;                 // thousandths (flow_env_t.zoom)
+    // The form state's version the tree was laid out with (layout_inputs):
+    // a control's state moves without the document's version.
+    uint64_t laid_state;
     // The page's sheets, and their cascade at the size the tree was laid
     // out at; it is judged again when the size or the sheets change. The
     // tree points into both. `serial` names the page to a sheet's job.
@@ -873,6 +910,15 @@ typedef struct Page {
     uint64_t image_source_version;
     size_t image_source_count, image_source_bytes;
     garb_env_t image_environment;
+    // Moves whenever an image source's selection is made, completed or
+    // refused, when a change touches an image with no source yet or the
+    // changes cannot be read in full, and when the sources are let go
+    // (image_sources.inc): part of
+    // canvas_source_answers, which lets the binding's image check skip a
+    // pass while the answers stand still. A picture's arrival is an answer
+    // only once its source completes (image_sources_flush, which the
+    // image check's update runs before the answers are read).
+    uint64_t image_answers;
     Sheet *sheets;
     int32_t nsheets, sheets_waiting, sheets_ready;
     bool sheets_changed;
@@ -988,6 +1034,10 @@ typedef struct Page {
     uint64_t census_began;
     yonder_census_timeline_t census;
     PosterSlot posters[POSTERS_MAX];
+    // What the loop keeps of each of its task sources (task_order.h's
+    // task_age_t: since when its head has been ready, and its last run),
+    // by TaskSource.
+    task_age_t task_ages[TS_COUNT];
 } Page;
 
 static yonder_scripts_t *page_scripts(const Page *p);
@@ -1141,8 +1191,9 @@ static void page_session_free(Page *p)
 static struct {
     uint64_t fonts, pictures;
     bool exhausted;
-    const os64_html_document_t *font_doc;
-    uint64_t font_dom_version;
+    // The `@font-face` rules the fonts revision last stood for, as a digest
+    // (layout_font_dependencies).
+    uint64_t font_faces;
 } s_layout_resources;
 static void layout_revision(uint64_t *revision)
 {
@@ -1174,27 +1225,107 @@ static bool layout_inputs_same(flow_reuse_inputs_t a, flow_reuse_inputs_t b)
         a.fonts_revision == b.fonts_revision && a.replaced_revision == b.replaced_revision &&
         a.state_owner == b.state_owner && a.state_version == b.state_version;
 }
+// A digest of the `@font-face` rules: everything page_fonts reads of a face
+// to list it (family, style, weights, ranges, sources, and which sheet a
+// relative source resolves against; the sheet's and the page's addresses
+// refuse a graft by other inputs). Each text goes in with its length,
+// so no two rules differ only by where one text ends. FNV-1a: a collision
+// would let a graft cross a change of rules.
+static uint64_t font_faces_digest(const garb_font_face_t *faces, int32_t n)
+{
+    uint64_t h = 1469598103934665603ull;
+#define MIX(ptr, len) do { const unsigned char *b_ = (const unsigned char *)(ptr); \
+        for (size_t k_ = 0; k_ < (size_t)(len); k_++) h = (h ^ b_[k_]) * 1099511628211ull; } while (0)
+#define MIX_TEXT(ptr, len) do { size_t l_ = (ptr) != NULL ? (size_t)(len) : SIZE_MAX; MIX(&l_, sizeof(l_)); \
+        if ((ptr) != NULL) MIX(ptr, len); } while (0)
+    MIX(&n, sizeof(n));
+    for (int32_t i = 0; i < n; i++) {
+        const garb_font_face_t *f = &faces[i];
+        MIX_TEXT(f->family, f->family_len);
+        MIX(&f->nsrc, sizeof(f->nsrc));
+        MIX(&f->weight_min, sizeof(f->weight_min));
+        MIX(&f->weight_max, sizeof(f->weight_max));
+        MIX(&f->style, sizeof(f->style));
+        MIX(&f->sheet, sizeof(f->sheet));
+        MIX(&f->nranges, sizeof(f->nranges));
+        MIX(f->ranges, (size_t)f->nranges * sizeof(*f->ranges));
+        for (int32_t s = 0; s < f->nsrc; s++) {
+            MIX(&f->src[s].kind, sizeof(f->src[s].kind));
+            MIX_TEXT(f->src[s].text, f->src[s].len);
+            MIX_TEXT(f->src[s].format, f->src[s].format_len);
+        }
+    }
+#undef MIX_TEXT
+#undef MIX
+    return h;
+}
+static bool webfonts_newly_met(const Page *p, const garb_font_face_t *faces, int32_t nfaces);
+// THE FONTS REVISION (a graft's input: layout_inputs) moves when what a
+// layout's font lists are made of moves: a face's file arriving, failing
+// or let go (where those happen), the `@font-face` rules changing, or a face
+// newly met by the document's characters that yonder could load
+// (webfonts_newly_met says why that changes text it does not draw). A
+// DOM change by itself moves nothing: the text it brings is in the dirty
+// part, laid out afresh with the lists as they stand.
 static void layout_font_dependencies(const Page *p)
 {
-    const garb_font_face_t *faces;
-    const os64_html_document_t *doc = page_doc(p);
-    // unicode-range selection examines the document's characters, including
-    // text outside a candidate subtree. A DOM change can therefore change
-    // a web-font answer even before any file arrives.
-    if (s_laying.cascade && garb_cascade_font_faces(s_laying.cascade, &faces, NULL) > 0 &&
-        (s_layout_resources.font_doc != doc ||
-         s_layout_resources.font_dom_version != os64_html_version(doc))) {
+    const garb_font_face_t *faces = NULL;
+    int32_t n = s_laying.cascade ? garb_cascade_font_faces(s_laying.cascade, &faces, NULL) : 0;
+    uint64_t digest = font_faces_digest(faces, n);
+    bool moved = digest != s_layout_resources.font_faces;
+    s_layout_resources.font_faces = digest;
+    if (n > 0 && webfonts_newly_met(p, faces, n))
+        moved = true;
+    if (moved)
         layout_revision(&s_layout_resources.fonts);
-        s_layout_resources.font_doc = doc;
-        s_layout_resources.font_dom_version = os64_html_version(doc);
-    }
 }
 static void webfonts_layout_copied(Page *p, const flow_tree_t *tree);
 
 static void preloads_free(Page *p);
 
+// Full screen (the section beside layout, which says what these are):
+// leave it before anything that needs a hidden row or asks the person
+// something (the design state's C.7), with `notify` false when the page's
+// scripts are gone and hear nothing; a page that goes; and the provider a
+// page's scripts are given.
+#define FS_ROWS 14                  // the widgets the full-screen layout hides (kFsRows)
+static struct {
+    uint64_t serial;                // the page that asked
+    bool enter_owed, leave_owed;
+    bool active;
+    bool ours;
+    bool relayout_owed;             // a page went while full screen: the rows come back at the next turn
+    const os64_html_node_t *element;    // libdom's while `active`, held (fs_name)
+    const os64_html_document_t *held;   // the document `element` is held on
+    const os64_html_node_t *top;        // the top layer: `element`, or NULL for the root element
+    // The rows out of keyboard traversal (fs_rows_keys), and each row's own
+    // `focusable` to give back.
+    bool rows_out;
+    bool row_focusable[FS_ROWS];
+} s_fs;
+static void fs_leave(bool notify);
+static void fs_page_going(Page *p);
+static bool fs_consume(void *opaque);
+static void fs_enter_asked(void *opaque, const os64_html_node_t *element);
+static void fs_leave_asked(void *opaque);
+// What the pointer at the document point (x, y) is over on the page: what
+// flow_hit finds, or while an element other than the root is full screen,
+// what it finds inside that element alone (nothing outside it is there).
+static const flow_box_t *page_hit(int32_t x, int32_t y, flow_point_t scroll);
+// Whether a widget drawn over the page's box `b` is covered at the
+// document point (x, y), or at the box's centre: flow_box_covered's rule,
+// within the top layer while there is one.
+static bool page_covered_at(const flow_box_t *b, int32_t x, int32_t y, flow_point_t scroll);
+static bool page_covered(const flow_box_t *b, flow_point_t scroll);
+// Whether an element other than the root is full screen: what is shown,
+// hit and scrolled is that element alone.
+static bool fs_layer(void);
+
 static void page_clear(Page *p)
 {
+    // A navigation leaves full screen (the page hears nothing: it is going),
+    // before its tree goes, which the painter's top layer names a node of.
+    fs_page_going(p);
     if (p->npics) layout_revision(&s_layout_resources.pictures);
     measured_forget(page_doc(p));
     page_session_free(p);
@@ -1387,6 +1518,7 @@ static const flow_tree_t *layout_current(const os64_html_document_t *doc, flow_e
 static bool lay_out_page(Page *p, int32_t width, int32_t height);
 static void page_timeline(Page *p);
 static bool lay_out_page_reclaim(Page *p, int32_t width, int32_t height, Page *reclaim);
+static bool script_rebuild(void);
 
 // Window-owner count: a provider takes its delta to include layout retries.
 static uint64_t geometry_layout_total;
@@ -1401,8 +1533,9 @@ static bool page_rebuild_owed(const Page *p)
 
 // Counts the trees any Page has been given, so a reader can tell a new
 // layout from the old one even where the new tree has the old one's
-// address; and the animation ticks that moved boxes in the shown one
-// (tick_page). What intersections_turn reads for "something moved".
+// address; and the times boxes moved in the shown one with no new tree:
+// an animation's tick (tick_page), or a box that only moved, kept in it
+// (restyle_kept_shown). What intersections_turn reads for "something moved".
 static uint64_t s_trees_given, s_ticks_moved;
 
 // The tree a Page holds from now on, and with it the animations its layout
@@ -1410,7 +1543,11 @@ static uint64_t s_trees_given, s_ticks_moved;
 // into the timeline they replace.
 static void page_show(Page *p, flow_tree_t *tree)
 {
-    tree_free(p->tree);
+    // A restyle kept in the tree shows the tree it was kept in
+    // (flow_restyle_in_place): the same tree again, not one to free. It is
+    // still a tree given, which the observers read as something moved.
+    if (p->tree != tree)
+        tree_free(p->tree);
     p->tree = tree;
     s_trees_given++;
     flow_timeline_commit(&p->timeline, tree);
@@ -1453,7 +1590,88 @@ static struct {
     char what[96];
 } s_parts;
 
+// THE PARTS A SCRIPT'S CHANGE PAINTED (LAYOUT_NEEDS_N3.md): script_rebuild
+// arms it (`armed`) with the view in page coordinates before its layout and
+// reads it after. A restyle kept in the tree hands its parts here during
+// the layout (`kept`, and its flow_parts_why_t in `kept_parts`), the trees
+// compared hand theirs after it (change_parts). The parts are marked only
+// when they are the whole of the change; past the room (`over`) they are
+// not, and the whole view is.
+#define CHANGE_PARTS 64
+static struct {
+    bool armed;
+    os64_gui_rect_t view;
+    os64_gui_rect_t part[CHANGE_PARTS];
+    int32_t n;
+    bool over, kept;
+    int32_t kept_parts;
+    // The kept restyle's kind (a flow_restyle_kind_t), and, while
+    // `--damage-check` is on, what the change log held (change_log_said),
+    // for a check's line.
+    int32_t kept_kind;
+    char log[320];
+    // A reader of the change log opened at the shown tree's version before
+    // the layout, which holds the log there: a kept restyle opens the
+    // tree's own reader again at the new version, after which the log need
+    // not reach back (change_touched reads it, and frees it).
+    os64_html_reader_t *reader;
+    // A restyle that wrote the shown tree and then declined (`wrote`): the
+    // tree compared after it already holds some of the new styles. And the
+    // element a refusal named, for the record, named while the shown tree
+    // (whose removed nodes it may be) is alive.
+    bool wrote;
+    char named[96];
+    // The biggest part a box's change marked (`biggest`, -1 for none, by
+    // area in the view) and the element it was for, named while the trees
+    // are alive (change_parts), so the record can say what made a part
+    // past half the view and what marked the biggest part.
+    int32_t biggest;
+    const os64_html_node_t *biggest_node;
+    char biggest_named[96];
+    // The shown tree's cascade and how many updates it had taken, for the
+    // svgs' question (change_svgs): which of them its update restyled.
+    const garb_cascade_t *cascade;
+    uint64_t cascade_generation, cascade_updates;
+} s_change;
+
+// The element a box is drawn for: its own, or the nearest one round it for
+// a box with none (an anonymous block, a line's piece).
+static const os64_html_node_t *box_element(const flow_box_t *b)
+{
+    for (; b != NULL; b = b->parent)
+        if (b->node != NULL && b->node->kind == OS64_HTML_ELEMENT)
+            return b->node;
+    return NULL;
+}
+
+// A part a script's change painted (flow_change_parts, or a kept restyle's
+// marks), cut to the view, collected for script_rebuild, the biggest by
+// area and the element it was marked for kept beside them.
+static void change_mark(void *ctx, const flow_box_t *box, os64_gui_rect_t r)
+{
+    os64_gui_rect_t meet;
+    (void)ctx;
+    if (!os64_rect_intersect(r, s_change.view, &meet))
+        return;
+    if (s_change.n == CHANGE_PARTS) {
+        s_change.over = true;
+        return;
+    }
+    if (s_change.biggest < 0 || (int64_t)meet.w * meet.h > (int64_t)s_change.part[s_change.biggest].w *
+                                                            s_change.part[s_change.biggest].h) {
+        s_change.biggest = s_change.n;
+        s_change.biggest_node = box_element(box);
+    }
+    s_change.part[s_change.n++] = meet;
+}
+
 static void mark_part(os64_gui_rect_t r);
+static flow_point_t scroll_now(void);
+// For the counts' biggest part (mark_part): the box an animation's tick or
+// layout marks for (tick_mark, layout_mark), or the element a script's
+// change marked for, named (change_parts); NULL for every other mark.
+static const flow_box_t *s_marking_box;
+static const char *s_marking_named;
 
 // The face's half of a kept drawing's key (keep.h): moved by every mark
 // of the view made through mark_part or mark_whole but a tick's — a
@@ -1468,6 +1686,18 @@ static bool s_tick_marking;
 // A video's new picture marks its box: no group holding a video is kept
 // (paint.c spoil), so no kept drawing changed and the stamp holds.
 static bool s_video_marking;
+// The video whose own new picture is being marked (s_videos' index), -1 for
+// every other mark, and the marks since the last paint (window
+// coordinates), each with the video it was for: a paint tells a video's
+// own pictures from changes over it (planes_take_changes).
+static int32_t s_frame_marking = -1;
+#define PLANE_MARKS_MAX 32
+static struct {
+    os64_gui_rect_t r;
+    int32_t video;                  // the video whose own picture it marked; -1 any other mark
+} s_marks[PLANE_MARKS_MAX];
+static uint32_t s_nmarks;
+static bool s_marks_lost;           // more than PLANE_MARKS_MAX: every mark counts as a change
 // What the kept drawings may hold (keep.h), sheets and all: a lit
 // Lamplighter, its beam and eight lamps' rays at 150%, keeps about 16 MiB.
 #define KEEPS_BUDGET ((size_t)64 << 20)
@@ -1495,6 +1725,108 @@ static size_t element_named(char *out, size_t cap, const char *before, const os6
         out[at] = '\0';
     }
     return at;
+}
+
+// A table of things counted by what they were, each with where the latest
+// was (an element) and a note on it, the most counted first, for a
+// reading's line (counted_at_line); the reading starts it again
+// (counted_at_reset). A thing new to the table goes ahead of those
+// counted once. Full, it takes the place of the longest-standing of those
+// counted once, which is counted as `others`, or, when every row has been
+// counted more than once, it is counted as `others` itself: a burst of
+// one-offs (a page loading) cannot push out a thing counted twice, and a
+// thing that comes again before eleven newer ones has its row still.
+typedef struct {
+    struct {
+        char what[64], at[96], note[160];
+        uint64_t n;
+    } row[12];
+    int nrows;
+    uint64_t others;
+} CountedAt;
+
+// W0's tables (WHOLE_REPAINTS.md): the paints the guards would not cover
+// (cover_refusal_note) and what scripts' rebuilds changed
+// (script_changes_note), each since the last reading or the page shown.
+static CountedAt s_not_covered, s_script_changes;
+// N2's (BRIEF_LAYOUT_NEEDS.md): each layout a script's ask forced, by what
+// was pending before it (`why`: its class and what wrote it, or why
+// nothing could be said) and where; and how often the pending reader found
+// the change log lost, each since the last reading or the page shown.
+static CountedAt s_forced;
+static uint64_t s_pending_lost;
+// N3's (LAYOUT_NEEDS_N3.md § 5): each script's rebuild by how it was
+// painted, in parts, with nothing to paint, or whole and why, with the
+// element that refused; and the parts' area in all, since the last reading
+// or the page shown.
+static CountedAt s_script_parts;
+static uint64_t s_script_parts_area;
+// N2a's: each inline write judged a restyle because a selector may read
+// that element's style attribute, by element, since the last reading.
+static CountedAt s_style_reads;
+// Set while `--geometry-check` makes a page current to compare a read with
+// (read_checked): that layout is the check's, not one the page forced.
+static bool s_read_checking;
+
+static void counted_at_reset(CountedAt *t)
+{
+    t->nrows = 0;
+    t->others = 0;
+}
+
+static void counted_at(CountedAt *t, const char *what, const char *at, const char *note)
+{
+    const int rows = (int)(sizeof(t->row) / sizeof(t->row[0]));
+    int i = 0;
+    for (; i < t->nrows && (!os64_streq(t->row[i].what, what) || !os64_streq(t->row[i].at, at)); i++) {}
+    if (i == t->nrows) {
+        if (t->nrows == rows && t->row[rows - 1].n > 1) {
+            t->others++;
+            return;
+        }
+        if (t->nrows == rows)
+            t->others += t->row[--t->nrows].n;
+        i = t->nrows++;
+        os64_strcopy(t->row[i].what, sizeof(t->row[i].what), what);
+        os64_strcopy(t->row[i].at, sizeof(t->row[i].at), at);
+        t->row[i].n = 1;
+        os64_strcopy(t->row[i].note, sizeof(t->row[i].note), note);
+        for (; i > 0 && t->row[i - 1].n == 1; i--) {
+            __typeof__(t->row[0]) swap = t->row[i];
+            t->row[i] = t->row[i - 1];
+            t->row[i - 1] = swap;
+        }
+        return;
+    }
+    t->row[i].n++;
+    os64_strcopy(t->row[i].note, sizeof(t->row[i].note), note);
+    for (; i > 0 && t->row[i].n > t->row[i - 1].n; i--) {
+        __typeof__(t->row[0]) swap = t->row[i];
+        t->row[i] = t->row[i - 1];
+        t->row[i - 1] = swap;
+    }
+}
+
+// `what n: at (note); ...`, then `others n`; a row past the line's room is
+// left off whole.
+static void counted_at_line(const CountedAt *t, char *line, size_t cap)
+{
+    size_t used = 0;
+    line[0] = '\0';
+    for (int k = 0; k <= t->nrows; k++) {
+        if (k == t->nrows && t->others == 0)
+            break;
+        int w = k < t->nrows
+            ? os64_snprintf(line + used, cap - used, "%s%s %lu: %s%s%s%s", k ? "; " : "", t->row[k].what,
+                            (unsigned long)t->row[k].n, t->row[k].at[0] ? t->row[k].at : "-",
+                            t->row[k].note[0] ? " (" : "", t->row[k].note, t->row[k].note[0] ? ")" : "")
+            : os64_snprintf(line + used, cap - used, "%sothers %lu", k ? "; " : "", (unsigned long)t->others);
+        if (w < 0 || (size_t)w >= cap - used) {
+            line[used] = '\0';
+            break;
+        }
+        used += (size_t)w;
+    }
 }
 
 // What refused a layout's parts, as the record says it (`out`, empty for
@@ -1525,9 +1857,11 @@ static void layout_mark(void *ctx, const flow_box_t *box, os64_gui_rect_t r)
 {
     const os64_gui_rect_t *view = ctx;
     os64_gui_rect_t meet;
-    (void)box;
-    if (os64_rect_intersect(r, *view, &meet))
+    if (os64_rect_intersect(r, *view, &meet)) {
+        s_marking_box = box;
         mark_part(meet);
+        s_marking_box = NULL;
+    }
 }
 
 static int64_t layout_clock(void *opaque)
@@ -1550,25 +1884,60 @@ static void layout_profile_add(const Page *p, const yonder_layout_stats_t *sampl
     if (p->diag) yonder_diag_layout_add(diag, sample);
     else yonder_diag_layout_stream_add(diag, sample);
 }
+static void forced_one(const yonder_layout_one_t *one);
+static void forced_model(uint64_t us);
+static bool read_asked(void);
 static void layout_profile_one(const Page *p, const yonder_layout_one_t *one)
 {
     yonder_diag_t *diag = layout_profile_diag(p);
     if (p->diag) yonder_diag_layout_one(diag, one);
     else yonder_diag_layout_stream_one(diag, one);
 }
+// What the shown page's layouts walked against what they cost, since its
+// last written `d` (the record's `layout sizes reading` lines), while the
+// profile is on: per layout that finished, the nodes its document's arena
+// held (libhtml's node_count: every node allocated there and not yet freed,
+// in the document or not), the elements styled and the boxes made, and the
+// time from style to the public tree; per cascade updated or built fresh,
+// the elements it held (garb_cascade_elements) and its time; per model
+// rebuild, the arena's nodes and its time. diag_paint_reading
+// writes it and cost_reset starts it again.
+static struct {
+    uint64_t layouts, nodes, elements, boxes, us;
+    uint64_t updates, update_held, update_us, fresh, fresh_held, fresh_us;
+    uint64_t models, model_nodes, model_us;
+} s_sizes_reading;
+// The thread reading's clock while it runs (0 while it does not), and `in`
+// from `from` (tr_now's) to now inside the step under way (s_tr).
+static uint64_t tr_now(void);
+static void tr_inside(yonder_tr_in_t in, uint64_t from);
+static bool page_records_shown(const Page *p);
 static os64_page_t *profile_model_rebuild(const Page *p, const os64_page_t *old)
 {
     bool enabled = s_layout_profile && layout_profile_diag(p);
     int64_t began = enabled ? os64_micros() : -1;
+    uint64_t tr_from = tr_now();
     os64_page_t *model = os64_page_rebuild(old);
     layout_model_rebased(old, model);
+    tr_inside(YONDER_TR_IN_MODELS, tr_from);
     if (enabled) {
         yonder_layout_stats_t sample = {.model_calls = 1, .refusals = model == NULL};
         sample.model_us = layout_elapsed(began, &sample.clock_errors);
         layout_profile_add(p, &sample);
+        if (page_records_shown(p)) {
+            s_sizes_reading.models++;
+            s_sizes_reading.model_nodes += page_doc(p)->node_count;
+            s_sizes_reading.model_us += sample.model_us;
+        }
+        forced_model(sample.model_us);
     }
     return model;
 }
+// What the shown page's layouts needed since its last reading, or since
+// it was shown (the record's `layout needed reading` lines), while the
+// profile is on: diag_paint_reading writes it, and cost_reset starts it
+// again with the paint counts.
+static yonder_layout_needed_t s_needed_reading;
 // THE LAYOUT BEING TAKEN, whole (yonder_layout_one_t), while the profile
 // is on: page_lay_out opens it and hands it to the record; the cascade and
 // each attempt at the layout add to it.
@@ -1577,7 +1946,7 @@ static bool s_one_open;
 static flow_tree_t *profile_flow_layout(Page *p, int32_t width)
 {
     bool enabled = s_layout_profile && layout_profile_diag(p);
-    flow_profile_t profile = {0};
+    flow_profile_t profile = {.nodes_moved = -1};
     layout_font_dependencies(p);
     flow_reuse_inputs_t inputs = layout_inputs(p, NULL);
     // A cascade without change tracking will replace its generation after a
@@ -1606,6 +1975,53 @@ static flow_tree_t *profile_flow_layout(Page *p, int32_t width)
             .refusals = tree == NULL || flow_incomplete(tree)};
         _Static_assert(YONDER_LAYOUT_REUSE_REASONS == FLOW_REUSE_NREASONS, "layout refusal diagnostics");
         os64_memcpy(sample.reuse_refused, reuse.refused, sizeof(sample.reuse_refused));
+        _Static_assert(YONDER_LAYOUT_ROLES == FLOW_ROLES, "graft role diagnostics");
+        static const char *role_names[FLOW_ROLES];
+        for (int r = 0; r < FLOW_ROLES; r++) {
+            if (role_names[r] == NULL) role_names[r] = flow_role_name((flow_role_t)r);
+            sample.role_roots[r] = reuse.role_roots[r];
+            sample.role_boxes[r] = reuse.role_boxes[r];
+            sample.role_us[r] = reuse.role_us[r];
+            sample.role_inside[r] = reuse.role_inside[r];
+        }
+        sample.role_clock_errors = reuse.role_clock_errors;
+        sample.role_names = role_names;
+        _Static_assert(YONDER_LAYOUT_INTRINSIC_REFUSALS == FLOW_INTRINSIC_NREFUSALS, "intrinsic copy diagnostics");
+        static const char *intrinsic_refusal_names[FLOW_INTRINSIC_NREFUSALS];
+        for (int r = 0; r < FLOW_INTRINSIC_NREFUSALS; r++) {
+            if (intrinsic_refusal_names[r] == NULL)
+                intrinsic_refusal_names[r] = flow_intrinsic_refusal_name((flow_intrinsic_refusal_t)r);
+            sample.intrinsic_refused[r] = reuse.intrinsic_refused[r];
+        }
+        for (int r = 0; r <= FLOW_ROLES; r++) sample.intrinsic_role_roots[r] = reuse.intrinsic_role_roots[r];
+        sample.intrinsic_roots = reuse.intrinsic_roots;
+        sample.intrinsic_refusal_names = intrinsic_refusal_names;
+        // What it needed (yonder_needed_t), if it finished: one that did not
+        // is laid out again or let go, and is no answer. yonder runs the
+        // whole pipeline whatever the answer, so a layout of the first three
+        // kinds styled, built and placed (or grafted) boxes none of which
+        // moved. The shown page's own are its reading's too.
+        if (tree != NULL && !flow_incomplete(tree)) {
+            yonder_needed_t need = profile.nodes_moved < 0 ? YONDER_NEEDED_UNCOMPARED
+                : profile.nodes_moved == 0 ? (profile.styles_layout > 0 ? YONDER_NEEDED_STILL
+                                              : profile.styles_paint > 0 ? YONDER_NEEDED_PAINT : YONDER_NEEDED_NOTHING)
+                : profile.nodes_moved == 1 ? YONDER_NEEDED_ONE : YONDER_NEEDED_MORE;
+            int forced = read_asked();
+            sample.needed.count[forced][need] = 1;
+            sample.needed.us[forced][need] = profile.style_us + profile.boxes_us + profile.layout_us + profile.public_us;
+            if (need != YONDER_NEEDED_UNCOMPARED)
+                sample.needed.restyled[forced] = profile.styles_paint + profile.styles_layout;
+            if (page_records_shown(p)) {
+                s_sizes_reading.layouts++;
+                s_sizes_reading.nodes += page_doc(p)->node_count;
+                s_sizes_reading.elements += profile.elements;
+                s_sizes_reading.boxes += profile.boxes;
+                s_sizes_reading.us += sample.needed.us[forced][need];
+                s_needed_reading.count[forced][need]++;
+                s_needed_reading.us[forced][need] += sample.needed.us[forced][need];
+                s_needed_reading.restyled[forced] += sample.needed.restyled[forced];
+            }
+        }
         layout_profile_add(p, &sample);
         if (s_one_open) {
             s_one.style_us += sample.style_us;
@@ -1742,6 +2158,313 @@ static size_t adopted_read(const yonder_scripts_t *scripts, const os64_html_node
     return n < *cap ? n : *cap;
 }
 
+// THE RESTYLE KEPT IN THE SHOWN TREE (flow_restyle_in_place), on unless
+// `--restyle-in-place=off` asks for every change to be laid out, to compare.
+// `--geometry-check[=N]` lays every Nth kept tree out whole beside itself
+// and compares (restyle_kept_shown), counting the compared and the differed.
+// That whole layout is a layout of the page like any other: it stages the
+// web fonts it meets, whose arrival moves the fonts' revision, so a run
+// with the check on keeps a little less than one without it.
+static bool s_restyle_in_place = true;
+static uint32_t s_geometry_check, s_geometry_checked;
+static uint64_t s_geometry_compared, s_geometry_differed;
+// The same check over the trees a NONE verdict advanced (rebuild_unchanged),
+// the record's `unchanged check`.
+static uint32_t s_unchanged_checked;
+static uint64_t s_unchanged_compared, s_unchanged_differed;
+// What a read making the page current asks of it (script_current): a
+// READ_ kind, or -1 when no read is asking (a rendering step, a task's end,
+// the window seen, a resize: any other rebuild).
+static int s_asking = -1;
+// A GEOMETRY READ ANSWERED FROM THE SHOWN TREE (BRIEF_LAYOUT_NEEDS.md N2,
+// libflow's pending.inc), on unless `--kept-reads=off`: an offset or client
+// read, or a scroll read with no transform pending, whose page has only
+// paint-only inline style writes pending, read with no model refresh, no
+// cascade update and no restyle (script_geometry). The same switch lets a
+// covered window owe its rendering step (script_rendering_step), and lets a
+// rebuild owed for changes that moved nothing advance the tree with no
+// layout (shown_advance).
+// `--geometry-check[=N]` answers every Nth such read the old way too and
+// compares (s_reads_compared, s_reads_differed).
+static bool s_kept_reads = true;
+static uint32_t s_reads_checked;
+static uint64_t s_reads_compared, s_reads_differed;
+// What N2's verdict is for the page on screen, its tree standing for a
+// layout at the view's size; RESTYLE when it cannot stand.
+static flow_pending_t shown_pending(void);
+static bool shown_advance(void);
+// A read that met only paint-only writes pending and made the page current
+// all the same, by kind (reads_counted).
+enum { READ_RECTS, READ_SCROLL, READ_STYLES, READ_HITS };
+// One of N2's events, counted in the record's `layout reads` line while the
+// profile is on: a read answered from the kept tree, a read of kind `laid`
+// that made the page current with PAINT pending (-1 for none), or a
+// rendering step a covered window owed.
+static const char *const kReadKindNames[YONDER_LAYOUT_READ_KINDS] = {"rects", "scroll", "styles", "hits"};
+static void reads_counted(const Page *p, int laid, bool kept, bool owed)
+{
+    if (!s_layout_profile || layout_profile_diag(p) == NULL)
+        return;
+    yonder_layout_stats_t sample = {.read_kind_names = kReadKindNames, .reads_kept = kept, .owed_covered = owed};
+    if (laid >= 0 && laid < YONDER_LAYOUT_READ_KINDS) sample.reads_laid[laid] = 1;
+    layout_profile_add(p, &sample);
+}
+// A rebuild a NONE verdict made with no layout (rebuild_unchanged), counted
+// in the record's `layout reads` line by the read that asked for it
+// (s_asking), or as another rebuild's.
+static void unchanged_counted(const Page *p)
+{
+    if (!s_layout_profile || s_read_checking || layout_profile_diag(p) == NULL)
+        return;
+    yonder_layout_stats_t sample = {.read_kind_names = kReadKindNames};
+    if (s_asking >= 0 && s_asking < YONDER_LAYOUT_READ_KINDS) sample.reads_unchanged[s_asking] = 1;
+    else sample.others_unchanged = 1;
+    layout_profile_add(p, &sample);
+}
+
+// The shown tree, when `p` is a staged rebuild of the page on screen at its
+// own sizes and the restyle kept in that tree took the change; NULL when it
+// is no such layout or the restyle declined.
+static flow_tree_t *restyle_kept_shown(Page *p, Page *reclaim, int32_t width, int32_t height, uint32_t zoom);
+// A restyle kept or declined, counted in the record's `layout kept` line
+// while the profile is on.
+static void restyle_counted(const Page *p, flow_restyle_t kept)
+{
+    static const char *const names[YONDER_LAYOUT_RESTYLE_REASONS] = {
+        "none", "no tree", "no history", "structure", "inputs", "styles", "membership",
+        "geometry", "motion", "stacking", "decoration", "room"};
+    _Static_assert(YONDER_LAYOUT_RESTYLE_REASONS == FLOW_RESTYLE_NREASONS, "restyle refusal diagnostics");
+    if (!s_layout_profile || layout_profile_diag(p) == NULL)
+        return;
+    yonder_layout_stats_t sample = {.restyle_reason_names = names};
+    if (kept.kind == FLOW_RESTYLE_NOTHING) sample.kept_nothing = 1;
+    else if (kept.kind == FLOW_RESTYLE_PAINT && kept.moved > 0) sample.kept_moved = 1, sample.kept_moved_boxes = kept.moved;
+    else if (kept.kind == FLOW_RESTYLE_PAINT) sample.kept_paint = 1;
+    else if ((unsigned)kept.why < YONDER_LAYOUT_RESTYLE_REASONS) sample.kept_declined[kept.why] = 1;
+    layout_profile_add(p, &sample);
+    if (kept.kind != FLOW_RESTYLE_DECLINED || (unsigned)kept.why >= YONDER_LAYOUT_RESTYLE_REASONS)
+        return;
+    // `layout kept, declined at`: the declines by reason and what was found,
+    // counted, each with the element of the latest, the most counted first,
+    // for the record being written (a new record starts it again). Those past
+    // the table's room are counted as `others`; entries past the line's room
+    // are left off whole.
+    static struct { uint8_t why; char detail[48], at[96]; uint64_t n; } seen[16];
+    static int nseen;
+    static uint64_t others;
+    static const yonder_diag_t *seen_for;
+    yonder_diag_t *diag = layout_profile_diag(p);
+    if (diag != seen_for) {
+        seen_for = diag;
+        nseen = 0;
+        others = 0;
+    }
+    int i = 0;
+    for (; i < nseen && (seen[i].why != kept.why || !os64_streq(seen[i].detail, kept.detail)); i++) {}
+    if (i == nseen && nseen < (int)(sizeof(seen) / sizeof(seen[0]))) {
+        seen[nseen].why = (uint8_t)kept.why;
+        os64_strcopy(seen[nseen].detail, sizeof(seen[nseen].detail), kept.detail);
+        seen[nseen].n = 0;
+        nseen++;
+    }
+    if (i == nseen) {
+        others++;
+    } else {
+        seen[i].n++;
+        seen[i].at[0] = '\0';
+        if (kept.at != NULL)
+            element_named(seen[i].at, sizeof(seen[i].at), "", kept.at);
+        for (; i > 0 && seen[i].n > seen[i - 1].n; i--) {
+            __typeof__(seen[0]) swap = seen[i];
+            seen[i] = seen[i - 1];
+            seen[i - 1] = swap;
+        }
+    }
+    char line[768] = "";
+    size_t used = 0;
+    for (int k = 0; k <= nseen; k++) {
+        if (k == nseen && others == 0)
+            break;
+        int w = k < nseen
+            ? os64_snprintf(line + used, sizeof(line) - used, "%s%s %lu: %s%s%s%s", k ? "; " : "",
+                            names[seen[k].why], (unsigned long)seen[k].n, seen[k].detail[0] ? seen[k].detail : "-",
+                            seen[k].at[0] ? " (at " : "", seen[k].at, seen[k].at[0] ? ")" : "")
+            : os64_snprintf(line + used, sizeof(line) - used, "%sothers %lu", k ? "; " : "", (unsigned long)others);
+        if (w < 0 || (size_t)w >= sizeof(line) - used) {
+            line[used] = '\0';
+            break;
+        }
+        used += (size_t)w;
+    }
+    yonder_diag_summary_fact(diag, "layout kept, declined at", line);
+}
+
+// `offset writes` (N4's size, while the profile is on): of a script's
+// rebuilds, how many held an inline style write whose changed longhands
+// are all insets (garb_cascade_inline_changes, asked before the layout
+// updates the cascade), and of those how many held nothing a kept restyle
+// declines as structural (flow_change_structural) and how many held such a
+// change too, with what and where the latest was, for the record being
+// written (a new record starts them again). A box that only moves is kept
+// only when its rebuild holds no structural change.
+static void offsets_noted(const Page *p, uint64_t from)
+{
+    static uint64_t held, alone, beside;
+    static char latest[160];
+    static const yonder_diag_t *for_diag;
+    yonder_diag_t *diag = layout_profile_diag(p);
+    if (!s_layout_profile || diag == NULL || p->cascade == NULL)
+        return;
+    if (diag != for_diag) {
+        for_diag = diag;
+        held = alone = beside = 0;
+        latest[0] = '\0';
+    }
+    const os64_html_document_t *doc = page_doc(p);
+    os64_html_reader_t *reader = os64_html_reader_new((os64_html_document_t *)doc, from);
+    const os64_html_change_entry_t *entry = NULL;
+    if (reader == NULL || os64_html_changes(reader, &entry) < 0) {
+        os64_html_reader_free(reader);
+        return;
+    }
+    int32_t offsets = 0;
+    const os64_html_change_entry_t *structural = NULL;
+    for (; entry != NULL; entry = entry->next) {
+        if (flow_change_structural(doc, entry)) {
+            structural = entry;
+            continue;
+        }
+        if (entry->kind != OS64_HTML_CHANGE_ATTR || entry->attr_ns != NULL || entry->attr_name == NULL ||
+            !os64_streq(entry->attr_name, "style") || entry->target == NULL ||
+            entry->target->kind != OS64_HTML_ELEMENT)
+            continue;
+        garb_inline_change_t changes[16];
+        int32_t n = garb_cascade_inline_changes(p->cascade, entry->target, changes, 16);
+        bool insets = n > 0;
+        for (int32_t i = 0; i < n && insets; i++)
+            insets = changes[i].prop == GARB_TOP || changes[i].prop == GARB_RIGHT ||
+                     changes[i].prop == GARB_BOTTOM || changes[i].prop == GARB_LEFT;
+        offsets += insets;
+    }
+    if (offsets > 0) {
+        held++;
+        if (structural == NULL) {
+            alone++;
+        } else {
+            beside++;
+            const os64_html_node_t *n = structural->target;
+            while (n != NULL && n->kind != OS64_HTML_ELEMENT)
+                n = os64_html_shadow_including_parent(n);
+            char named[96] = "the document";
+            if (n != NULL)
+                element_named(named, sizeof(named), "", n);
+            os64_snprintf(latest, sizeof(latest), "%s%.48s at %s",
+                          structural->kind == OS64_HTML_CHANGE_CHILDREN ? "children"
+                          : structural->kind == OS64_HTML_CHANGE_TEXT   ? "text"
+                          : structural->kind == OS64_HTML_CHANGE_STATE  ? "adopted sheets"
+                                                                         : "attribute ",
+                          structural->kind == OS64_HTML_CHANGE_ATTR && structural->attr_name != NULL
+                              ? structural->attr_name : "",
+                          named);
+        }
+        char said[320];
+        os64_snprintf(said, sizeof(said),
+                      "%lu rebuilds held a style write that changed only insets: %lu with no structural change, "
+                      "%lu with one%s%s%s",
+                      (unsigned long)held, (unsigned long)alone, (unsigned long)beside,
+                      latest[0] != '\0' ? " (the latest: " : "", latest, latest[0] != '\0' ? ")" : "");
+        yonder_diag_summary_fact(diag, "offset writes", said);
+    }
+    os64_html_reader_free(reader);
+}
+
+// THE LOAD'S TIMELINE (load_timeline.h): the latest navigation's first
+// minutes, step by step, kept only while yonder.conf names a diagnostics
+// directory, and written to that navigation's record alone: the one begun
+// at s_lt.began_us (lt_ours). While it runs, its hooks read the clock;
+// once it has stopped, each costs the test of s_lt.on. A fresh cascade
+// built while it runs is handed its clock (lt_clock), which has libgarb
+// keep its measure (the build's parts, a broad refusal's trigger), and
+// keeps it for that cascade's life: each of its updates then counts its
+// changes' marks, a few counters a change, whether or not anyone reads
+// them.
+static yonder_lt_t s_lt;
+
+// WHERE THE THREAD WENT SINCE THE LAST READING (thread_reading.h): on while
+// yonder.conf names a diagnostics directory, which is where the readings
+// are written, and started again at each reading and each page shown
+// (tr_restart). Its clock is the counter (cycles). Off, each hook costs
+// the test of s_tr.on.
+static yonder_tr_t s_tr;
+static uint64_t s_tr_per_ms;    // the counter's rate when the reading began
+static const yonder_scripts_t *s_tr_host;  // whose collector it began counting
+// The page's binding whose every-turn checks the reading counts, and its
+// count at the last turn's close (tr_checked_turn).
+static const yonder_scripts_t *s_tr_checked_host;
+static uint64_t s_tr_checked_seen;
+
+// WHO ASKED for the layouts made between an lt_why_begin and its
+// lt_why_end (page_lay_out tells the timeline, and the profile counts as
+// forced the layouts a read asked for, read_asked): the outermost asker
+// stands, so a rebuild a script's read asks for is the read's. Set only
+// while the timeline or the profile runs; the end puts back what the begin
+// found.
+static yonder_lt_why_t s_lt_why;
+
+static uint64_t lt_clock(void)
+{
+    return (uint64_t)os64_micros();
+}
+
+// An update the cascade refused: when libgarb refused it as broad, what
+// triggered it goes to the timeline (garb_cascade_broad_trigger).
+static void lt_cascade_refused(const garb_cascade_t *c)
+{
+    garb_broad_trigger_t b;
+    if (!garb_cascade_broad_trigger(c, &b))
+        return;
+    static const char *const kKind[] = {"a change", "children", "an attribute", "text", "a state"};
+    const char *kind = b.kind > 0 && b.kind < (int32_t)(sizeof(kKind) / sizeof(kKind[0])) ? kKind[b.kind] : kKind[0];
+    char text[YONDER_LT_BROAD_TEXT];
+    size_t at = 0;
+    int k = os64_snprintf(text, sizeof(text), "%s%s%s of %s at depth %u marked %u of %u elements (", kind,
+                          b.attr[0] ? " " : "", b.attr, b.target, (unsigned)b.depth, (unsigned)b.marked,
+                          (unsigned)b.slots);
+    at = k > 0 && (size_t)k < sizeof(text) ? (size_t)k : sizeof(text) - 1;
+    const char *sep = "";
+    for (int m = 0; m < GARB_MARKS && at < sizeof(text); m++) {
+        if (b.by[m] == 0)
+            continue;
+        k = os64_snprintf(text + at, sizeof(text) - at, "%s%s %u", sep, garb_mark_name((garb_mark_t)m),
+                          (unsigned)b.by[m]);
+        at = k > 0 && (size_t)k < sizeof(text) - at ? at + (size_t)k : sizeof(text) - 1;
+        sep = ", ";
+    }
+    if (at < sizeof(text)) {
+        k = os64_snprintf(text + at, sizeof(text) - at, "); %u of the batch's %u changes had marked %u when refused",
+                          (unsigned)b.marked_changes, (unsigned)b.changes, (unsigned)b.dirty);
+        at = k > 0 && (size_t)k < sizeof(text) - at ? at + (size_t)k : sizeof(text) - 1;
+    }
+    // Filed by the mark that marked most in the trigger.
+    int most = -1;
+    for (int m = 0; m < GARB_MARKS; m++)
+        if (b.by[m] != 0 && (most < 0 || b.by[m] > b.by[most])) most = m;
+    yonder_lt_broad(&s_lt, os64_micros(), b.marked, most >= 0 ? garb_mark_name((garb_mark_t)most) : NULL, text);
+}
+
+// A fresh cascade libgarb timed by part: to the timeline, by who asked,
+// with whether it took a kept read and, if not, why it read again.
+static void lt_cascade_built(const garb_cascade_t *c)
+{
+    garb_build_cost_t k = garb_cascade_build_cost(c);
+    if (k.sheets == 0 && k.table == 0 && k.matching == 0)
+        return;
+    garb_read_refusal_t again = garb_cascade_read_refusal(c);
+    yonder_lt_build_t b = {k.sheets, k.table, k.matching, k.rules, k.elements, again == GARB_READ_KEPT,
+                           again == GARB_READ_KEPT ? NULL : garb_read_refusal_name(again)};
+    yonder_lt_build(&s_lt, s_lt_why, &b);
+}
+
 // The reasons a layout's cascade is built fresh, by the profile's index:
 // yonder's own (none yet, no memory for the scopes, sheets changed, sheets
 // that no longer match), then libgarb's refusals in their order, by
@@ -1757,6 +2480,83 @@ static const char *const *cascade_reason_names(void)
         for (int32_t i = 0; i < 4; i++) names[i] = kOwn[i];
     }
     return names;
+}
+
+// --cascade-check's one check: the cascade just updated against one built
+// fresh from the same sheets, scopes and view, with the same limits.
+static void cascade_check(const Page *p, const garb_cascade_t *updated, const garb_sheet_in_t *in, int32_t n,
+                          const PageScopes *ps, garb_env_t view)
+{
+    garb_cascade_limits_t limits = {s_page_memory.cascade, GARB_CASCADE_READ_MAX, GARB_ARENA_MAX, SIZE_MAX, NULL, NULL, false};
+    garb_cascade_t *fresh = garb_cascade_scoped(in, n, ps->scopes, ps->nscopes, page_doc(p), view,
+                                                s_page_memory.cascade != 0 ? &limits : NULL);
+    if (fresh == NULL || garb_cascade_incomplete(fresh)) {
+        garb_cascade_free(fresh);
+        return;
+    }
+    char why[1024];
+    bool same = garb_cascade_compare(updated, fresh, page_doc(p), why, sizeof(why));
+    garb_cascade_free(fresh);
+    if (same) return;
+    // The page's own bytes (an id, a value, a selector) reach a terminal
+    // that obeys escape sequences: a control byte is shown as `?`.
+    for (char *c = why; *c != '\0'; c++)
+        if ((unsigned char)*c < 0x20 || (unsigned char)*c == 0x7f) *c = '?';
+    s_cascade_differed++;
+    os64_printf("yonder: cascade check: update %u differs from a fresh cascade at %s\n", s_cascade_checked, why);
+    char line[1200];
+    os64_snprintf(line, sizeof(line), "this yonder's checks: %u of %u differed; the latest, on this page, at %s",
+                  s_cascade_differed, s_cascade_checked / s_cascade_check, why);
+    yonder_diag_fact(layout_profile_diag(p), "cascade check", line);
+}
+
+// --cascade-check's check of a kept read (KEPT_READ.md): one fresh build in
+// `s_cascade_check` that took its read from the cascade it replaced is
+// asked whether that read had been written since it was made
+// (garb_cascade_read_written, under check_read), then compared with a
+// cascade that read the sheets again: their reads' shapes
+// (garb_cascade_read_content), then every element's winners
+// (garb_cascade_compare), which is what a key that missed something would
+// change.
+// Every check is counted in the record's `kept read check` fact, so a run
+// whose reads all agreed says so; a difference is also printed. The fact
+// takes the timeline's room: a busy page fills the ordinary one first.
+static uint32_t s_read_checked, s_read_differed;
+static void kept_read_check(const Page *p, const garb_cascade_t *built, const garb_sheet_in_t *in, int32_t n,
+                            const PageScopes *ps, garb_env_t view, garb_cascade_limits_t limits)
+{
+    if (++s_read_checked % s_cascade_check != 0)
+        return;
+    limits.read_from = NULL;
+    limits.check_read = false;
+    limits.clock = NULL;
+    garb_cascade_t *fresh = garb_cascade_scoped(in, n, ps->scopes, ps->nscopes, page_doc(p), view, &limits);
+    const char *wrong = NULL;
+    char why[512];
+    if (garb_cascade_read_written(built))
+        wrong = "the kept read had been written since it was made";
+    else if (fresh != NULL && !garb_cascade_incomplete(fresh) &&
+             garb_cascade_read_content(fresh) != garb_cascade_read_content(built))
+        wrong = "the kept read differs from the sheets read again";
+    else if (fresh != NULL && !garb_cascade_incomplete(fresh) &&
+             !garb_cascade_compare(built, fresh, page_doc(p), why, sizeof(why))) {
+        // The page's own bytes reach a terminal that obeys escape
+        // sequences: a control byte is shown as `?`.
+        for (char *x = why; *x != '\0'; x++)
+            if ((unsigned char)*x < 0x20 || (unsigned char)*x == 0x7f) *x = '?';
+        wrong = why;
+    }
+    garb_cascade_free(fresh);
+    static char latest[512];
+    if (wrong != NULL) {
+        s_read_differed++;
+        os64_snprintf(latest, sizeof(latest), "%s", wrong);
+        os64_printf("yonder: kept read check: %s\n", wrong);
+    }
+    char line[640];
+    os64_snprintf(line, sizeof(line), "this yonder's checks: %u of %u differed%s%s", s_read_differed,
+                  s_read_checked / s_cascade_check, latest[0] != '\0' ? "; the latest: " : "", latest);
+    yonder_diag_timeline_fact(layout_profile_diag(p), "kept read check", line);
 }
 
 static void measured_fallback(Page *p);
@@ -1817,18 +2617,87 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     bool matches = scoped && !fresh_sheets &&
                    garb_cascade_matches_scoped(cascade, in, n, ps.scopes, ps.nscopes, view);
     bool updated = matches && garb_cascade_update(cascade);
+    if (s_lt.on && matches) {
+        garb_back_work_t back = garb_cascade_back_work(cascade);
+        yonder_lt_back(&s_lt, os64_micros(), back.walks, back.walked, back.turned);
+        garb_has_subject_work_t hs = garb_cascade_has_subject_work(cascade);
+        yonder_lt_has_subjects(&s_lt, os64_micros(), hs.visited, hs.marked, hs.turned_away, hs.turned_away_change,
+                               hs.entries, hs.bare);
+        garb_reader_work_t rw = garb_cascade_reader_work(cascade);
+        yonder_lt_readers_t lr = {.front_walks = rw.front_walks, .front_walked = rw.front_walked,
+                                  .front_turned = rw.front_turned, .walks = rw.walks, .walked = rw.walked,
+                                  .readers = (uint64_t)rw.readers, .bare = (uint64_t)rw.bare};
+        static const char *asker_names[GARB_ASKERS];
+        for (int k = 0; k < GARB_ASKERS && k < YONDER_LT_ASKERS; k++) {
+            lr.asked[k] = rw.asked[k];
+            lr.passed[k] = rw.passed[k];
+            lr.reached[k] = rw.reached[k];
+            if (asker_names[k] == NULL) asker_names[k] = garb_asker_name((garb_asker_t)k);
+        }
+        yonder_lt_readers(&s_lt, os64_micros(), &lr, GARB_ASKERS, asker_names);
+        garb_update_marks_t marks = garb_cascade_update_marks(cascade);
+        static const char *mark_names[GARB_MARKS];
+        if (mark_names[0] == NULL)
+            for (int k = 0; k < GARB_MARKS; k++) mark_names[k] = garb_mark_name((garb_mark_t)k);
+        if (updated && marks.marked != 0)
+            yonder_lt_marks(&s_lt, os64_micros(), marks.marked, marks.by, GARB_MARKS, mark_names);
+        if (updated && marks.recomputed != 0) {
+            char names[96];
+            garb_cascade_recompute_names(cascade, names, sizeof(names));
+            yonder_lt_recompute(&s_lt, os64_micros(), marks.recomputed, marks.recompute_pruned,
+                                marks.recompute_changed, marks.recompute_whole, names);
+        }
+    }
     // Why it is built fresh, for the layout profile: yonder's own reasons
     // (cascade_reason_names), then libgarb's.
     int32_t why = updated ? -1 : cascade == NULL ? 0 : !scoped ? 1 : fresh_sheets ? 2 : !matches ? 3
                 : 3 + (int32_t)garb_cascade_update_refusal(cascade);
+    // A renewal for its bytes, read before the cascade is replaced: the
+    // updates it lived and what it retained.
+    uint64_t renew_updates = 0, renew_bytes = 0, renew_budget = 0;
+    bool renewed = !updated && cascade != NULL && matches &&
+                   (garb_cascade_update_refusal(cascade) == GARB_UPDATE_RETAINED ||
+                    garb_cascade_update_refusal(cascade) == GARB_UPDATE_ATTRIBUTES);
+    if (renewed && s_layout_profile) {
+        size_t budget = 0;
+        renew_bytes = garb_cascade_retained(cascade, &budget);
+        renew_budget = budget;
+        renew_updates = garb_cascade_updates(cascade);
+    }
     if (!updated) {
+        // Only an update this layout asked for, refused as broad, has a
+        // trigger to tell.
+        if (s_lt.on && matches && garb_cascade_update_refusal(cascade) == GARB_UPDATE_BROAD)
+            lt_cascade_refused(cascade);
+        // The read is held first: the measuring page's fallback frees the
+        // cascade it replaces before the new one is built.
+        garb_read_t *held = garb_cascade_read_hold(cascade);
         measured_fallback(p);
-        // The cascade's own state is held to its share of page_memory_mb;
-        // what it reads of the sheets, and each style attribute's parse,
-        // keep libgarb's ceilings (yonder_page_memory_split says why).
-        garb_cascade_limits_t limits = {s_page_memory.cascade, GARB_CASCADE_READ_MAX, GARB_ARENA_MAX, SIZE_MAX};
-        cascade = scoped ? garb_cascade_scoped(in, n, ps.scopes, ps.nscopes, page_doc(p), view,
-                                               s_page_memory.cascade != 0 ? &limits : NULL) : NULL;
+        // The cascade's own state is held to its share of page_memory_mb
+        // (libgarb's own ceiling when that sets none); what it reads of the
+        // sheets, and each style attribute's parse, keep libgarb's ceilings
+        // (yonder_page_memory_split says why). It may take the read of
+        // the cascade it replaces (KEPT_READ.md: the sheets read again only
+        // when the key differs); --cascade-check checks the read it takes.
+        // While the load's timeline runs it hands libgarb its clock.
+        garb_cascade_limits_t limits = {s_page_memory.cascade != 0 ? s_page_memory.cascade : GARB_ARENA_MAX,
+                                        GARB_CASCADE_READ_MAX, GARB_ARENA_MAX, SIZE_MAX, NULL, held,
+                                        s_cascade_check != 0};
+        if (s_lt.on)
+            limits.clock = lt_clock;
+        cascade = scoped ? garb_cascade_scoped(in, n, ps.scopes, ps.nscopes, page_doc(p), view, &limits) : NULL;
+        garb_read_release(held);
+        if (s_lt.on && cascade != NULL)
+            lt_cascade_built(cascade);
+        if (s_cascade_check != 0 && cascade != NULL && garb_cascade_read_refusal(cascade) == GARB_READ_KEPT)
+            kept_read_check(p, cascade, in, n, &ps, view, limits);
+    } else if (s_cascade_check != 0 && garb_cascade_updates(cascade) != prior_updates &&
+               ++s_cascade_checked % s_cascade_check == 0) {
+        // The check's own time is no part of this layout's: the profile's
+        // clock is moved on past it.
+        int64_t checked_at = began >= 0 ? os64_micros() : -1;
+        cascade_check(p, cascade, in, n, &ps, view);
+        if (began >= 0) began += os64_micros() - checked_at;
     }
     page_scopes_free(&ps);
     if (s_layout_profile && layout_profile_diag(p)) {
@@ -1836,9 +2705,32 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
             .cascade_updates = updated && garb_cascade_updates(cascade) != prior_updates,
             .cascade_reason_names = cascade_reason_names()};
         if (why >= 0 && why < YONDER_LAYOUT_CASCADE_REASONS) sample.cascade_refused[why] = 1;
+        if (renewed) {
+            sample.renewals = 1;
+            sample.renew_updates = sample.renew_updates_most = renew_updates;
+            sample.renew_bytes = renew_bytes;
+            sample.renew_budget = renew_budget;
+        }
         sample.cascade_us = layout_elapsed(began, &sample.clock_errors);
+        int32_t anchors = 0, bare = 0;
+        garb_cascade_anchors(cascade, &anchors, &bare);
+        sample.anchors_peak = (uint64_t)anchors;
+        sample.anchors_bare_peak = (uint64_t)bare;
+        if (sample.cascade_updates) {
+            garb_bare_work_t work = garb_cascade_bare_work(cascade);
+            sample.bare_tested = work.tested;
+            sample.bare_turned = work.turned;
+            sample.bare_marked = work.marked;
+        }
         layout_profile_add(p, &sample);
+        if (page_records_shown(p) && cascade != NULL && (why >= 0 || sample.cascade_updates)) {
+            bool fresh = why >= 0;
+            *(fresh ? &s_sizes_reading.fresh : &s_sizes_reading.updates) += 1;
+            *(fresh ? &s_sizes_reading.fresh_held : &s_sizes_reading.update_held) += garb_cascade_elements(cascade);
+            *(fresh ? &s_sizes_reading.fresh_us : &s_sizes_reading.update_us) += sample.cascade_us;
+        }
         if (s_one_open) {
+            s_one.cascaded = true;
             s_one.cascade_us = sample.cascade_us;
             s_one.cascade_why = why >= 0 ? why : sample.cascade_updates ? YONDER_LAYOUT_CASCADE_UPDATED
                                                                          : YONDER_LAYOUT_CASCADE_KEPT;
@@ -1876,8 +2768,17 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     // An open frame's time, which the frame's other samples share.
     s_env.now_ms = animation_time_ms();
     geometry_layout_total++;
-    webfonts_layout_begins(p);
-    flow_tree_t *fresh = profile_flow_layout(p, width);
+    // A script's change to the page on screen, staged beside it at its own
+    // sizes: first the restyle kept in the shown tree (BRIEF_LAYOUT_NEEDS.md
+    // N1), which writes paint-only changes into that tree and builds no
+    // box; the same tree then stands for the new layout (page_show keeps
+    // it, and the families its fonts were staged for). Declined, the page
+    // is laid out as before, its fonts' record begun for that layout.
+    flow_tree_t *fresh = restyle_kept_shown(p, reclaim, width, height, zoom);
+    if (fresh == NULL) {
+        webfonts_layout_begins(p);
+        fresh = profile_flow_layout(p, width);
+    }
     // The tree on screen holds the faces its runs were shaped in until it
     // is freed — each one a size of a file, counted against the text
     // engine's budget and its face limit — so a layout at new sizes (a
@@ -1963,6 +2864,7 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     p->laid_width = width;
     p->laid_height = height;
     p->laid_zoom = zoom;
+    p->laid_state = os64_page_state_version(os64_page_shared_state(page_model(p)));
     p->sheets_changed = false;
     return true;
 }
@@ -2392,6 +3294,11 @@ static struct {
     // page is shown. NULL until the first paint, and when there was no
     // memory for it: the page is then painted working everything out.
     yonder_paint_cache_t *paint_cache;
+    // What the canvases' smoothed draws keep, in the paint cache
+    // (canvas_keep.h): NULL until the first paint, as the paint cache is,
+    // and when there was no memory for it: each canvas is then scaled at
+    // every draw.
+    yonder_canvas_keeps_t *canvas_keeps;
     // The painter's working buffers, kept between paints (scratch.h): its
     // idle ones freed when another page is shown. NULL until the first
     // paint, and when there was no memory for it: each buffer then comes
@@ -2492,12 +3399,32 @@ typedef enum {
 static WholeBy s_whole_by;
 static os64_gui_rect_t s_parts_reach;
 
+// What changed the view from one `--damage-check` to the next (the
+// second's own rebuild or tick included), for a check that differs: a
+// stale part is one the change that made it did not mark, and that change
+// may be any of these, not only the one the check came after. Rebuilds by
+// verdict (change_said, and one whose layout ran out of memory as whole)
+// and those made current with no layout (rebuild_unchanged), ticks and
+// those that marked nothing, the parts yonder marked by what marked them
+// (mark_part) and the whole view's marks by what (mark_whole). What libui
+// marks itself (a hover, a focus) and a backdrop's widening of a mark
+// (backdrop_damage) are not counted, and neither is the check's own pixel
+// (`s_damage_marking`).
+static struct {
+    uint32_t rebuilt_parts, rebuilt_nothing, rebuilt_whole, advanced;
+    uint32_t ticks, ticks_unmarked;
+    uint32_t parts_tick, parts_video, parts_canvas, parts_other;
+    uint32_t whole[WHOLE_COUNT];
+} s_damage_since;
+static bool s_damage_marking;
+
 // The whole view marked for repainting, and by what (s_whole_by): `root`
 // marks the window's every widget, the view among them.
 static void mark_whole(WholeBy by, bool root)
 {
     if (!s_tick_marking)
         s_face_stamp++;
+    s_damage_since.whole[by]++;
     if (s_whole_by == WHOLE_PARTS)
         s_whole_by = by;
     os64_ui_mark_dirty(&g.ui, root ? &g.root : &g.view);
@@ -2745,6 +3672,7 @@ typedef struct {
     yonder_media_t *session;
     uint32_t width, height;             // the picture's size as shown, CSS pixels; 0 not yet known
     bool playing;                       // its clock runs
+    bool played;                        // its clock has run at least once: only then is its plane asked for
     bool poked;                         // its facts moved: one frame is asked for even while paused
     uint32_t sizing;                    // a new size was told: frames are asked for until the picture
                                         // at it comes (counted down, so a size never answered ends)
@@ -2752,6 +3680,94 @@ typedef struct {
     os64_dom_media_facts_t seen;        // the facts at the last turn, to see them move
     os64_media_player_frame_t frame;    // the picture to draw: pixels valid until the next frame
                                         // call answering changed (os64/media_player.h)
+    // ON A PLANE (VIDEO_PLANE.md § 5; the Videos on planes section). Its
+    // player's plane is asked for at its first cover; while it is on,
+    // `frame` is refused and the page paints `shown` instead.
+    bool plane_asked;
+    uint32_t asks_again;                // asked again after its plane ended (at most PLANE_ASKS_AGAIN)
+    uint64_t ask_again_ms;              // not before then
+    bool frame_fresh;                   // a frame call answered with a picture since `frame` was handed back
+    int plane_state;                    // the player's (OS64_MEDIA_PLANE_*), at the last read
+    os64_media_player_view_t view;      // `shown`, pinned for one paint; pixels NULL for none
+    uint32_t polled_serial;             // `shown`'s serial when the box was last marked for it
+    // What the kernel holds: the place of the last publish it took.
+    bool placed;
+    uint32_t placed_name;
+    os64_gui_rect_t placed_origin, placed_clip;     // window coordinates
+    // This paint's plan, from planes_prepare to planes_publish.
+    bool candidate;                     // every reason asked before the render allows the place (planes_judge asks the rest)
+    bool mapped;                        // a cover with its map laid: the render tells the map (planes_judge)
+    bool drawn;                         // its box painted in the paint part under way: a cut after it is over it
+    bool not_layer;                     // a paint could not take what lies over it as a layer, and the map
+                                        // has not known all of its clip since (yonder_plane_map_forget)
+    bool layers_failed;                 // this paint: a layer of it could not be made, or was no layer
+    // WHAT CHANGED OVER IT (VIDEO_PLANE.md § 5.2, layers only where the
+    // page changed something): this paint's changes over its clip
+    // (planes_take_changes, from the marks s_marks kept).
+    os64_gui_rect_t changes[16];
+    uint32_t nchanges;
+    bool changes_all;                   // every part of the clip counts as changed
+    uint64_t layer_next_ms;             // off its plane for no layer or the budget: no pass before then
+    uint64_t layers_capped;             // passes that wait skipped
+    os64_gui_rect_t owed;               // the parts those passes would have made, marked again when the
+    bool owed_any;                      // wait is over (videos_tick), so a change is never dropped
+    os64_gui_rect_t unlearned;          // what failed layers left forgotten in the map: a change that
+    bool unlearned_any;                 // meets it is layered with all of it, so the map can learn it again
+    // Why a layer was no layer: its channels disagreed (by how far apart,
+    // 2, 3, 4, 5 or more, and the first such pixel since the reading), or it
+    // could not be made (the layers' room full, no memory, the walk never
+    // reached the video).
+    uint64_t no_layer_disagree, no_layer_spread[4], no_layer_full, no_layer_memory, no_layer_reach;
+    bool first_disagree_said;
+    int32_t first_disagree_x, first_disagree_y;     // in the clip
+    uint32_t first_disagree_b, first_disagree_w;
+    char first_disagree_at[64];
+    uint32_t noverlays;                 // a place's overlays at this paint (window coordinates), and their
+    os64_gui_rect_t overlays[OS64_GUI_PLANE_OVERLAYS];      // union's area
+    uint64_t overlay_area;
+    uint32_t placed_noverlays;          // the kernel's, and their union's area
+    os64_gui_rect_t placed_overlays[OS64_GUI_PLANE_OVERLAYS];
+    uint64_t placed_overlay_area;
+    uint64_t overlay_area_most;         // the largest union of overlays asked for
+    uint64_t budget_refused_most;       // the largest that kept it off its plane for the budget (so the
+                                        // budget can be set from runs)
+    uint64_t overlays_refused_area;     // the kernel refused overlays of this union's area (PLANE_OVERLAP):
+                                        // as large again is the budget's reason, not another refusal
+    bool place;                         // the place this paint's publish carries
+    uint32_t name;
+    os64_gui_rect_t origin, clip;       // window coordinates, for a video `mapped`
+    yonder_plane_reason_t reason;       // why it is not placed (YONDER_PLANE_PLACED when it is)
+    bool want, want_told;               // told to the player (os64_media_player_plane_want)
+    uint64_t held_until_ms;             // a refused publish holds placing off until then
+    yonder_plane_map_t map;             // what the page paints over the picture
+    uint8_t *tiles;                     // the map's, os64_malloc'd
+    size_t ntiles;
+    // The record: time in each reason while the plane is on (PLACED being
+    // the time placed), the moves each way, and the page's paints of its
+    // clip while it was placed.
+    uint64_t reason_since_us;
+    uint64_t reason_us[YONDER_PLANE_REASONS];
+    uint64_t moves_on, moves_off, placed_paints;
+    uint64_t layers_made, layer_pixels, layers_refused;     // the two paints, what they covered, and those
+                                                            // that were no layer or could not be made
+    uint64_t checked, checked_near, checked_two, checked_wrong;     // --plane-check: pixels, off by one, by
+                                                                    // two, wrong, and the largest difference
+    int32_t checked_far_most;
+    // WHAT REACHED THE GLASS (the --video-rate line and the record): the
+    // page's paints of a new picture in its box that their publish left off
+    // its plane (videos_glass_published), and the plane's pictures
+    // published while it was placed and shown (facts.plane_placed_published);
+    // and the longest time the glass went without a new picture of it while
+    // it was watched (videos_glass_watch).
+    uint32_t glass_serial;              // the picture the page last painted in its box
+    bool painted_new;                   // this render painted a new picture in its box
+    uint64_t page_pictures;
+    int64_t glass_watch_from_us;        // when the current watch began; 0 not watched
+    uint64_t glass_runs;                // the plane runs begun at the last fold (facts.plane_placed_runs)
+    int64_t glass_last_us;              // its last new picture on the glass in this watch, or the watch's start
+    int64_t glass_gap_us;               // the longest gap ended or open since the last rate line
+    int64_t glass_gap_reading_us;       // and since the record's last reading
+    uint64_t reading_pictures;          // what had reached the glass at the record's last reading
 } Video;
 
 static Video s_videos[VIDEOS_MAX];
@@ -2763,6 +3779,26 @@ static Video *video_of(const os64_html_node_t *node)
         if (s_videos[i].node == node && node != NULL)
             return &s_videos[i];
     return NULL;
+}
+
+// The picture `v`'s box shows: the `shown` view pinned for the paint under
+// way, from the plane's ask on (the show thread may take the pace from then,
+// retiring the picture the last frame call gave, and its player refuses
+// `frame` once the plane is on) until a frame call has answered again after
+// `frame` was handed back; with no view pinned in that time (outside a
+// paint), none; otherwise the last frame call's. False with none.
+static bool video_picture(const Video *v, const uint32_t **pixels, uint32_t *w, uint32_t *h)
+{
+    if (v->view.frame != NULL || (v->plane_asked && !v->frame_fresh) || v->plane_state == OS64_MEDIA_PLANE_ON) {
+        *pixels = v->view.pixels;
+        *w = v->view.w;
+        *h = v->view.h;
+    } else {
+        *pixels = v->frame.pixels;
+        *w = v->frame.w;
+        *h = v->frame.h;
+    }
+    return *pixels != NULL && *w > 0 && *h > 0;
 }
 
 static bool is_video_node(const os64_html_node_t *node)
@@ -2852,7 +3888,8 @@ static const char *trim(const char *s)
     return s;
 }
 
-// What the status row says before anything while scripts run.
+// What the status row says before anything while scripts run, with
+// diagnostics on (s_diag.on): with them off the row is the person's alone.
 #define SCRIPTS_ON_SAID "SCRIPTS ON | "
 // The room the modes said before every message take at most.
 #define STATUS_MODES_ROOM (sizeof(SCRIPTS_ON_SAID) - 1 + sizeof(g.motion_pause) - 1)
@@ -2863,7 +3900,7 @@ static const char *trim(const char *s)
 static void status_set(const char *text)
 {
     os64_snprintf(g.status_text, sizeof(g.status_text), "%s%s%s",
-                  g.scripts_on ? SCRIPTS_ON_SAID : "", g.motion_pause, text);
+                  g.scripts_on && s_diag.on ? SCRIPTS_ON_SAID : "", g.motion_pause, text);
     os64_ui_mark_dirty(&g.ui, &g.status);
 }
 
@@ -2899,7 +3936,8 @@ static const char *diag_dir_open(void)
     static char said[OS64_PATH_MAX + 96];
     char dir[OS64_PATH_MAX];
     bool keep = yonder_settings_saved_keep_pages();
-    if (!yonder_settings_saved_diagnostics(dir, sizeof(dir))) {
+    s_diag.on = yonder_settings_saved_diagnostics(dir, sizeof(dir));
+    if (!s_diag.on) {
         if (keep)
             os64_debug_log("yonder: yonder.conf's keep_pages keeps pages beside their page files, "
                            "and there is no diagnostics directory; nothing is kept");
@@ -3066,9 +4104,135 @@ static void diag_wire(yonder_diag_t *d)
     yonder_diag_fact(d, "wire cache", v);
 }
 
+// The load's timeline (s_lt): whose record it is, its steps, its marks.
+static bool lt_ours(const yonder_diag_t *d)
+{
+    return d != NULL && s_lt.began_us != 0 && yonder_diag_began(d) == s_lt.began_us;
+}
+
+// The window loop enters `step` now; past the timeline's last slice, the
+// step under way ends and the timeline stops.
+static void lt_step(yonder_lt_step_t step)
+{
+    if (!s_lt.on)
+        return;
+    int64_t now = os64_micros();
+    if (yonder_lt_running(&s_lt, now)) {
+        yonder_lt_step_begin(&s_lt, step, now);
+    } else {
+        yonder_lt_step_end(&s_lt, now);
+        yonder_lt_stop(&s_lt);
+    }
+}
+
+// A milestone of the navigation whose record `d` is, now.
+static void lt_mark(const yonder_diag_t *d, yonder_lt_mark_t mark)
+{
+    if (s_lt.on && lt_ours(d))
+        yonder_lt_mark(&s_lt, mark, os64_micros());
+}
+
+// A parser call of the stream's, begun at `from` (the timeline's clock),
+// to the timeline: `kind` and `bytes` what it was, how far into the page
+// the stream had taken, and the element whose text `parser` is still
+// adding to, if any (a `script`, a `style`). `parser` is NULL after a call
+// that consumed it (the finish), which leaves nothing to ask.
+static void lt_parse(const os64_html_parser_t *parser, const char *kind, size_t bytes, int64_t from)
+{
+    int64_t now = os64_micros();
+    const os64_html_node_t *open = parser != NULL ? os64_html_parser_open_text(parser) : NULL;
+    char text[YONDER_LT_PARSE_TEXT], fed[40] = "";
+    if (bytes != 0)
+        os64_snprintf(fed, sizeof(fed), " of %lu bytes", (unsigned long)bytes);
+    os64_snprintf(text, sizeof(text), "%s%s, %lu KiB into the page%s%s%s", kind, fed,
+                  (unsigned long)(g.stream.bytes / 1024), open != NULL ? ", inside a " : "",
+                  open != NULL && open->name != NULL ? open->name : "", open != NULL ? " still open" : "");
+    yonder_lt_parse(&s_lt, from, now > from ? (uint64_t)(now - from) : 0, text);
+}
+
+// `us` since `from` of `in`, inside the timeline's step under way.
+static void lt_inside(yonder_lt_in_t in, int64_t from)
+{
+    int64_t now = os64_micros();
+    yonder_lt_inside(&s_lt, in, now > from ? (uint64_t)(now - from) : 0);
+}
+
+static yonder_lt_why_t lt_why_begin(yonder_lt_why_t why)
+{
+    yonder_lt_why_t was = s_lt_why;
+    if ((s_lt.on || s_layout_profile) && was == YONDER_LT_WHY_OTHER)
+        s_lt_why = why;
+    return was;
+}
+
+static void lt_why_end(yonder_lt_why_t was)
+{
+    s_lt_why = was;
+}
+
+// Whether a script's read asked for the layout being made (s_lt_why), with
+// the timeline or the profile on, and it is not the read check's own
+// (read_checked): the profile's forced layouts.
+static bool read_asked(void)
+{
+    return s_lt_why == YONDER_LT_WHY_READ && !s_read_checking;
+}
+
+// The timeline's lines at a reading, written whole: the summary, the layouts by
+// who asked and where, each slice up to the last that holds anything, each
+// long step listed, each broad refusal kept, and each slow parser call kept.
+// Written from a snapshot with the step under way ended now (a record is
+// written in the middle of a step, the arrival's inside the stream's), the
+// timeline itself left as it is. Every write of a record comes here
+// (diag_write), so a navigation that never arrives keeps its timeline too.
+static void diag_timeline(yonder_diag_t *d)
+{
+    if (!lt_ours(d))
+        return;
+    static yonder_lt_t snap;
+    yonder_lt_snapshot(&s_lt, os64_micros(), &snap);
+    const yonder_lt_t *t = &snap;
+    char key[40], line[4096];
+    yonder_diag_forget(d, "timeline");
+    yonder_lt_summary(t, line, sizeof(line));
+    yonder_diag_timeline_fact(d, "timeline", line);
+    yonder_lt_layouts_line(t, line, sizeof(line));
+    yonder_diag_timeline_fact(d, "timeline layouts", line);
+    uint32_t used = yonder_lt_slices_used(t);
+    for (uint32_t i = 0; i < used; i++) {
+        os64_snprintf(key, sizeof(key), "timeline %lu-%lu s",
+                      (unsigned long)(i * YONDER_LT_SLICE_US / 1000000),
+                      (unsigned long)((i + 1) * YONDER_LT_SLICE_US / 1000000));
+        yonder_lt_slice_line(t, i, line, sizeof(line));
+        yonder_diag_timeline_fact(d, key, line);
+    }
+    for (uint32_t i = 0; i < t->nlongs; i++) {
+        os64_snprintf(key, sizeof(key), "timeline longest %lu", (unsigned long)i + 1);
+        yonder_lt_long_line(t, i, line, sizeof(line));
+        yonder_diag_timeline_fact(d, key, line);
+    }
+    for (uint32_t i = 0; i < t->broad_kept; i++) {
+        os64_snprintf(key, sizeof(key), "timeline broad %lu", (unsigned long)i + 1);
+        yonder_lt_broad_line(t, i, line, sizeof(line));
+        yonder_diag_timeline_fact(d, key, line);
+    }
+    for (uint32_t i = 0; i < t->parse_kept; i++) {
+        os64_snprintf(key, sizeof(key), "timeline parse %lu", (unsigned long)i + 1);
+        yonder_lt_parse_line(t, i, line, sizeof(line));
+        yonder_diag_timeline_fact(d, key, line);
+    }
+}
+_Static_assert(2 + YONDER_LT_SLICES + YONDER_LT_LONG_MAX + YONDER_LT_BROAD_MAX + YONDER_LT_PARSE_MAX + 1 <=
+               YONDER_DIAG_TIMELINE_FACTS,
+               "the timeline's lines and the kept read check fit their room in the record");
+
 static yonder_diag_t *diag_begin(const char *url)
 {
     yonder_diag_t *d = yonder_diag_new(url, s_diag.next, os64_micros());
+    // A navigation measured from where its record begins, when there are
+    // page files to write it to.
+    if (d != NULL && s_diag.dir[0] != '\0')
+        yonder_lt_begin(&s_lt, yonder_diag_began(d));
     uint64_t marks[YONDER_DIAG_MARKS];
     wire_read(marks);
     yonder_diag_marks_set(d, marks);
@@ -3121,6 +4285,7 @@ static bool diag_write(yonder_diag_t *d)
 {
     if (d == NULL || s_diag.dir[0] == '\0')
         return false;
+    diag_timeline(d);
     // A record is of one window: a setting that is not what the claim
     // wrote makes it a record no replay can read the page again by. (The
     // view is compared once, at arrival, against the claim's: after it,
@@ -3364,6 +4529,9 @@ static const char *const kPastDeadline[PAST_COUNT] = {
     "settle", "arrival", "stream", "timers", "pictures", "frames", "downloads",
 };
 
+// How many elements a reading names by what their ticks changed.
+#define TICKED_MAX 8
+
 static const char *const kWholeBy[WHOLE_COUNT] = {
     "parts that together covered the view", "layouts for animations that refused their parts", "other layouts",
     "scripts' changes", "scrolls", "pictures that came in", "faces that came in",
@@ -3385,11 +4553,32 @@ static const char *const kRefused[REFUSED_COUNT] = {
     [FLOW_PARTS_CANVAS] = "a background the canvas may take",
     [FLOW_PARTS_DEEP] = "stacked boxes nested too deep",
     [FLOW_PARTS_MEMORY] = "no memory",
+    [FLOW_PARTS_LONG] = "trees too big to compare",
     [REFUSED_LOADS] = "a picture's size or a face laid out with it",
     [REFUSED_CASCADE] = "another cascade",
     [REFUSED_SIZE] = "another width, height or zoom",
     [REFUSED_VIEW] = "the view moved with it",
 };
+
+// THE FORCED LAYOUTS BY PHASE, with the profile on: what the layouts a
+// script's read asked for cost, phase by phase, as the profile timed each
+// (yonder_layout_one_t), for a reading's longest task and the whole
+// reading (dt_phases says them). Their
+// count and wall time; the model rebuilds the reads began with; the
+// cascade by what became of it (kept: nothing to update; updated; fresh,
+// by reason); then style, boxes, placement and the public tree; and the
+// boxes they made, and of those how many the graft copied (the rest were
+// placed fresh).
+enum { FORCED_KEPT, FORCED_UPDATED, FORCED_FRESH, FORCED_CASCADES };
+typedef struct {
+    uint64_t layouts, total_us, models, model_us;
+    uint64_t cascades[FORCED_CASCADES], cascade_us[FORCED_CASCADES];
+    uint64_t fresh_by[YONDER_LAYOUT_CASCADE_REASONS];
+    uint64_t style_us, boxes_us, place_us, public_us;
+    uint64_t boxes, copied;
+} forced_phases_t;
+// The task running's (task_begin starts it, task_said reads it).
+static forced_phases_t s_task_phases;
 
 // Counted with the processor's time-stamp counter, not a system call: a
 // paint draws thousands of runs. That trusts the cores' counters to agree,
@@ -3434,31 +4623,104 @@ static struct {
     // deadlines handed the ticker already past.
     uint64_t bells, past[PAST_COUNT];
     // The biggest part marked, by area, as much of it as the view holds,
-    // in page coordinates, and what marked it — a canvas the page drew on
-    // or a form control, by name, or "the page" for any other part
-    // (mark_part; a part as big as the view is a whole view instead) — a
+    // in page coordinates, and what marked it (mark_part; a part as big as
+    // the view is a whole view instead): a canvas the page drew on or a
+    // form control, by name; an animation, by the element its tick changed
+    // and the longhands it animates (tick_named), or the box its layout
+    // marked; a video's new picture; a
+    // script's change, by the element it changed; else "the page" — a
     // control shown or hidden marks the whole window, and is named so; the
     // canvases' and the controls' marks; and the biggest rectangle a paint
     // published, as much of it as the view holds.
     os64_gui_rect_t mark_most, paint_most;
     char mark_who[96];
     uint64_t canvas_marks, control_marks;
+    // Canvases whose damage was acknowledged unseen instead of marked
+    // (canvas_damage_mark): under a group laid at alpha 0, culled as
+    // transparent, and wholly outside the view.
+    uint64_t unseen_alpha0, unseen_culled, unseen_offview;
+    // The elements the ticks that were frames changed, each with the
+    // longhands its animations set, and how many such ticks changed it
+    // (tick_named): the first TICKED_MAX met, the rest counted together.
+    struct {
+        char what[96];
+        uint64_t n;
+    } ticked[TICKED_MAX];
+    int32_t nticked;
+    uint64_t ticked_rest;
     // The videos' (videos_tick, pane_video): pictures asked for and
     // answered changed, and each paint of one by the plain path (rows
     // copied to the window) or the general one (drawn as a picture is);
     // the main thread's time asking (the pick) and drawing them.
     uint64_t video_frames, video_pictures, video_plain, video_general;
     uint64_t video_ask_us, video_draw_us;
+    // The paints a video covered (view_paint_parts): those that began at the
+    // video, the pieces of their rest painted the ordinary way, and those
+    // painted again because the walk never handed the video over, and those
+    // painted the ordinary way because a backdrop reader may read across the
+    // edge a split would cut (backdrop_read_meets), or because the layers'
+    // budget might run out or a sheet pass its limit (flow_paint_asks; the
+    // record's `not covered` says which, cover_refusal_note).
+    uint64_t covered_paints, covered_pieces, covered_again, covered_refused, covered_budget;
+    // The longest task (task_said): its cycles, what it was (its kind and
+    // its script's name), and the layouts it forced and their time.
+    uint64_t task_longest, task_longest_layouts, task_longest_layout_us;
+    char task_longest_what[96];
+    // With the profile on, the longest task's forced layouts by phase, and
+    // every forced layout of the reading's (forced_phases_t).
+    forced_phases_t task_longest_phases, forced_phases;
     uint64_t from_cycles;
     int64_t from_us;
 } s_cost;
 
+// A layout the profile timed, into the task's and the reading's forced
+// layouts by phase when a script's read asked for it (read_asked) and it
+// reached its cascade.
+static void forced_phases_add(forced_phases_t *f, const yonder_layout_one_t *one)
+{
+    int c = one->cascade_why == YONDER_LAYOUT_CASCADE_KEPT      ? FORCED_KEPT
+            : one->cascade_why == YONDER_LAYOUT_CASCADE_UPDATED ? FORCED_UPDATED
+                                                                : FORCED_FRESH;
+    f->layouts++;
+    f->total_us += one->total_us;
+    f->cascades[c]++;
+    f->cascade_us[c] += one->cascade_us;
+    if (c == FORCED_FRESH && one->cascade_why >= 0 && one->cascade_why < YONDER_LAYOUT_CASCADE_REASONS)
+        f->fresh_by[one->cascade_why]++;
+    f->style_us += one->style_us;
+    f->boxes_us += one->boxes_us;
+    f->place_us += one->layout_us;
+    f->public_us += one->public_us;
+    f->boxes += one->boxes;
+    f->copied += one->reused;
+}
+static void forced_one(const yonder_layout_one_t *one)
+{
+    if (!read_asked() || !one->cascaded)
+        return;
+    forced_phases_add(&s_task_phases, one);
+    forced_phases_add(&s_cost.forced_phases, one);
+}
+// A model rebuild the profile timed, likewise.
+static void forced_model(uint64_t us)
+{
+    if (!read_asked())
+        return;
+    s_task_phases.models++;
+    s_task_phases.model_us += us;
+    s_cost.forced_phases.models++;
+    s_cost.forced_phases.model_us += us;
+}
+
 // The canvas whose drawing is being marked (canvas_damage_mark), for the
-// counts' biggest part; NULL for every other mark.
+// counts' biggest part; NULL for every other mark (s_marking_box beside it).
 static const os64_html_node_t *s_marking_canvas;
-// The readings the shown page's record keeps (`d`): numbered from 1 for
+// The readings the shown page's record keeps (the reading chord): numbered from 1 for
 // each page shown.
 static uint32_t s_cost_readings;
+// The reading chord's presses the window received for the shown page
+// (reading_key_fact, reading_chord).
+static uint32_t s_reading_keys;
 
 // The counter, read where the program says: the memory clobber keeps the
 // compiler from moving the measured work across the read, and an lfence on
@@ -3485,6 +4747,90 @@ static uint64_t cycles_since(uint64_t from)
     return now - from;
 }
 
+static uint64_t tr_now(void)
+{
+    return s_tr.on ? cycles() : 0;
+}
+
+static void tr_inside(yonder_tr_in_t in, uint64_t from)
+{
+    if (s_tr.on)
+        yonder_tr_inside(&s_tr, in, cycles_since(from));
+}
+
+// The window loop makes `call` now (thread_reading.h's calls).
+static void tr_call(yonder_tr_call_t call)
+{
+    if (s_tr.on)
+        yonder_tr_call(&s_tr, call, (int64_t)cycles());
+}
+
+// The counter's ticks in a millisecond, from the counter and the clock since
+// yonder started: what the reading's lines turn ticks into time with.
+static uint64_t counter_per_ms(void)
+{
+    int64_t us = os64_micros() - s_started_us;
+    uint64_t ticks = os64_js_ledger_now() - s_started_cycles;
+    return us > 0 ? ticks * 1000 / (uint64_t)us : 0;
+}
+
+// The shown page's collector counts, in the reading's words.
+static yonder_tr_collector_t tr_collector(void)
+{
+    os64_js_collector_t c;
+    yonder_scripts_collector(g.page.scripts, &c);
+    return (yonder_tr_collector_t){c.runs, c.runs_by_allocation, c.walked, c.freed, c.walked_most,
+                                   c.bytes_before, c.bytes_after, c.threshold, c.ticks, c.ticks_most,
+                                   c.runs_by_limit, c.refused_by_limit};
+}
+
+// The shown page's timer list, in the reading's words.
+static yonder_tr_list_t tr_list(void)
+{
+    os64_dom_timer_counts_t c;
+    yonder_scripts_timer_counts(g.page.scripts, &c);
+    return (yonder_tr_list_t){c.live, c.arms, c.walked};
+}
+
+// A turn of the loop this long or longer is a slow one, which the reading
+// names (`slow turns reading N`): a tenth of a second held is a stutter a
+// person sees in a playing video.
+#define TR_SLOW_TURN_MS 100
+
+// The reading starts again now, on while there are page files to write it
+// to (a reading written, a page shown).
+static void tr_restart(void)
+{
+    if (s_diag.dir[0] == '\0') {
+        yonder_tr_off(&s_tr);
+        return;
+    }
+    yonder_tr_collector_t c = tr_collector();
+    yonder_tr_list_t l = tr_list();
+    s_tr_host = g.page.scripts;
+    s_tr_checked_host = g.page.scripts;
+    s_tr_checked_seen = yonder_scripts_checks_visited(g.page.scripts);
+    s_tr_per_ms = counter_per_ms();
+    yonder_tr_reset(&s_tr, (int64_t)cycles(), &c, &l);
+    yonder_tr_slow(&s_tr, TR_SLOW_TURN_MS * s_tr_per_ms, TR_SLOW_TURN_MS);
+}
+
+// The records the page's every-turn checks visited this turn, told the
+// reading at the turn's close: what its binding counted since the last
+// close, or since its script began when that is another binding.
+static void tr_checked_turn(void)
+{
+    if (!s_tr.on)
+        return;
+    uint64_t now = yonder_scripts_checks_visited(g.page.scripts);
+    if (g.page.scripts != s_tr_checked_host || now < s_tr_checked_seen) {
+        s_tr_checked_host = g.page.scripts;
+        s_tr_checked_seen = 0;
+    }
+    yonder_tr_checked(&s_tr, now - s_tr_checked_seen);
+    s_tr_checked_seen = now;
+}
+
 static void cost_begin(PaintStage s)
 {
     if (s_cost.depth[s]++ == 0)
@@ -3509,15 +4855,383 @@ static void cost_fold(PaintStage from, PaintStage to)
 }
 
 // Counting starts again: a page shown, or its record written on asking.
+// Whether a page's layouts go to the shown page's record: the page itself,
+// or the copy a script's rebuild lays out for it.
+static bool page_records_shown(const Page *p)
+{
+    return p->diag != NULL && p->diag == g.page.diag;
+}
+// What a layout of the page on screen would read besides the document and
+// has moved since its tree was laid out: the view's size and zoom, the
+// sheets, the pictures and the fonts (script_geometry's own conditions for
+// a relayout), and the form state the graft's inputs carry, which moves
+// without the document's version: the tree's must be the state's now. Each
+// says why, for the record; NULL when none has.
+static const char *shown_moved(void)
+{
+    Page *p = &g.page;
+    int32_t width = g.view.bounds.w > 0 ? g.view.bounds.w : 1;
+    int32_t height = g.view.bounds.h > 0 ? g.view.bounds.h : 1;
+    const char *why = !s_kept_reads ? "restyle: kept reads off"
+                      : p->tree == NULL || flow_incomplete(p->tree) || p->cascade == NULL ? "restyle: no tree"
+                      : p->laid_width != width || p->laid_height != height || p->laid_zoom != g.zoom
+                          ? "restyle: the view's size or zoom"
+                      : p->sheets_changed  ? "restyle: the sheets"
+                      : g.pictures_moved   ? "restyle: the pictures"
+                      : s_web.moved        ? "restyle: the fonts"
+                                           : NULL;
+    os64_page_state_t *state = why == NULL ? os64_page_shared_state(page_model(p)) : NULL;
+    if (why == NULL && (state == NULL || os64_page_state_version(state) != p->laid_state))
+        why = "restyle: the form state";
+    return why;
+}
+// A verdict of the page on screen, noted for the record.
+static flow_pending_t pending_noted(flow_pending_t pending)
+{
+    if (pending.lost)
+        s_pending_lost++;
+    if (pending.style_read && s_layout_profile)
+        counted_at(&s_style_reads, "a selector may read its style", pending.style_read_at, "");
+    return pending;
+}
+static flow_pending_t shown_pending(void)
+{
+    const char *why = shown_moved();
+    if (why != NULL) {
+        flow_pending_t restyle = {.verdict = FLOW_PENDING_RESTYLE, .transforms = true};
+        os64_strcopy(restyle.why, sizeof(restyle.why), why);
+        return restyle;
+    }
+    return pending_noted(flow_pending(g.page.tree, page_doc(&g.page), g.page.cascade));
+}
+// The page on screen made current at the document's version with nothing
+// laid out, when nothing a layout reads has moved and the verdict is NONE
+// (flow_pending_advance): true when it was, and then its rendered version
+// is the document's.
+static bool shown_advance(void)
+{
+    Page *p = &g.page;
+    if (shown_moved() != NULL)
+        return false;
+    flow_pending_t judged;
+    bool advanced = flow_pending_advance(p->tree, page_doc(p), p->cascade, &judged);
+    pending_noted(judged);
+    if (advanced)
+        p->rendered_version = os64_html_version(page_doc(p));
+    else if (judged.verdict == FLOW_PENDING_NONE)
+        // The cascade refused what libflow judged nothing (garb_cascade_advance),
+        // which leaves it owing a fresh build: said by name, since the
+        // layout that follows reports only that an update failed before.
+        yonder_diag_failed_seen(p->diag, "unchanged advance",
+                                garb_update_refusal_name(garb_cascade_update_refusal(p->cascade)));
+    return advanced;
+}
+
+// The page on screen's tree, `which` ("a kept tree"), laid out whole in
+// `env` beside itself and the two compared (flow_restyle_check), counted at
+// `compared` and `differed` and said under the record's `key`, with the
+// first difference's element and what differed.
+static void tree_checked(Page *p, int32_t width, const flow_env_t *env, const char *which, const char *key,
+                         uint64_t *compared, uint64_t *differed)
+{
+    flow_tree_t *whole = flow_layout_restyled(page_doc(p), page_model(p), width, env, NULL, NULL, NULL, NULL);
+    // Scrolled where the tree is, as a layout's scrolls are set again by
+    // element, each held to the whole layout's own range.
+    for (int32_t i = 0; whole != NULL && i < flow_nscrollers(g.page.tree); i++) {
+        int32_t s = flow_scroller_for(whole, flow_scroller(g.page.tree, i)->node);
+        if (s >= 0)
+            flow_scroll_set(whole, s, flow_scroll_at(g.page.tree, i));
+    }
+    const os64_html_node_t *node = NULL;
+    const char *what = "no whole layout could be made";
+    bool same = whole != NULL && flow_restyle_check(g.page.tree, whole, &node, &what);
+    (*compared)++;
+    if (!same) {
+        (*differed)++;
+        char named[96] = "", line[192];
+        if (node != NULL && node->kind != OS64_HTML_ELEMENT)
+            node = os64_html_flat_parent(page_doc(p), node);
+        if (node != NULL && node->kind == OS64_HTML_ELEMENT)
+            element_named(named, sizeof(named), "", node);
+        os64_snprintf(line, sizeof(line), "%s differs from a whole layout in %s at %s", which, what,
+                      named[0] != '\0' ? named : "the page");
+        yonder_diag_failed_seen(p->diag, key, line);
+        os64_debug_log(line);
+    }
+    char said[96];
+    os64_snprintf(said, sizeof(said), "%lu compared, %lu differed", (unsigned long)*compared,
+                  (unsigned long)*differed);
+    yonder_diag_summary_fact(p->diag, key, said);
+    flow_free(whole);
+}
+
+static flow_tree_t *restyle_kept_shown(Page *p, Page *reclaim, int32_t width, int32_t height, uint32_t zoom)
+{
+    if (!s_restyle_in_place || reclaim != &g.page || p == &g.page || g.page.tree == NULL ||
+        p->restyle_from != g.page.tree || width != g.page.laid_width || height != g.page.laid_height ||
+        zoom != g.page.laid_zoom)
+        return NULL;
+    // The inputs the layout that follows would graft with, the fonts'
+    // revision brought up to date first, as profile_flow_layout does.
+    layout_font_dependencies(p);
+    flow_reuse_inputs_t inputs = layout_inputs(p, NULL);
+    // A script's rebuild collects what the kept styles painted
+    // (LAYOUT_NEEDS_N3.md § 3 A); a declined restyle's marks are not the
+    // whole of anything, and are dropped.
+    flow_restyle_marks_t marks = {scroll_now(), change_mark, NULL};
+    flow_restyle_t kept = flow_restyle_in_place(g.page.tree, page_doc(p), page_model(p), &s_env, &inputs, width,
+                                                s_change.armed ? &marks : NULL);
+    if (s_change.armed) {
+        s_change.kept = kept.kind != FLOW_RESTYLE_DECLINED;
+        s_change.kept_kind = kept.kind;
+        s_change.kept_parts = kept.parts;
+        if (!s_change.kept) {
+            s_change.n = 0;
+            s_change.over = false;
+            s_change.biggest = -1;
+            s_change.biggest_node = NULL;
+            s_change.wrote = kept.written > 0;
+        }
+    }
+    restyle_counted(p, kept);
+    if (kept.kind == FLOW_RESTYLE_DECLINED)
+        return NULL;
+    // A box that only moved moved what an observation reads, as a tick that
+    // moves boxes does (intersections_turn).
+    if (kept.moved > 0)
+        s_ticks_moved++;
+    // `--geometry-check`: every Nth kept tree is laid out whole beside
+    // itself and the two compared; the record says how many were and the
+    // first that differed, with the element and what differed.
+    if (s_geometry_check != 0 && ++s_geometry_checked % s_geometry_check == 0)
+        tree_checked(p, width, &s_env, "a kept tree", "geometry check", &s_geometry_compared, &s_geometry_differed);
+    return g.page.tree;
+}
+
+// THE PAINT EFFECTS: the paint stages' `filters` and `warps` told apart by
+// what was drawn (`paint effects` in the record and in each reading): a
+// filter's layer, a backdrop filter, a layer with no filter (a blend or a
+// mask), a warp; with the first filter function and its amount, and the
+// size drawn — a warp also where it lands and on how many targets. Beside them the verbs
+// no stage times (fills, videos and canvases — a canvas in two rows,
+// asking for its bitmap and drawing the part named — form controls,
+// stand-ins, text clips), so that what is left of
+// the view's rest is the painter's and the walk's own; and the boxes the
+// walk handed the painter. What a paint draws after a video is counted
+// apart, `over the video`. Each with how many times and its time in all,
+// in the counter's cycles (cycles(), as the stages count), the costliest
+// first. As the stages time them: a layer's or a warp's open and close,
+// not the drawing between. The table keeps the costliest kinds met, not
+// the first: once it is full, a kind it does not hold takes the place of
+// the cheapest it holds when it costs that much already, and what a kind
+// gives up its place with, or one that takes none, is counted together as
+// `the rest` (a kind that comes back starts its row again).
+#define EFFECTS_MAX 32
+#define EFFECTS_DEPTH 32
+typedef struct {
+    char what[112];
+    uint64_t n, cycles;
+} PaintEffect;
+static PaintEffect s_effects[EFFECTS_MAX];
+static int32_t s_neffects;
+static uint64_t s_effects_rest_n, s_effects_rest_cycles;
+// The layers and warps open, innermost last: the size and the open's time.
+static struct { int32_t w, h; uint64_t cycles; } s_layers_open[EFFECTS_DEPTH], s_warps_open[EFFECTS_DEPTH];
+static int32_t s_nlayers_open, s_nwarps_open;
+// The painter's count of boxes when the effects' counting began.
+static uint64_t s_effects_boxes_from;
+// Whether the paint under way has drawn a video yet (timed_canvas): what is
+// counted after it was drawn over the video, and says so — what is before
+// it is what a paint inside the picture would not need (VIDEO.md V.7.1).
+static bool s_effects_past_video;
+
+// THE PAINT BENEATH THE PICTURE (VIDEO.md § 5), on unless `--cover=off`
+// asks for every paint to be painted the ordinary way, to compare.
+static bool s_covers = true;
+
+// VIDEOS ON PLANES (VIDEO_PLANE.md § 5), on unless `--plane=off` or
+// yonder.conf's `planes = off` asks for every video to be painted by the
+// page, to compare.
+static bool s_planes = true;
+static bool s_planes_off_asked;
+
+// `--plane-check[=N]`: at every Nth paint that places a video (each one
+// unless said), the hole's content is composed over the picture with the
+// kernel's own blend (plane_blend, kernel/src/gui/plane_compose.c, built
+// into yonder by plane_blend.c) and compared with what the page painted
+// there: a pixel whose content is opaque or see-through must match, one
+// between may differ by one in a channel from the blend's rounding and by
+// two where its coverage, measured from green, is one off a channel's own
+// (VIDEO_PLANE.md § 5.6), counted apart; anything more, or a pixel with
+// coverage outside every overlay, is wrong. Counted per video in
+// the record, the first wrong pixel of each paint said on the console.
+static uint32_t s_plane_check, s_plane_check_due;
+uint32_t plane_blend(uint32_t content, uint32_t picture);
+
+// `--paint-check[=N]`: every Nth covered paint (10 unless said) is painted
+// the ordinary way too and the two compared to the pixel, with the groups
+// open at the cover's draw held to cover_groups' (none, for a cover);
+// the record says how many were compared, the first that differed and how
+// many could not be compared (view_paint_parts).
+static uint32_t s_paint_check, s_paint_checked;
+static uint64_t s_paint_compared, s_paint_differed, s_paint_uncompared;
+// The box an ordinary paint under the check records the groups open at
+// (timed_canvas), and what it found: -1 while not drawn.
+static const flow_box_t *s_paint_check_box;
+static int32_t s_paint_check_groups = -1;
+
+// `--damage-check[=N]` (LAYOUT_NEEDS_N3.md § 4): every Nth script's rebuild
+// painted in parts or tick that is a frame (1 unless said; one count for
+// both), those that marked nothing included, is followed, once its render
+// has painted every part, by the whole view painted the ordinary way and
+// compared with what the window held, to the pixel, the videos' boxes left
+// out (a picture moves by itself) and the page's widgets (the toolkit
+// paints them over the view). A difference is a part the rebuild or the
+// tick should have marked, or one something else should have; the record
+// says how many were compared, how many differed, and how many could not
+// be compared, and each that differed with where, what the rebuild or the
+// tick had marked (a rebuild's way, kept or laid out, and what the change
+// log held), what the page paints at its first pixel against what the
+// window held, and what changed the view since the check before
+// (damage_check, s_damage_since). One that marked nothing marks one pixel, so
+// that there is a paint to check. A tick is checked apart from the next
+// rebuild because that rebuild's compare marks an animated box whose value
+// moved, which would hide a tick that marked too little. The second paint
+// is charged to the render's, and anything it counts (effects, a video's
+// paints) counts twice.
+static uint32_t s_damage_check, s_damage_counted;
+static bool s_damage_due;
+static uint64_t s_damage_compared, s_damage_differed, s_damage_uncompared;
+static char s_damage_after[512];
+
+// The canvases whose damage was marked since the last paint
+// (canvas_damage_mark), which a covered paint acknowledges
+// (canvases_acknowledge); past the room, none is, as without a cover.
+#define MARKED_CANVASES 16
+static const os64_html_node_t *s_marked_canvases[MARKED_CANVASES];
+static int32_t s_nmarked_canvases;
+static bool s_marked_canvases_lost;
+// The canvases the paint under way handed to the canvas verb (timed_canvas):
+// a canvas drawn is the verb's to acknowledge or, not consumed, to leave
+// pending, never canvases_acknowledge's; past the room, none is
+// acknowledged by it.
+static const os64_html_node_t *s_drawn_canvases[MARKED_CANVASES];
+static int32_t s_ndrawn_canvases;
+static bool s_drawn_canvases_lost;
+// What the canvas verb's last call did, for the paint effects: the bitmap
+// the script side handed it and how long asking for it took, and what its
+// draw walked on the first target (pane_canvas). A cost the cut does not
+// follow shows in one or the other.
+static struct {
+    uint32_t bitmap_w, bitmap_h;
+    uint64_t got_cycles;
+    os64_gui_rect_t drawn;
+    int32_t targets;        // how many targets the draw walked (both sheets of a group, or the window)
+    bool smoothed;          // drawn through the bilinear scaler, not copied at its own size
+} s_canvas_last;
+// What the last group laid through its matrix laid onto its first target
+// (pane_through_close): where its sheets land within what clips it, which
+// is what the warp walks; and on how many targets.
+static os64_gui_rect_t s_warp_laid;
+static int32_t s_warp_targets;
+
+static void effects_reset(void)
+{
+    s_neffects = 0;
+    s_effects_rest_n = s_effects_rest_cycles = 0;
+    s_nlayers_open = s_nwarps_open = 0;
+    s_effects_boxes_from = yonder_paint_boxes;
+    s_effects_past_video = false;
+}
+
+static void effect_counted(const char *named, uint64_t spent)
+{
+    char over[128];
+    const char *what = named;
+    if (s_effects_past_video) {
+        os64_snprintf(over, sizeof(over), "%s over the video", named);
+        what = over;
+    }
+    int32_t i = 0;
+    for (; i < s_neffects && !os64_streq(s_effects[i].what, what); i++) {}
+    if (i == s_neffects && s_neffects == EFFECTS_MAX) {
+        int32_t cheapest = 0;
+        for (int32_t k = 1; k < s_neffects; k++)
+            if (s_effects[k].cycles < s_effects[cheapest].cycles) cheapest = k;
+        if (spent < s_effects[cheapest].cycles) {
+            s_effects_rest_n++;
+            s_effects_rest_cycles += spent;
+            return;
+        }
+        s_effects_rest_n += s_effects[cheapest].n;
+        s_effects_rest_cycles += s_effects[cheapest].cycles;
+        i = cheapest;
+        os64_strcopy(s_effects[i].what, sizeof(s_effects[i].what), what);
+        s_effects[i].n = s_effects[i].cycles = 0;
+    } else if (i == s_neffects) {
+        os64_strcopy(s_effects[i].what, sizeof(s_effects[i].what), what);
+        s_effects[i].n = s_effects[i].cycles = 0;
+        s_neffects++;
+    }
+    s_effects[i].n++;
+    s_effects[i].cycles += spent;
+}
+
+// A filter list in a few words: its first function, its amount (a blur's
+// and a hue's as written, the rest as a percentage), the reduction a blur
+// or drop shadow first is made at when it is made on a reduced copy
+// (`at 1/4`, filter.c § A large blur), and how many follow.
+static void effect_filters(char *out, size_t cap, const flow_filter_t *filter, int32_t n)
+{
+    static const char *const names[] = {"url", "blur", "brightness", "contrast", "grayscale", "invert",
+                                        "opacity", "sepia", "saturate", "hue-rotate", "drop-shadow"};
+    if (filter == NULL || n <= 0) {
+        os64_strcopy(out, cap, "none");
+        return;
+    }
+    const char *name = (unsigned)filter[0].fn < sizeof(names) / sizeof(names[0]) ? names[filter[0].fn] : "?";
+    long amount = filter[0].fn == FLOW_FILTER_BLUR || filter[0].fn == FLOW_FILTER_HUE_ROTATE
+                      ? (long)filter[0].amount
+                      : (long)(filter[0].amount * 100);
+    int32_t s = filter[0].fn == FLOW_FILTER_BLUR || filter[0].fn == FLOW_FILTER_DROP_SHADOW
+                    ? yonder_filter_reduction(filter[0].shadow.blur) : 1;
+    char reduced[16] = "";
+    if (s > 1)
+        os64_snprintf(reduced, sizeof(reduced), " at 1/%d", (int)s);
+    if (n > 1)
+        os64_snprintf(out, cap, "%s(%ld)%s and %d more", name, amount, reduced, (int)(n - 1));
+    else
+        os64_snprintf(out, cap, "%s(%ld)%s", name, amount, reduced);
+}
+
+static void planes_counts_restart(void);
+static void videos_glass_reading_restart(void);
+
 static void cost_reset(void)
 {
+    tr_restart();
+    effects_reset();
+    planes_counts_restart();
+    videos_glass_reading_restart();
     os64_memset(&s_cost, 0, sizeof(s_cost));
+    os64_memset(&s_needed_reading, 0, sizeof(s_needed_reading));
+    os64_memset(&s_sizes_reading, 0, sizeof(s_sizes_reading));
     s_cost.collapses_from = g.ui.damage_collapses;
     s_cost.from_cycles = cycles();
     s_cost.from_us = os64_micros();
     yonder_ticker_counts_restart(g.ticker);
     yonder_paint_cache_counts_restart(g.paint_cache);
+    yonder_canvas_keep_counts_restart(g.canvas_keeps);
     yonder_keeps_counts_restart(g.keeps);
+    // W0's tables too: a page shown starts them again, as a reading does,
+    // so no page's first reading carries the last one's elements.
+    counted_at_reset(&s_not_covered);
+    counted_at_reset(&s_script_changes);
+    counted_at_reset(&s_forced);
+    counted_at_reset(&s_style_reads);
+    counted_at_reset(&s_script_parts);
+    s_script_parts_area = 0;
+    s_pending_lost = 0;
 }
 
 // Pointer hit testing follows published geometry, not every drawing operation.
@@ -3551,6 +5265,7 @@ static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom, 
     yonder_scripts_ledger_layout(forcing, true);
     bool in_tick = s_cost.depth[PS_TICKS] != 0;
     uint64_t layout_began = cycles();
+    int64_t lt_began = s_lt.on ? os64_micros() : 0;
     cost_begin(PS_LAYOUTS);
     bool profiled = s_layout_profile && layout_profile_diag(p) && !s_one_open;
     int64_t began = profiled ? os64_micros() : -1;
@@ -3566,8 +5281,17 @@ static bool page_lay_out(Page *p, int32_t width, int32_t height, uint32_t zoom, 
         s_one.at_us = (uint64_t)os64_micros();
         s_one_open = false;
         if (s_one.cascade_us != 0 || s_one.attempts != 0) layout_profile_one(p, &s_one);
+        forced_one(&s_one);
     }
     if (laid && p == &g.page) pointer_geometry_changed();
+    if (s_lt.on) {
+        // Its cascade, when the profile timed this layout as its own.
+        yonder_lt_cascade_t cascade = {s_one.cascade_us, s_one.cascade_why >= 0};
+        bool timed = profiled && (s_one.cascade_us != 0 || s_one.attempts != 0);
+        yonder_lt_layout(&s_lt, lt_began, (uint64_t)(os64_micros() - lt_began), s_lt_why,
+                         timed ? &cascade : NULL);
+    }
+    tr_inside(YONDER_TR_IN_LAYOUTS, layout_began);
     cost_end(PS_LAYOUTS);
     if (in_tick && forcing == NULL)
         s_cost.layouts_in_ticks += cycles_since(layout_began);
@@ -3838,9 +5562,89 @@ static void census_turn(void)
     }
 }
 
+// The reading chord on the shown page's record: how often it was pressed
+// and how many readings it kept; a press keeps none when there are no page
+// files to write or no record (diag_asked says which on the status line).
+static void reading_key_fact(Page *p)
+{
+    if (p != &g.page || s_reading_keys == 0)
+        return;
+    char v[160];
+    os64_snprintf(v, sizeof(v), "pressed %u times, %u readings kept%s", (unsigned)s_reading_keys,
+                  (unsigned)s_cost_readings,
+                  s_reading_keys > s_cost_readings ? "; the rest had no page files or no record" : "");
+    yonder_diag_reading_fact(p->diag, "reading key", v);
+}
+
+// WHERE THE PAGE'S NODES ARE (os64_html_census, flow_census): every live
+// node of its document, and its elements, in the document, in templates and
+// shadow trees, in other documents made in its arena, detached and held,
+// detached and waiting to be collected, never inserted; the free node slots
+// of its arena; the elements in the document by
+// whether they have a box and why not; and the elements the cascade holds.
+// A walk of every node: written at a record's write and a reading, never
+// per frame.
+static void census_text(const Page *p, char *out, size_t cap)
+{
+    os64_html_census_t c;
+    os64_html_census(page_doc(p), &c);
+    flow_census_t f;
+    flow_census(p->tree, &f);
+    const os64_html_census_part_t *n = &c.nodes, *e = &c.elements;
+    os64_snprintf(out, cap,
+                  "%lu live nodes (%lu elements): in the document %lu (%lu), in templates and shadow trees %lu (%lu), "
+                  "in other documents %lu (%lu), detached and held %lu (%lu), detached and waiting to be collected %lu (%lu), "
+                  "never inserted %lu (%lu); "
+                  "%lu free slots; elements in the document with a box %lu, without: display none %lu, inside one %lu, "
+                  "drawn by a replaced box %lu, other %lu; the cascade holds %lu",
+                  (unsigned long)(n->connected + n->hosted + n->documents + n->held + n->pinned + n->unattached),
+                  (unsigned long)(e->connected + e->hosted + e->documents + e->held + e->pinned + e->unattached),
+                  (unsigned long)n->connected, (unsigned long)e->connected, (unsigned long)n->hosted,
+                  (unsigned long)e->hosted, (unsigned long)n->documents, (unsigned long)e->documents, (unsigned long)n->held, (unsigned long)e->held, (unsigned long)n->pinned,
+                  (unsigned long)e->pinned, (unsigned long)n->unattached, (unsigned long)e->unattached,
+                  (unsigned long)c.free_slots, (unsigned long)f.boxed, (unsigned long)f.none, (unsigned long)f.under_none,
+                  (unsigned long)f.drawn, (unsigned long)f.other, (unsigned long)garb_cascade_elements(p->cascade));
+}
+
+// WHO HOLDS THE DETACHED, for the record's `holders` lines: the census's
+// held units by holder (os64_html_holders) — a script wrapper's node in
+// them, else only the change log's references, else something else — the
+// node wrappers in the document and not, and of the latter how many only
+// the binding's registry references, and the change log's readers.
+static void holders_text(const Page *p, char *out, size_t cap)
+{
+    os64_dom_wrappers_t w;
+    size_t n = yonder_scripts_wrappers(p->scripts, NULL, 0, &w);
+    const os64_html_node_t **nodes = n > 0 ? os64_malloc(n * sizeof(*nodes)) : NULL;
+    if (nodes != NULL)
+        n = yonder_scripts_wrappers(p->scripts, nodes, n, &w);
+    os64_html_holders_t h;
+    os64_html_holders(page_doc(p), nodes, nodes != NULL ? n : 0, &h);
+    os64_free(nodes);
+    if (h.short_of_memory || (n > 0 && nodes == NULL)) {
+        os64_snprintf(out, cap, "not counted: no memory for the walk");
+        return;
+    }
+    os64_snprintf(out, cap,
+                  "detached and held, by a script wrapper's node %lu units, %lu nodes (%lu elements); by the change "
+                  "log alone %lu, %lu (%lu); by something else %lu, %lu (%lu); node wrappers %lu: in the document %lu, "
+                  "elsewhere %lu, of those only our registry references %lu; the change log: %lu readers (%lu lost), "
+                  "the oldest %lu versions behind, %lu entries, %lu bytes; live collections %lu, %lu of them made "
+                  "for one call, %lu dropped and waiting to be freed",
+                  (unsigned long)h.marked.units, (unsigned long)h.marked.nodes, (unsigned long)h.marked.elements,
+                  (unsigned long)h.log_only.units, (unsigned long)h.log_only.nodes, (unsigned long)h.log_only.elements,
+                  (unsigned long)h.other.units, (unsigned long)h.other.nodes, (unsigned long)h.other.elements,
+                  (unsigned long)w.wrappers, (unsigned long)w.connected, (unsigned long)w.elsewhere,
+                  (unsigned long)w.elsewhere_only_ours, (unsigned long)h.readers, (unsigned long)h.lost_readers,
+                  (unsigned long)h.oldest_lag, (unsigned long)h.log_entries, (unsigned long)h.log_bytes,
+                  (unsigned long)w.collections, (unsigned long)w.collections_script,
+                  (unsigned long)w.collections_dead);
+}
+
 static void diag_observe(Page *p, const char *when)
 {
     yonder_diag_t *d = p->diag;
+    reading_key_fact(p);
     diag_elements(d, page_doc(p), p->scripts, p->scripting, p->modern);
     if (p->cascade != NULL)
         diag_cascade(d, p->cascade);
@@ -3848,6 +5652,12 @@ static void diag_observe(Page *p, const char *when)
     yonder_diag_fact(d, "written", when);
     diag_wire(d);
     diag_census(p, false);
+    char nodes[640];
+    census_text(p, nodes, sizeof(nodes));
+    yonder_diag_fact(d, "nodes", nodes);
+    char holders[768];
+    holders_text(p, holders, sizeof(holders));
+    yonder_diag_fact(d, "holders", holders);
     if (p->svg_cache) {
         yonder_svg_cache_stats_t stats = yonder_svg_cache_stats(p->svg_cache);
         os64_snprintf(v, sizeof(v), "%lu hits, %lu misses, %lu rasterizations, %lu bypasses",
@@ -3970,6 +5780,7 @@ static void diag_arrived(Page *p, uint64_t laid_ms)
     yonder_diag_head_fact(p->diag, "final address", p->way.url);
     os64_snprintf(v, sizeof(v), "%ld ms", (long)((os64_micros() - yonder_diag_began(p->diag)) / 1000));
     yonder_diag_fact(p->diag, "arrived after", v);
+    lt_mark(p->diag, YONDER_LT_MARK_ARRIVED);
     diag_wire(p->diag);
     diag_navigation(p);
     os64_snprintf(v, sizeof(v), "%dx%d px in %lu ms", (int)p->laid_width, (int)p->laid_height,
@@ -4068,11 +5879,95 @@ static flow_point_t scroll_now(void)
 // (flow_motion_entries): how many elements its animations run on, how many
 // of those draw nothing (no box in or under them), how many the view
 // shows, and how many are due within a second; then the first
-// MOTION_NAMED of those due, each by name. Only what flow_motion_due asks
-// of the element itself is counted due (`counted`). The lines are written
-// anew each time, and none for a page with no layout.
+// MOTION_NAMED of them by name, those due first, then the rest, each with
+// when it is next due: an animation that is not due still costs every
+// turn of the loop that asks (flow_motion_due), so a page that animates
+// while looking still is named too. Only what flow_motion_due asks of the
+// element itself is counted due (`counted`). The lines are written anew
+// each time, and none for a page with no layout.
 #define MOTION_NAMED 8
 #define MOTION_ASKED 1024
+// What the `entry`th animated element's first three animations ARE, on the
+// record beside its `animated N` line (flow_motion_describe): a script's
+// effect or a CSS animation by name, the longhand it sets first and how many
+// more, that longhand at its first and last keyframe, its timing and whether
+// it is held, a script's local time, and the element's clock (the time its
+// style is at, its next phase edge, the layout's time and the last tick's);
+// then, for an element's own entry (not a pseudo-element's, whose node is
+// its originating element), its inline style and its computed margin-top
+// and transform, which is where a page that places by one and moves by the
+// other shows what it left.
+#define MOTION_DESCRIBED 3
+static void diag_motion_what(Page *p, int32_t entry, int32_t named, const os64_html_node_t *node, bool pseudo)
+{
+    static const char *const kFill[] = {"none", "forwards", "backwards", "both"};
+    static const char *const kDirection[] = {"normal", "reverse", "alternate", "alternate-reverse"};
+    flow_env_t env = s_env;
+    env.timeline = NULL;
+    env.ticks = false;
+    env.ctx = p;
+    env.cascade = p->cascade;
+    env.zoom = p->laid_zoom;
+    env.viewport_height = (int32_t)css_view(1, p->laid_height, p->laid_zoom).height;
+    env.scripting = p->scripting;
+    char key[32], v[320];
+    flow_motion_anim_t a;
+    for (int32_t k = 0; k < MOTION_DESCRIBED && flow_motion_describe(p->tree, &env, entry, k, &a); k++) {
+        size_t at = a.script ? (size_t)os64_snprintf(v, sizeof(v), "a script's effect")
+                             : (size_t)os64_snprintf(v, sizeof(v), "the CSS animation %.*s", (int)a.name.len,
+                                                     a.name.text != NULL ? a.name.text : "");
+        if (at < sizeof(v) && a.prop >= 0)
+            at += (size_t)os64_snprintf(v + at, sizeof(v) - at, " of %s", garb_prop_name((garb_prop_t)a.prop));
+        if (at < sizeof(v) && a.nprops > 1)
+            at += (size_t)os64_snprintf(v + at, sizeof(v) - at, " and %d more", (int)a.nprops - 1);
+        if (at < sizeof(v) && (a.first[0] != '\0' || a.last[0] != '\0'))
+            at += (size_t)os64_snprintf(v + at, sizeof(v) - at, ", %s to %s", a.first, a.last);
+        const flow_animation_t *t = &a.timing;
+        char iterations[24], local[40] = "";
+        // A count need not be whole (`2.5`); the format has no %g, so the
+        // fraction is written in thousandths.
+        if (isinf(t->iterations) || isnan(t->iterations))
+            os64_strcopy(iterations, sizeof(iterations), isnan(t->iterations) ? "?" : "infinite");
+        else if (t->iterations == floor(t->iterations))
+            os64_snprintf(iterations, sizeof(iterations), "%ld", (long)t->iterations);
+        else
+            os64_snprintf(iterations, sizeof(iterations), "%ld.%03ld", (long)t->iterations,
+                          (long)((t->iterations - floor(t->iterations)) * 1000));
+        if (a.script && !isnan(a.local_ms) && !isinf(a.local_ms))
+            os64_snprintf(local, sizeof(local), " at %ld ms of its own", (long)a.local_ms);
+        if (at < sizeof(v))
+            at += (size_t)os64_snprintf(v + at, sizeof(v) - at,
+                                        ", %d keyframes, %ld ms, delay %ld ms, fill %s, %s iterations, %s, %s%s",
+                                        (int)a.nframes, (long)t->duration_ms, (long)t->delay_ms,
+                                        (unsigned)t->fill < 4 ? kFill[t->fill] : "?", iterations,
+                                        (unsigned)t->direction < 4 ? kDirection[t->direction] : "?",
+                                        a.held ? "held" : "running", local);
+        char edge[24] = "none";
+        if (!isinf(a.edge))
+            os64_snprintf(edge, sizeof(edge), "%ld ms", (long)a.edge);
+        if (at < sizeof(v))
+            os64_snprintf(v + at, sizeof(v) - at,
+                          "; its style at %ld ms, next edge %s, the layout at %lu ms, the last tick at %lu ms",
+                          (long)a.at, edge, (unsigned long)a.now_ms, (unsigned long)a.tick_ms);
+        os64_snprintf(key, sizeof(key), "animated %d.%d", (int)named, (int)k + 1);
+        yonder_diag_fact(p->diag, key, v);
+    }
+    if (pseudo)
+        return;
+    const os64_html_attr_t *inline_style = os64_html_attr(node, "style");
+    char margin[48] = "", transform[96] = "";
+    flow_computed_t *c = flow_computed_new(p->tree, &env, node, NULL);
+    if (c != NULL) {
+        (void)flow_computed_text(c, GARB_MARGIN_TOP, margin, sizeof(margin));
+        (void)flow_computed_text(c, GARB_TRANSFORM, transform, sizeof(transform));
+        flow_computed_free(c);
+    }
+    os64_snprintf(v, sizeof(v), "inline style \"%.120s\", margin-top %s, transform %s",
+                  inline_style != NULL ? inline_style->value : "", margin, transform);
+    os64_snprintf(key, sizeof(key), "animated %d style", (int)named);
+    yonder_diag_fact(p->diag, key, v);
+}
+
 static void diag_motion(Page *p)
 {
     yonder_diag_forget(p->diag, "animated");
@@ -4093,10 +5988,13 @@ static void diag_motion(Page *p)
         uint64_t next = m->layout_due < m->tick_due ? m->layout_due : m->tick_due;
         undrawn += !m->drawn;
         seen += m->seen;
-        if (!m->counted || next > soon)
-            continue;
-        due++;
-        if (named == MOTION_NAMED)
+        due += m->counted && next <= soon;
+    }
+    for (int32_t pass = 0; pass < 2; pass++)
+    for (int32_t i = 0; i < looked && named < MOTION_NAMED; i++) {
+        const flow_motion_entry_t *m = &e[i];
+        uint64_t next = m->layout_due < m->tick_due ? m->layout_due : m->tick_due;
+        if ((m->counted && next <= soon) != (pass == 0))
             continue;
         char key[24], v[256];
         size_t at = element_named(v, sizeof(v), "", m->node);
@@ -4117,9 +6015,13 @@ static void diag_motion(Page *p)
         if (at < sizeof(v))
             os64_snprintf(v + at, sizeof(v) - at, ", %s, %s, %s, due %s", m->seen ? "in view" : "out of view",
                           m->in_place ? "in place" : "not in place", m->ticks ? "ticks" : "by layouts",
-                          next <= now ? "now" : "within a second");
+                          !m->counted ? "only through what it hands down"
+                          : next <= now ? "now"
+                          : next <= soon ? "within a second"
+                          : next == FLOW_NEVER ? "never" : "later");
         os64_snprintf(key, sizeof(key), "animated %d", (int)++named);
         yonder_diag_fact(p->diag, key, v);
+        diag_motion_what(p, i, named, m->node, m->pseudo != GARB_PSEUDO_NONE);
     }
     char v[160];
     char first[48] = "";
@@ -4399,6 +6301,11 @@ static bool lay_out_shown(bool again, LaidFor laid_for)
     if (!again && g.page.tree != NULL && width == g.page.laid_width &&
          g.zoom == g.page.laid_zoom && (!height_matters || height == g.page.laid_height))
         return !flow_incomplete(g.page.tree);
+    // A rebuild owed (a covered window's rendering step, or a failed one) is
+    // paid first: a layout of the shown Page is refused while its DOM
+    // version is owed to the staged rebuild (page_lay_out_run).
+    if (page_rebuild_owed(&g.page) && !script_rebuild())
+        return false;
     int32_t offset = 0;
     const os64_html_node_t *anchor = anchor_of(&offset);
     // How far into the anchor the view starts, and how far across the page
@@ -4533,7 +6440,6 @@ static void downloads_follow(void);
 static void downloads_orphaned(void);
 static void downloads_heard(void);
 static uint64_t downloads_due(void);
-static bool script_rebuild(void);
 static void stream_drop(void);
 static void stream_sheets(void);
 static int64_t task_begin(yonder_scripts_t *host);
@@ -4635,7 +6541,9 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
     if (laid && fresh->model_version != built)
         sheets_restage(fresh);
     page_timeline(fresh);
+    yonder_lt_why_t why_was = lt_why_begin(YONDER_LT_WHY_ARRIVAL);
     laid = laid && lay_out_page(fresh, width, height);
+    lt_why_end(why_was);
     os64_ticks(&t1);
     if (!laid) {
         yonder_diag_failed(fresh->diag, "layout",
@@ -4731,6 +6639,7 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
     // Its paints are counted from here (diag_paint), its readings anew.
     cost_reset();
     s_cost_readings = 0;
+    s_reading_keys = 0;
     // The families it asked for as it arrived (page_fonts) are the shown
     // page's now; another page's are let go.
     if (s_arriving.staged && g.page.diag != NULL && s_arriving.seq == yonder_diag_seq(g.page.diag)) {
@@ -4847,7 +6756,10 @@ static void arrive(Page *fresh, NavKind kind, const way_position_t *crumb, const
     }
     sheets_start(fresh);
     if (fresh->sheets_waiting == 0) {
+        int64_t lt_from = s_lt.on ? os64_micros() : 0;
         arrive_now(fresh, kind, crumb, fragment);
+        if (s_lt.on)
+            lt_inside(YONDER_LT_IN_ARRIVING, lt_from);
         return;
     }
     g.coming.active = true;
@@ -5025,6 +6937,7 @@ static void bar_forget(void)
 // have to agree.
 static void bar_ask(Asker asker, uint32_t number, const char *question)
 {
+    fs_leave(true);     // yonder asks the person, in a hidden row (C.7)
     if (g.asker == ASK_WORKER && g.stream.mail != NULL)
         yonder_mail_answer(g.stream.mail, g.bar.number, false);
     if (g.asker == ASK_REQUEST)
@@ -6228,7 +8141,10 @@ static void coming_show(void)
     bool has_fragment = g.coming.has_fragment;
     os64_strcopy(fragment, sizeof(fragment), g.coming.fragment);
     os64_memset(&g.coming, 0, sizeof(g.coming));
+    int64_t lt_from = s_lt.on ? os64_micros() : 0;
     arrive_now(&page, kind, &crumb, has_fragment ? fragment : NULL);
+    if (s_lt.on)
+        lt_inside(YONDER_LT_IN_ARRIVING, lt_from);
 }
 
 // The page waiting for its sheets is not wanted after all.
@@ -6296,7 +8212,9 @@ static void sheet_arrived(const yonder_sheet_job_t *job, yonder_sheet_t *got)
         if (p->sheets_waiting == 0)
             coming_show();
     } else if (p == &g.page && p->sheets_changed) {
+        yonder_lt_why_t why_was = lt_why_begin(YONDER_LT_WHY_SHEET);
         relayout(true);
+        lt_why_end(why_was);
     }
 }
 
@@ -7126,8 +9044,11 @@ static bool webfonts_undrawn(const os64_html_node_t *n)
 }
 
 // The document's characters (s_web.chars), found once a layout: its text
-// nodes, but for those webfonts_undrawn holds. Generated content is not
-// laid out by libflow, so it has none to add (GARB.md's G5).
+// nodes, but for those webfonts_undrawn holds. Text a page shows that is
+// in no text node (generated content, a list marker, an image's alt text,
+// a control's value and placeholder, and what text-transform makes of a
+// character) is not read (DEBTS), so a face only such text would meet is
+// never fetched, and no layout's lists depend on it either.
 static void webfonts_chars(const Page *p)
 {
     const os64_html_document_t *doc = page_doc(p);
@@ -7166,28 +9087,94 @@ static void webfonts_chars(const Page *p)
     }
 }
 
-// Whether the document has a character from `first` to `last`: the
-// first and last words masked to the range, the words between counted.
-static bool webfonts_any(uint32_t first, uint32_t last)
+// Whether a set of characters (`set`, with its counts `upto`) has one from
+// `first` to `last`: the first and last words masked to the range, the
+// words between counted.
+static bool webfonts_any(const uint64_t *set, const uint16_t *upto, uint32_t first, uint32_t last)
 {
     uint32_t wf = first >> 6, wl = last >> 6;
     uint64_t head = ~0ull << (first & 63), tail = ~0ull >> (63 - (last & 63));
     if (wf == wl)
-        return (s_web.chars[wf] & head & tail) != 0;
-    return (s_web.chars[wf] & head) != 0 || (s_web.chars[wl] & tail) != 0 ||
-           s_web.chars_upto[wl - 1] != s_web.chars_upto[wf];
+        return (set[wf] & head & tail) != 0;
+    return (set[wf] & head) != 0 || (set[wl] & tail) != 0 || upto[wl - 1] != upto[wf];
 }
-
-// Whether a face's ranges meet the document's characters: one without
-// ranges always does. libgarb keeps a range within U+10FFFF and forwards.
-static bool webfonts_meet(const garb_font_face_t *f)
+static bool webfonts_meet_in(const garb_font_face_t *f, const uint64_t *set, const uint16_t *upto)
 {
     if (f->nranges == 0)
         return true;
     for (int32_t i = 0; i < f->nranges; i++)
-        if (webfonts_any(f->ranges[i].first, f->ranges[i].last))
+        if (webfonts_any(set, upto, f->ranges[i].first, f->ranges[i].last))
             return true;
     return false;
+}
+
+// Whether a face's ranges meet the document's characters: one without
+// ranges always does. For the document met_doc, every character it has
+// held counts (s_web.met), and the ones it holds now, which a canvas may
+// ask about between layouts. libgarb keeps a range within U+10FFFF and
+// forwards.
+static bool webfonts_meet(const garb_font_face_t *f)
+{
+    if (webfonts_meet_in(f, s_web.chars, s_web.chars_upto))
+        return true;
+    return s_web.met_doc != NULL && s_web.met_doc == s_web.chars_doc &&
+           webfonts_meet_in(f, s_web.met, s_web.met_upto);
+}
+
+// Whether a face has a source yonder could fetch and read: one without
+// any is never listed (webfonts_file finds it no file), so meeting it
+// changes nothing a layout draws.
+static bool webfonts_readable(const garb_face_src_t *s);
+static bool webfonts_loadable(const garb_font_face_t *f)
+{
+    for (int32_t i = 0; i < f->nsrc; i++)
+        if (f->src[i].kind == GARB_FACE_URL && webfonts_readable(&f->src[i]))
+            return true;
+    return false;
+}
+
+// THE FACES A LAYOUT CAN NEWLY MEET (layout_font_dependencies): the
+// document's characters as they stand (webfonts_chars) taken into what
+// met_doc has held, and whether that met a face nothing before met which
+// yonder could load. Which face draws a character is the character's, the
+// family list's and the faces' business, not the rest of the document's,
+// except through the list: a face newly met joins its family's list,
+// which gives a line its first font's metrics and keeps a place for a
+// face whose file is coming (page_fonts), so text holding none of its
+// characters can be drawn otherwise. Text taken away unmeets nothing while
+// the document is the one laid out. A layout of another (a page arriving,
+// a measured one) starts the set again for that one, and is a change: the
+// first document's next layout starts from its characters as they stand,
+// and moves the revision.
+static bool webfonts_newly_met(const Page *p, const garb_font_face_t *faces, int32_t nfaces)
+{
+    webfonts_chars(p);
+    const os64_html_document_t *doc = s_web.chars_doc;
+    bool grew = false;
+    if (s_web.met_doc != doc) {
+        s_web.met_doc = doc;
+        os64_memset(s_web.met, 0, sizeof(s_web.met));
+        os64_memset(s_web.met_upto, 0, sizeof(s_web.met_upto));
+        grew = true;
+    } else {
+        for (int32_t i = 0; i < nfaces && !grew; i++)
+            grew = faces[i].nranges > 0 && webfonts_loadable(&faces[i]) &&
+                   !webfonts_meet_in(&faces[i], s_web.met, s_web.met_upto) &&
+                   webfonts_meet_in(&faces[i], s_web.chars, s_web.chars_upto);
+    }
+    bool more = false;
+    for (uint32_t w = 0; w < 0x110000 / 64; w++) {
+        more |= (s_web.chars[w] & ~s_web.met[w]) != 0;
+        s_web.met[w] |= s_web.chars[w];
+    }
+    if (more) {
+        uint16_t upto = 0;
+        for (uint32_t w = 0; w < 0x110000 / 64; w++) {
+            upto += s_web.met[w] != 0;
+            s_web.met_upto[w] = upto;
+        }
+    }
+    return grew;
 }
 
 // Whether a source's format() hint names a container yonder reads; one
@@ -8040,7 +10027,7 @@ static void webfonts_orphaned(void)
 static void webfonts_leave(void)
 {
     layout_revision(&s_layout_resources.fonts);
-    s_layout_resources.font_doc = NULL;
+    s_web.met_doc = NULL;
     for (int32_t i = 0; i < s_web.nfiles; i++) {
         if (s_web.files[i].state == WF_WAITING && g.pool != NULL)
             os64_work_cancel(g.pool, s_web.files[i].id);
@@ -8076,6 +10063,10 @@ typedef struct {
     size_t n, cap;
     bool short_of_memory;
 } DiagText;
+static void plane_reading(DiagText *t, const Video *v, const os64_media_player_facts_t *f);
+static void video_glass_reading(DiagText *t, Video *v, const os64_media_player_facts_t *f);
+static void plane_counts_reading(DiagText *t);
+static void heap_regions_reading(DiagText *t);
 
 static void dt_put(DiagText *t, const char *fmt, ...) OS64_PRINTF(2, 3);
 static void dt_put(DiagText *t, const char *fmt, ...)
@@ -8106,6 +10097,42 @@ static void dt_put(DiagText *t, const char *fmt, ...)
         t->n += (size_t)need;
     }
     va_end(again);
+}
+
+// Microseconds as the reading says them: ms with one decimal.
+typedef struct { char text[24]; } dt_ms_t;
+static dt_ms_t dt_ms(uint64_t us)
+{
+    dt_ms_t m;
+    os64_snprintf(m.text, sizeof(m.text), "%lu.%lu ms", (unsigned long)(us / 1000), (unsigned long)(us % 1000 / 100));
+    return m;
+}
+// A forced_phases_t as the reading says it (`<whose> forced layouts by
+// phase`), when it holds anything: the layouts and their wall time, the
+// model rebuilds, the cascade by what became of it (fresh by reason), then
+// style, boxes, placement and the public tree, and the boxes made and
+// copied.
+static void dt_phases(DiagText *t, const char *whose, const forced_phases_t *f)
+{
+    if (f->layouts == 0 && f->models == 0)
+        return;
+    uint64_t cascade = f->cascade_us[FORCED_KEPT] + f->cascade_us[FORCED_UPDATED] + f->cascade_us[FORCED_FRESH];
+    dt_put(t, "; %s forced layouts by phase: %lu in %s, model %s (%lu), cascade %s (%lu kept %s, %lu updated %s, "
+           "%lu fresh %s", whose, (unsigned long)f->layouts, dt_ms(f->total_us).text, dt_ms(f->model_us).text,
+           (unsigned long)f->models, dt_ms(cascade).text, (unsigned long)f->cascades[FORCED_KEPT],
+           dt_ms(f->cascade_us[FORCED_KEPT]).text, (unsigned long)f->cascades[FORCED_UPDATED],
+           dt_ms(f->cascade_us[FORCED_UPDATED]).text, (unsigned long)f->cascades[FORCED_FRESH],
+           dt_ms(f->cascade_us[FORCED_FRESH]).text);
+    const char *const *names = cascade_reason_names();
+    const char *sep = ": ";
+    for (int32_t i = 0; i < YONDER_LAYOUT_CASCADE_REASONS; i++)
+        if (f->fresh_by[i] != 0) {
+            dt_put(t, "%s%s %lu", sep, names[i] != NULL ? names[i] : "?", (unsigned long)f->fresh_by[i]);
+            sep = ", ";
+        }
+    dt_put(t, "), style %s, boxes %s, placement %s, public %s; %lu boxes, %lu of them copied", dt_ms(f->style_us).text,
+           dt_ms(f->boxes_us).text, dt_ms(f->place_us).text, dt_ms(f->public_us).text, (unsigned long)f->boxes,
+           (unsigned long)f->copied);
 }
 
 // A weight as the rule wrote it: whole, or to two places.
@@ -8237,7 +10264,7 @@ static void diag_face(Page *p, int32_t i, const garb_font_face_t *f, bool shown)
 }
 
 // The main loop's work since the page was shown, or since its record was
-// last written on asking (`d`, view_key): how many paints and how much of
+// last written on asking (the reading chord): how many paints and how much of
 // the view they painted, the ticks, schedules, layouts and script tasks,
 // the biggest part marked and painted and the canvas and control marks,
 // the ticker's bells and the deadlines handed it — every count, painted or
@@ -8295,6 +10322,12 @@ static bool paint_lines(DiagText *t, DiagText *u)
                (unsigned long)(kept.bytes / 1024), (unsigned long)kept.entries, (unsigned long)(kept.budget / 1024));
     else
         dt_put(t, "; no paint cache");
+    // What the canvases' smoothed draws kept, among those blocks (canvas_keep.h).
+    yonder_canvas_keep_counts_t canvases = yonder_canvas_keep_counts(g.canvas_keeps);
+    if (canvases.kept + canvases.found + canvases.dropped + canvases.refused > 0)
+        dt_put(t, "; canvas pictures: %lu blocks kept, %lu found, %lu dropped for a change, %lu draws not "
+               "kept for room or memory", (unsigned long)canvases.kept, (unsigned long)canvases.found,
+               (unsigned long)canvases.dropped, (unsigned long)canvases.refused);
     // What the turned groups' kept drawings saved (keep.h).
     yonder_keeps_counts_t keeps = yonder_keeps_counts(g.keeps);
     if (g.keeps != NULL)
@@ -8309,18 +10342,41 @@ static bool paint_lines(DiagText *t, DiagText *u)
     dt_put(t, "; %lu script tasks: %lu scripts, %lu timers, %lu events",
            (unsigned long)(s_cost.scripts + s_cost.timers + s_cost.events), (unsigned long)s_cost.scripts,
            (unsigned long)s_cost.timers, (unsigned long)s_cost.events);
+    if (s_cost.task_longest > 0 && rate != 0)
+        dt_put(t, "; the longest task %s, %lu.%lu ms, forcing %lu layouts in %lu.%lu ms", s_cost.task_longest_what,
+               (unsigned long)(s_cost.task_longest / rate / 1000), (unsigned long)(s_cost.task_longest / rate % 1000 / 100),
+               (unsigned long)s_cost.task_longest_layouts, (unsigned long)(s_cost.task_longest_layout_us / 1000),
+               (unsigned long)(s_cost.task_longest_layout_us % 1000 / 100));
+    dt_phases(t, "the longest task's", &s_cost.task_longest_phases);
+    dt_phases(t, "the reading's", &s_cost.forced_phases);
     if (s_cost.mark_most.w > 0)
         dt_put(t, "; the biggest part marked %dx%d at %d,%d by %s, the biggest painted %dx%d",
                (int)s_cost.mark_most.w, (int)s_cost.mark_most.h, (int)s_cost.mark_most.x,
                (int)s_cost.mark_most.y, s_cost.mark_who, (int)s_cost.paint_most.w, (int)s_cost.paint_most.h);
     dt_put(t, "; %lu canvas marks, %lu form control marks", (unsigned long)s_cost.canvas_marks,
            (unsigned long)s_cost.control_marks);
+    if (s_cost.unseen_alpha0 + s_cost.unseen_culled + s_cost.unseen_offview > 0)
+        dt_put(t, "; canvases acknowledged unseen: %lu in a group at alpha 0, %lu culled, %lu out of view",
+               (unsigned long)s_cost.unseen_alpha0, (unsigned long)s_cost.unseen_culled,
+               (unsigned long)s_cost.unseen_offview);
+    for (int32_t i = 0; i < s_cost.nticked; i++)
+        dt_put(t, "%s%s %lu", i == 0 ? "; ticks that were frames changed " : ", ", s_cost.ticked[i].what,
+               (unsigned long)s_cost.ticked[i].n);
+    if (s_cost.ticked_rest > 0)
+        dt_put(t, ", others %lu", (unsigned long)s_cost.ticked_rest);
     if (s_cost.video_frames > 0)
         dt_put(t, "; videos: %lu frames asked (%lu us), %lu new pictures, painted %lu plain and %lu general "
                "(%lu us)",
                (unsigned long)s_cost.video_frames, (unsigned long)s_cost.video_ask_us,
                (unsigned long)s_cost.video_pictures, (unsigned long)s_cost.video_plain,
                (unsigned long)s_cost.video_general, (unsigned long)s_cost.video_draw_us);
+    if (s_cost.covered_paints > 0 || s_cost.covered_refused > 0 || s_cost.covered_budget > 0)
+        dt_put(t, "; paints a video covered %lu (from the video up), %lu pieces of their rest painted the ordinary way, %lu "
+               "painted again, %lu not split for a backdrop reader, %lu painted the ordinary way for the layers' "
+               "budget or a sheet's size",
+               (unsigned long)s_cost.covered_paints, (unsigned long)s_cost.covered_pieces,
+               (unsigned long)s_cost.covered_again, (unsigned long)s_cost.covered_refused,
+               (unsigned long)s_cost.covered_budget);
     // Each video's player, as gplay's readout counts it.
     for (int32_t i = 0; i < VIDEOS_MAX; i++) {
         os64_media_player_facts_t vf;
@@ -8338,7 +10394,10 @@ static bool paint_lines(DiagText *t, DiagText *u)
                (unsigned long)vf.pace.dropped, (unsigned long)vf.pace.skipped, (unsigned long)vf.pace.starved,
                (unsigned long)vf.pace.resyncs, (unsigned long)vf.sound_written, (unsigned long)vf.sound_dropped,
                (unsigned long)vf.buffers, duration);
+        video_glass_reading(t, &s_videos[i], &vf);
+        plane_reading(t, &s_videos[i], &vf);
     }
+    plane_counts_reading(t);
     // Every media session's length, from its source to what script was told.
     char media_line[320];
     for (uint32_t i = 0; yonder_media_report(i, media_line, sizeof(media_line)); i++)
@@ -8439,8 +10498,8 @@ static bool whole_lines(DiagText *w)
 // each its own time; its counter is the TSC, as `cycles()` is, and a tick
 // is turned into time with the rate since yonder started
 // (ledger_sample_ticks). The record's lines count from the page's
-// runtime's start, through the page arriving and being shown; a `d` reading
-// counts from the last `d`, when the paint counts start again too, so it
+// runtime's start, through the page arriving and being shown; a reading
+// counts from the last one, when the paint counts start again too, so it
 // can split the whole span (diag_ledger_reading).
 
 // Ticks in tenths of a millisecond, and a pair for "%lu.%lu".
@@ -8517,6 +10576,41 @@ static const char *ledger_file(const char *file)
 #define LEDGER_CALLEES_SHOWN 10
 #define LEDGER_SAMPLES_SHOWN 20
 
+// The profile's functions that cost most since the ledger began or was
+// last reset (a reading resets it), each where it is defined and the
+// function it was called from, into `u`: the line `script profile` and
+// each `script profile reading N` say. False, with nothing written, when
+// the ledger is off or there is no memory to sort its rows.
+static bool profile_text(const os64_js_runtime_t *rt, uint64_t per_ms, DiagText *u)
+{
+    os64_js_ledger_totals_t k;
+    if (!os64_js_ledger_totals(rt, &k))
+        return false;
+    os64_js_ledger_sample_t *samples = os64_malloc(sizeof(*samples) * 512);
+    if (samples == NULL)
+        return false;
+    size_t n = 0, cursor = 0;
+    while (n < 512 && os64_js_ledger_sample(rt, &cursor, &samples[n]))
+        n++;
+    ledger_samples_top(samples, n, LEDGER_SAMPLES_SHOWN);
+    dt_put(u, "%lu samples", (unsigned long)k.samples);
+    for (size_t i = 0; i < n && i < LEDGER_SAMPLES_SHOWN; i++) {
+        const os64_js_ledger_sample_t *s = &samples[i];
+        if (s->at.function != NULL)
+            dt_put(u, "; %s at %s:%d:%d", s->at.name, ledger_file(s->at.file), s->at.line, s->at.column);
+        else
+            dt_put(u, "; %s", s->at.name);
+        if (s->caller.function != NULL)
+            dt_put(u, " from %s at %s:%d:%d", s->caller.name, ledger_file(s->caller.file), s->caller.line,
+                   s->caller.column);
+        else if (s->caller.name[0] != '\0')
+            dt_put(u, " from %s", s->caller.name);
+        dt_put(u, ": %lu.%lu ms, %lu samples", LEDGER_MS(ledger_tenths(s->ticks, per_ms)), (unsigned long)s->samples);
+    }
+    os64_free(samples);
+    return true;
+}
+
 // The libdom calls that cost most, their own time and the layouts they
 // forced, and the profile's functions that cost most, each where it is
 // defined and the function it was called from. Each line is rewritten at
@@ -8557,47 +10651,19 @@ static void ledger_rows(Page *p, const os64_js_runtime_t *rt, uint64_t per_ms)
     }
     os64_free(callees);
     os64_free(t.s);
-    os64_js_ledger_totals_t k;
-    if (s_ledger != YONDER_LEDGER_PROFILE || !os64_js_ledger_totals(rt, &k))
-        return;
-    os64_js_ledger_sample_t *samples = os64_malloc(sizeof(*samples) * 512);
-    n = 0;
-    cursor = 0;
-    if (samples != NULL)
-        while (n < 512 && os64_js_ledger_sample(rt, &cursor, &samples[n]))
-            n++;
     DiagText u = {0};
-    if (samples == NULL)
-        yonder_diag_forget(p->diag, "script profile");
-    else if (n == 0) {
-        dt_put(&u, "%lu samples", (unsigned long)k.samples);
+    if (s_ledger != YONDER_LEDGER_PROFILE)
+        return;
+    if (profile_text(rt, per_ms, &u))
         yonder_diag_fact(p->diag, "script profile", dt_text(&u));
-    } else {
-        ledger_samples_top(samples, n, LEDGER_SAMPLES_SHOWN);
-        dt_put(&u, "%lu samples", (unsigned long)k.samples);
-        for (size_t i = 0; i < n && i < LEDGER_SAMPLES_SHOWN; i++) {
-            const os64_js_ledger_sample_t *s = &samples[i];
-            if (s->at.function != NULL)
-                dt_put(&u, "; %s at %s:%d:%d", s->at.name, ledger_file(s->at.file), s->at.line, s->at.column);
-            else
-                dt_put(&u, "; %s", s->at.name);
-            if (s->caller.function != NULL)
-                dt_put(&u, " from %s at %s:%d:%d", s->caller.name, ledger_file(s->caller.file), s->caller.line,
-                       s->caller.column);
-            else if (s->caller.name[0] != '\0')
-                dt_put(&u, " from %s", s->caller.name);
-            dt_put(&u, ": %lu.%lu ms, %lu samples", LEDGER_MS(ledger_tenths(s->ticks, per_ms)),
-                   (unsigned long)s->samples);
-        }
-        yonder_diag_fact(p->diag, "script profile", dt_text(&u));
-    }
-    os64_free(samples);
+    else
+        yonder_diag_forget_key(p->diag, "script profile");   // never the readings, which begin the same
     os64_free(u.s);
 }
 
 // The record's ledger lines: the kinds since the page's runtime began (or
-// the last `d`), against the time since then; what is not script is
-// yonder's own work and waiting, which a `d` reading splits.
+// the last reading), against the time since then; what is not script is
+// yonder's own work and waiting, which a reading splits.
 static void diag_ledger(Page *p)
 {
     const os64_js_runtime_t *rt = yonder_scripts_ledger(page_scripts(p));
@@ -8617,7 +10683,7 @@ static void diag_ledger(Page *p)
     ledger_rows(p, rt, per_ms);
 }
 
-// A `d` reading's ledger line: the whole span since the last `d` split into
+// A reading's ledger line: the whole span since the last reading split into
 // the ledger's kinds, yonder's own work (s_cost: the render, the publish,
 // the ticks, and the layouts neither script nor a tick made, which are in
 // those already) and waiting, and the rest: what none of them times (the
@@ -8635,14 +10701,14 @@ static void diag_ledger_reading(Page *p, uint32_t n)
     os64_snprintf(key, sizeof(key), "script ledger reading %u", (unsigned)n);
     if (k.since < s_cost.from_cycles) {
         // The paint counts began when the page was shown, the ledger with
-        // its script: their spans differ until a `d` starts both at once.
+        // its script: their spans differ until a reading starts both at once.
         DiagText t = {0};
         uint64_t now = os64_js_ledger_now(), since = now > k.since ? now - k.since : 0;
         dt_put(&t, "%lu.%lu ms since the page's script began: script %lu.%lu ms: ",
                LEDGER_MS(ledger_tenths(since, per_ms)), LEDGER_MS(ledger_tenths(ledger_sum(&k), per_ms)));
         ledger_kinds(&t, &k, per_ms);
         dt_put(&t, "; the next reading splits the whole span, its counts and the ledger starting together");
-        yonder_diag_fact(p->diag, key, dt_text(&t));
+        yonder_diag_reading_fact(p->diag, key, dt_text(&t));
         os64_free(t.s);
         return;
     }
@@ -8667,15 +10733,84 @@ static void diag_ledger_reading(Page *p, uint32_t n)
            LEDGER_MS(ledger_tenths(s_cost.waited, per_ms)),
            span >= accounted ? "the rest (parsing, events, the loop)" : "counted twice",
            LEDGER_MS(ledger_tenths(span >= accounted ? span - accounted : accounted - span, per_ms)));
-    yonder_diag_fact(p->diag, key, dt_text(&t));
+    yonder_diag_reading_fact(p->diag, key, dt_text(&t));
     os64_free(t.s);
+}
+
+// A reading's profile (`ledger = profile`): the functions that cost most in
+// the span the reading's ledger line splits, so a quiet minute is not
+// drowned by the page's load; the first reading's ledger counts from the
+// page's script's start and says so. Read before the ledger is reset.
+static void diag_profile_reading(Page *p, uint32_t n)
+{
+    const os64_js_runtime_t *rt = yonder_scripts_ledger(page_scripts(p));
+    os64_js_ledger_totals_t k;
+    if (s_ledger != YONDER_LEDGER_PROFILE || rt == NULL || !os64_js_ledger_totals(rt, &k))
+        return;
+    DiagText u = {0};
+    if (k.since < s_cost.from_cycles)
+        dt_put(&u, "since the page's script began: ");
+    char key[40];
+    os64_snprintf(key, sizeof(key), "script profile reading %u", (unsigned)n);
+    if (profile_text(rt, ledger_sample_ticks(), &u)) {
+        yonder_diag_reading_fact(p->diag, key, dt_text(&u));
+    } else {
+        // The reading resets the ledger after this, so its samples are gone
+        // either way: the record says so rather than looking whole.
+        yonder_diag_reading_fact(p->diag, key, "not written: no memory to sort its samples");
+        yonder_diag_short(p->diag);
+    }
+    os64_free(u.s);
+}
+
+// `paint effects`: the costliest first, each as what it was, how many
+// times, its milliseconds in all and its microseconds each, the counter's
+// cycles turned into time at the rate the paint stages use (paint_lines);
+// then the boxes the walk handed the painter, in all and a paint. False,
+// with nothing written, when there were none or the counter has no rate.
+static bool effects_lines(DiagText *e)
+{
+    if (s_neffects == 0 && s_effects_rest_n == 0)
+        return false;
+    uint64_t span_us = (uint64_t)(os64_micros() - s_cost.from_us);
+    uint64_t rate = span_us > 0 ? cycles_since(s_cost.from_cycles) / span_us : 0;   // per microsecond
+    if (rate == 0)
+        return false;
+    // The table by time, costliest first (a small table, sorted in place).
+    for (int32_t i = 1; i < s_neffects; i++)
+        for (int32_t j = i; j > 0 && s_effects[j].cycles > s_effects[j - 1].cycles; j--) {
+            PaintEffect swap = s_effects[j];
+            s_effects[j] = s_effects[j - 1];
+            s_effects[j - 1] = swap;
+        }
+    for (int32_t i = 0; i < s_neffects && i < 12; i++) {
+        uint64_t us = s_effects[i].cycles / rate;
+        dt_put(e, "%s%s: %lu, %lu.%lu ms (%lu us each)", i ? "; " : "", s_effects[i].what,
+               (unsigned long)s_effects[i].n, (unsigned long)(us / 1000), (unsigned long)(us % 1000 / 100),
+               (unsigned long)(s_effects[i].n ? us / s_effects[i].n : 0));
+    }
+    uint64_t more_n = s_effects_rest_n, more = s_effects_rest_cycles;
+    for (int32_t i = 12; i < s_neffects; i++) {
+        more_n += s_effects[i].n;
+        more += s_effects[i].cycles;
+    }
+    if (more_n > 0)
+        dt_put(e, "%sthe rest: %lu, %lu.%lu ms", s_neffects ? "; " : "", (unsigned long)more_n,
+               (unsigned long)(more / rate / 1000), (unsigned long)(more / rate % 1000 / 100));
+    uint64_t boxes = yonder_paint_boxes - s_effects_boxes_from;
+    dt_put(e, "; boxes handed the painter %lu, %lu a paint", (unsigned long)boxes,
+           (unsigned long)(s_cost.paints > 0 ? boxes / s_cost.paints : 0));
+    return true;
 }
 
 static void diag_paint(Page *p)
 {
-    DiagText t = {0}, u = {0}, w = {0};
+    DiagText t = {0}, u = {0}, w = {0}, h = {0};
     bool timed = paint_lines(&t, &u);
     yonder_diag_fact(p->diag, "paint", dt_text(&t));
+    heap_regions_reading(&h);
+    yonder_diag_fact(p->diag, "heap", dt_text(&h));
+    os64_free(h.s);
     if (timed)
         yonder_diag_fact(p->diag, "paint stages", dt_text(&u));
     else
@@ -8684,25 +10819,142 @@ static void diag_paint(Page *p)
         yonder_diag_fact(p->diag, "whole views", dt_text(&w));
     else
         yonder_diag_forget(p->diag, "whole views");
+    DiagText e = {0};
+    if (effects_lines(&e))
+        yonder_diag_fact(p->diag, "paint effects", dt_text(&e));
+    else
+        yonder_diag_forget(p->diag, "paint effects");
+    os64_free(e.s);
     os64_free(t.s);
     os64_free(u.s);
     os64_free(w.s);
     diag_ledger(p);
 }
 
+// Where the thread went in reading `n` (s_tr): its steps and calls, its
+// slow turns, its timer tasks by site, the collector, and the walks whose
+// size the page sets. A collector or timer list whose page's script is not the one the
+// reading began with (the page's script made again) is said from that
+// script's start.
+static void diag_thread_reading(Page *p, uint32_t n)
+{
+    if (!s_tr.on)
+        return;
+    char line[4096], key[48];
+    uint64_t per_ms = counter_per_ms();
+    yonder_tr_steps_line(&s_tr, (int64_t)cycles(), per_ms, line, sizeof(line));
+    os64_snprintf(key, sizeof(key), "thread reading %u", (unsigned)n);
+    yonder_diag_reading_fact(p->diag, key, line);
+    static char slow[YONDER_TR_SLOW_LINE];
+    yonder_tr_slow_line(&s_tr, per_ms, slow, sizeof(slow));
+    os64_snprintf(key, sizeof(key), "slow turns reading %u", (unsigned)n);
+    yonder_diag_reading_fact(p->diag, key, slow);
+    yonder_tr_timers_line(&s_tr, per_ms, line, sizeof(line));
+    os64_snprintf(key, sizeof(key), "timers reading %u", (unsigned)n);
+    yonder_diag_reading_fact(p->diag, key, line);
+    bool same = s_tr_host == page_scripts(p);
+    if (!same) {
+        s_tr.collector_from = (yonder_tr_collector_t){0};
+        s_tr.list_from = (yonder_tr_list_t){0};
+    }
+    yonder_tr_collector_t c = tr_collector();
+    char said[4096];
+    yonder_tr_collector_line(&s_tr, &c, yonder_scripts_heap_bytes(page_scripts(p)),
+                             yonder_scripts_memory_bytes(page_scripts(p)), per_ms, line, sizeof(line));
+    os64_snprintf(said, sizeof(said), "%s%s", same ? "" : "since the page's script began: ", line);
+    os64_snprintf(key, sizeof(key), "collector reading %u", (unsigned)n);
+    yonder_diag_reading_fact(p->diag, key, said);
+    yonder_tr_list_t l = tr_list();
+    yonder_tr_walks_line(&s_tr, &l, yonder_scripts_held(page_scripts(p)), line, sizeof(line));
+    os64_snprintf(said, sizeof(said), "%s%s", same ? "" : "the timer list counted from the page's script's start; ", line);
+    os64_snprintf(key, sizeof(key), "walks reading %u", (unsigned)n);
+    yonder_diag_reading_fact(p->diag, key, said);
+}
+
 // The counts kept as reading `n` of the page, with where the page was
-// scrolled, before they start again (diag_asked): each `d` adds one.
+// scrolled, before they start again (diag_asked): each reading adds one.
 static void diag_paint_reading(Page *p, uint32_t n)
 {
-    DiagText t = {0}, u = {0}, v = {0}, w = {0};
+    DiagText t = {0}, u = {0}, v = {0}, w = {0}, h = {0};
     bool timed = paint_lines(&t, &u);
     bool whole = whole_lines(&w);
-    dt_put(&v, "at y %ld: %s%s%s%s%s", (long)g.sy, dt_text(&t), timed ? " | " : "", timed ? dt_text(&u) : "",
-           whole ? " | whole views: " : "", whole ? dt_text(&w) : "");
+    heap_regions_reading(&h);
+    dt_put(&v, "at y %ld: %s%s%s | %s%s%s", (long)g.sy, dt_text(&t), timed ? " | " : "", timed ? dt_text(&u) : "",
+           dt_text(&h), whole ? " | whole views: " : "", whole ? dt_text(&w) : "");
+    os64_free(h.s);
     char key[32];
     os64_snprintf(key, sizeof(key), "paint reading %u", (unsigned)n);
-    yonder_diag_fact(p->diag, key, dt_text(&v));
+    yonder_diag_reading_fact(p->diag, key, dt_text(&v));
+    DiagText e = {0};
+    if (effects_lines(&e)) {
+        char ekey[40];
+        os64_snprintf(ekey, sizeof(ekey), "paint effects reading %u", (unsigned)n);
+        yonder_diag_reading_fact(p->diag, ekey, dt_text(&e));
+    }
+    os64_free(e.s);
     diag_ledger_reading(p, n);
+    diag_profile_reading(p, n);
+    diag_thread_reading(p, n);
+    if (s_layout_profile) {
+        char needed[768], nkey[40];
+        yonder_diag_needed_text(&s_needed_reading, needed, sizeof(needed));
+        os64_snprintf(nkey, sizeof(nkey), "layout needed reading %u", (unsigned)n);
+        yonder_diag_reading_fact(p->diag, nkey, needed);
+        // What a layout walked beside what it cost (s_sizes_reading), each
+        // an average, and where every node is now (census_text).
+        uint64_t L = s_sizes_reading.layouts, U = s_sizes_reading.updates, F = s_sizes_reading.fresh,
+                 M = s_sizes_reading.models;
+        char sizes[512];
+        os64_snprintf(sizes, sizeof(sizes),
+                      "%lu layouts, each over %lu nodes in its arena, %lu elements styled and %lu boxes, %lu us style to public; "
+                      "cascade updated %lu, %lu us each over %lu elements held; built fresh %lu, %lu us each over %lu; "
+                      "model rebuilt %lu, %lu us each over %lu nodes in its arena",
+                      (unsigned long)L, (unsigned long)(L ? s_sizes_reading.nodes / L : 0),
+                      (unsigned long)(L ? s_sizes_reading.elements / L : 0), (unsigned long)(L ? s_sizes_reading.boxes / L : 0),
+                      (unsigned long)(L ? s_sizes_reading.us / L : 0), (unsigned long)U,
+                      (unsigned long)(U ? s_sizes_reading.update_us / U : 0),
+                      (unsigned long)(U ? s_sizes_reading.update_held / U : 0), (unsigned long)F,
+                      (unsigned long)(F ? s_sizes_reading.fresh_us / F : 0),
+                      (unsigned long)(F ? s_sizes_reading.fresh_held / F : 0), (unsigned long)M,
+                      (unsigned long)(M ? s_sizes_reading.model_us / M : 0),
+                      (unsigned long)(M ? s_sizes_reading.model_nodes / M : 0));
+        os64_snprintf(nkey, sizeof(nkey), "layout sizes reading %u", (unsigned)n);
+        yonder_diag_reading_fact(p->diag, nkey, sizes);
+        char nodes[640];
+        census_text(p, nodes, sizeof(nodes));
+        os64_snprintf(nkey, sizeof(nkey), "nodes reading %u", (unsigned)n);
+        yonder_diag_reading_fact(p->diag, nkey, nodes);
+        char holders[768];
+        holders_text(p, holders, sizeof(holders));
+        os64_snprintf(nkey, sizeof(nkey), "holders reading %u", (unsigned)n);
+        yonder_diag_reading_fact(p->diag, nkey, holders);
+        // W0's two tables, each written when it holds anything and started
+        // again for the next reading (WHOLE_REPAINTS.md).
+        const struct { CountedAt *t; const char *key; } w0[] = {
+            {&s_not_covered, "not covered reading %u"},
+            {&s_script_changes, "whole views by a script's change reading %u"},
+            {&s_forced, "forced layouts by what was pending reading %u"},
+            {&s_style_reads, "style writes restyled for a style selector reading %u"},
+            {&s_script_parts, "script changes painted reading %u"},
+        };
+        for (size_t k = 0; k < sizeof(w0) / sizeof(w0[0]); k++) {
+            if (w0[k].t->nrows > 0 || w0[k].t->others > 0) {
+                char line[1536], key[64];
+                counted_at_line(w0[k].t, line, sizeof(line));
+                os64_snprintf(key, sizeof(key), w0[k].key, (unsigned)n);
+                yonder_diag_reading_fact(p->diag, key, line);
+            }
+            counted_at_reset(w0[k].t);
+        }
+        s_script_parts_area = 0;
+        if (s_pending_lost > 0) {
+            char lost[64], lkey[48];
+            os64_snprintf(lost, sizeof(lost), "%lu", (unsigned long)s_pending_lost);
+            os64_snprintf(lkey, sizeof(lkey), "pending reader lost the log reading %u", (unsigned)n);
+            yonder_diag_reading_fact(p->diag, lkey, lost);
+        }
+        s_pending_lost = 0;
+    }
     os64_free(t.s);
     os64_free(u.s);
     os64_free(v.s);
@@ -8806,8 +11058,11 @@ static void pictures_settle(void)
                 due = yonder_now_ms() + (stale - since);
             }
         }
-        if (now_ok)
+        if (now_ok) {
+            yonder_lt_why_t why_was = lt_why_begin(YONDER_LT_WHY_PICTURE);
             relayout(true);
+            lt_why_end(why_was);
+        }
     }
     // Pictures that arrived moving nothing are judged at the size they are
     // drawn now; a layout still owed runs the same walk when it comes.
@@ -8853,16 +11108,37 @@ static void mark_part(os64_gui_rect_t r)
         mark_whole(WHOLE_BIG_PART, false);
         return;
     }
+    if (!s_damage_marking) {
+        if (s_tick_marking)
+            s_damage_since.parts_tick++;
+        else if (s_video_marking)
+            s_damage_since.parts_video++;
+        else if (s_marking_canvas != NULL)
+            s_damage_since.parts_canvas++;
+        else
+            s_damage_since.parts_other++;
+    }
     s_parts_reach = os64_rect_union(s_parts_reach, part.bounds);
     os64_gui_rect_t in;
     if (os64_rect_intersect(part.bounds, v, &in) &&
         (uint64_t)in.w * (uint64_t)in.h > (uint64_t)s_cost.mark_most.w * (uint64_t)s_cost.mark_most.h) {
         s_cost.mark_most = (os64_gui_rect_t){in.x - v.x + g.sx, in.y - v.y + g.sy, in.w, in.h};
+        const os64_html_node_t *ticked = box_element(s_marking_box);
         if (s_marking_canvas != NULL)
             element_named(s_cost.mark_who, sizeof(s_cost.mark_who), "the canvas ", s_marking_canvas);
+        else if (ticked != NULL)
+            element_named(s_cost.mark_who, sizeof(s_cost.mark_who), "an animation of ", ticked);
+        else if (s_video_marking)
+            os64_strcopy(s_cost.mark_who, sizeof(s_cost.mark_who), "a video's new picture");
+        else if (s_marking_named != NULL && s_marking_named[0] != '\0')
+            os64_snprintf(s_cost.mark_who, sizeof(s_cost.mark_who), "a change to %s", s_marking_named);
         else
             os64_strcopy(s_cost.mark_who, sizeof(s_cost.mark_who), "the page");
     }
+    if (s_nmarks < PLANE_MARKS_MAX)
+        s_marks[s_nmarks++] = (__typeof__(s_marks[0])){part.bounds, s_frame_marking};
+    else
+        s_marks_lost = true;
     os64_ui_mark_dirty(&g.ui, &part);
 }
 
@@ -9273,11 +11549,12 @@ static uint64_t resizes_next(void);
 static uint64_t resizes_due(void);
 static uint64_t videos_next(void);
 static uint64_t strips_next(void);
+static uint64_t plane_rate_due(void);
 
 // The earliest frame work the shown page has: a layout or a tick for its
 // CSS animations, the Web Animations step and requestAnimationFrame's
 // callbacks, a ResizeObserver step, the pointer's re-hit, a video's
-// picture. Each runs only in
+// picture or a layer pass it owes. Each runs only in
 // an open frame of the display; FRAME_PLAN_NEVER for none.
 static uint64_t frame_work_due(void)
 {
@@ -9437,6 +11714,9 @@ static void pictures_schedule(void)
     // A video strip's hiding or its buffering mark's showing, which the
     // loop settles (players_show).
     deadline_offer(&d, strips_next(), PAST_TIMERS);
+    // `--video-rate`'s next line while a video is placed on its plane: it
+    // asks for no frames, so no frame brings the loop round for it.
+    deadline_offer(&d, plane_rate_due(), PAST_TIMERS);
     // The shown page's next idle period, when only an idle callback that
     // asked for another waits for it (script_turn runs it).
     uint64_t idle = yonder_scripts_idle_next(g.page.scripts);
@@ -9533,17 +11813,25 @@ static void pictures_tick(void)
 // so its mark is the whole view, said as the backdrop's (WHOLE_BACKDROP);
 // which box that is is the painter's to say from the styles a tick
 // changes — the root's background may be what moves — so it is asked at
-// each mark, of the styles before the tick and after it.
+// each mark, of the styles before the tick and after it. `s_tick_marks`
+// counts the marks it made, for the damage check's line.
+static uint32_t s_tick_marks;
+
 static void tick_mark(void *ctx, const flow_box_t *box, os64_gui_rect_t r)
 {
     const os64_gui_rect_t *view = ctx;
     const yonder_verbs_t asking = {.backdrop = glass_backdrop};
     os64_gui_rect_t meet;
     s_tick_marking = true;
-    if (box == yonder_canvas_owner(g.page.tree, &asking))
+    if (box == yonder_canvas_owner(g.page.tree, &asking)) {
         mark_whole(WHOLE_BACKDROP, false);
-    else if (os64_rect_intersect(r, *view, &meet))
+        s_tick_marks++;
+    } else if (os64_rect_intersect(r, *view, &meet)) {
+        s_marking_box = box;
         mark_part(meet);
+        s_marking_box = NULL;
+        s_tick_marks++;
+    }
     s_tick_marking = false;
 }
 
@@ -9557,6 +11845,75 @@ static void tick_mark(void *ctx, const flow_box_t *box, os64_gui_rect_t r)
 // layouts stopped by what they cost, the ticks stop too, said where they
 // failed (say_failed).
 static void tick_page_run(uint64_t now, bool frame);
+
+// The elements a tick changed, named for the record (flow_motion_ticked):
+// the one being named (its node and pseudo-element), its words so far and
+// whether its longhands' list has begun, how many elements were named,
+// and the first one's whole, which names the biggest part when the tick
+// changed that element alone (tick_page_run).
+typedef struct {
+    const os64_html_node_t *node;
+    uint8_t pseudo;
+    char what[96];
+    size_t at;
+    bool listing;
+    int32_t elements;
+    char first[96];
+} TickNaming;
+
+// The element being named made whole — "canvas#g.glow (opacity)" — and
+// counted once for this tick in the reading's tally (s_cost.ticked).
+static void tick_named_done(TickNaming *k)
+{
+    if (k->node == NULL)
+        return;
+    if (k->at + 1 < sizeof(k->what))
+        os64_strcopy(k->what + k->at, sizeof(k->what) - k->at, ")");
+    if (k->elements++ == 0)
+        os64_strcopy(k->first, sizeof(k->first), k->what);
+    int32_t i = 0;
+    for (; i < s_cost.nticked && !os64_streq(s_cost.ticked[i].what, k->what); i++) {}
+    if (i == s_cost.nticked) {
+        if (i == TICKED_MAX) {
+            s_cost.ticked_rest++;
+            k->node = NULL;
+            return;
+        }
+        os64_strcopy(s_cost.ticked[i].what, sizeof(s_cost.ticked[i].what), k->what);
+        s_cost.ticked[i].n = 0;
+        s_cost.nticked++;
+    }
+    s_cost.ticked[i].n++;
+    k->node = NULL;
+}
+
+// One longhand an element the tick changed animates (flow_motion_ticked
+// hands an element's together), a pseudo-element named apart from its
+// element ("div.x::before").
+static void tick_named(void *ctx, const os64_html_node_t *node, uint8_t pseudo, int32_t prop)
+{
+    TickNaming *k = ctx;
+    if (node != k->node || pseudo != k->pseudo) {
+        tick_named_done(k);
+        k->node = node;
+        k->pseudo = pseudo;
+        k->at = element_named(k->what, sizeof(k->what), "", node);
+        if (pseudo != GARB_PSEUDO_NONE && k->at + 1 < sizeof(k->what))
+            k->at += (size_t)os64_snprintf(k->what + k->at, sizeof(k->what) - k->at, "%s",
+                                           pseudo == GARB_PSEUDO_BEFORE  ? "::before"
+                                           : pseudo == GARB_PSEUDO_AFTER ? "::after"
+                                                                         : "::pseudo");
+        if (k->at >= sizeof(k->what))
+            k->at = sizeof(k->what) - 1;
+        k->listing = false;
+    }
+    if (k->at + 1 < sizeof(k->what))
+        k->at += (size_t)os64_snprintf(k->what + k->at, sizeof(k->what) - k->at, "%s%s",
+                                       k->listing ? ", " : " (", garb_prop_name((garb_prop_t)prop));
+    k->listing = true;
+    if (k->at >= sizeof(k->what))
+        k->at = sizeof(k->what) - 1;
+}
 
 static void tick_page(uint64_t now, bool frame)
 {
@@ -9572,6 +11929,8 @@ static void tick_page_run(uint64_t now, bool frame)
     os64_gui_rect_t v = {g.sx, g.sy, g.view.bounds.w, g.view.bounds.h};
     int64_t began_us = os64_micros();
     bool moved = false;
+    const os64_gui_rect_t most_was = s_cost.mark_most;
+    s_tick_marks = 0;
     if (!flow_motion_tick(g.page.tree, now, scroll_now(), frame ? tick_mark : NULL, &v, &moved)) {
         if (motion_cost_us() > (uint64_t)MOTION_COST_MS * 1000) {
             g.ticked = true;
@@ -9581,7 +11940,9 @@ static void tick_page_run(uint64_t now, bool frame)
                        "No room to move the page's animations between layouts; they stop here.");
             return;
         }
+        yonder_lt_why_t why_was = lt_why_begin(YONDER_LT_WHY_MOTION);
         (void)lay_out_shown(true, LAID_FOR_TICK);
+        lt_why_end(why_was);
         return;
     }
     if (moved) {
@@ -9593,6 +11954,31 @@ static void tick_page_run(uint64_t now, bool frame)
         g.tick_painting = true;
         g.tick_began = now;
         g.tick_began_us = began_us;
+        // The record names what the tick changed, with the longhands it
+        // animates: when one element changed, the biggest part this tick
+        // marked was its. With more, the part keeps the name of the box
+        // that marked it (tick_mark).
+        TickNaming k = {0};
+        flow_motion_ticked(g.page.tree, tick_named, &k);
+        tick_named_done(&k);
+        if (k.elements == 1 && os64_memcmp(&most_was, &s_cost.mark_most, sizeof(most_was)) != 0)
+            os64_snprintf(s_cost.mark_who, sizeof(s_cost.mark_who), "an animation of %s", k.first);
+        // A check due for the tick, with what it marked for the record's
+        // line (s_damage_check).
+        s_damage_since.ticks++;
+        s_damage_since.ticks_unmarked += s_tick_marks == 0;
+        if (s_damage_check != 0 && ++s_damage_counted % s_damage_check == 0) {
+            s_damage_due = true;
+            if (s_tick_marks == 0) {
+                os64_strcopy(s_damage_after, sizeof(s_damage_after), "a tick that marked nothing");
+                s_damage_marking = true;
+                mark_part((os64_gui_rect_t){g.sx, g.sy, 1, 1});
+                s_damage_marking = false;
+            } else {
+                os64_snprintf(s_damage_after, sizeof(s_damage_after), "a tick that marked %u parts",
+                              (unsigned)s_tick_marks);
+            }
+        }
     }
 }
 
@@ -9625,9 +12011,11 @@ static void motion_tick(void)
     if (!s_frames.open)
         return;
     uint64_t now = yonder_now_ms();
-    if (motion_next() <= now)
+    if (motion_next() <= now) {
+        yonder_lt_why_t why_was = lt_why_begin(YONDER_LT_WHY_MOTION);
         (void)lay_out_shown(true, LAID_FOR_MOTION);
-    else if (tick_next() <= now)
+        lt_why_end(why_was);
+    } else if (tick_next() <= now)
         tick_page(animation_time_ms(), true);
 }
 
@@ -9745,37 +12133,87 @@ static void backdrop_damage(void)
     }
 }
 
+static void view_damage_check(os64_ui_widget_t *w, os64_draw_ctx_t *ctx);
+static void planes_prepare(void);
+static bool planes_judge(const os64_gui_rect_t *damage, uint32_t from, uint32_t count);
+static void planes_hole(const os64_gui_rect_t *damage, uint32_t count);
+static void planes_hides_let_go(void);
+static void planes_publish(os64_gui_rect_t *damage, uint32_t *count);
+static void planes_release(void);
+static void videos_glass_published(void);
+
+// The renders a paint may make: its own, one more each time a video leaves
+// its plane (planes_judge: a video leaves once a paint at most, so at most
+// one a plane), and one for a refused publish's holes painted back
+// (planes_publish), each at most OS64_UI_DAMAGE_MAX rectangles.
+#define PLANE_RENDERS_AGAIN OS64_GUI_PLANES
+#define PAINT_DAMAGE_MAX ((PLANE_RENDERS_AGAIN + 2) * OS64_UI_DAMAGE_MAX)
+
 // libui's paint, timed (s_cost): its render, then each dirty rectangle
 // handed to the compositor, as os64_ui_paint does both, then counted
 // (paint_counted). What marked the view is this paint's, so it starts
-// again here. Each part is first widened to the backdrops it reaches.
+// again here. Each part is first widened to the backdrops it reaches. The
+// videos on planes decide their places around the render (the Videos on
+// planes section), and the publish carries them.
 static void glass_paint(void)
 {
+    // The load's timeline and the thread reading time the whole of it as
+    // drawing: the backdrops' marks, the kept drawings, the render and the
+    // publish.
+    int64_t drawn_from = s_lt.on ? os64_micros() : 0;
+    uint64_t tr_drawn = tr_now();
     backdrop_damage();
-    os64_gui_rect_t damage[OS64_UI_DAMAGE_MAX];
+    os64_gui_rect_t damage[PAINT_DAMAGE_MAX];
     WholeBy by = s_whole_by;
     os64_gui_rect_t reach = s_parts_reach;
     s_whole_by = WHOLE_PARTS;
     s_parts_reach = (os64_gui_rect_t){0, 0, 0, 0};
     // One paint of the kept drawings for every part the view paints in it
     // (keep.h): a group asked about in two parts of one paint is not
-    // asked about twice.
+    // asked about twice. One paint of the kept canvas pictures too
+    // (canvas_keep.h): a canvas drawn in two parts of its first paint at a
+    // revision keeps nothing yet.
     if (g.keeps == NULL)
         g.keeps = yonder_keeps_new(KEEPS_BUDGET);
     yonder_keeps_paint(g.keeps, flow_tree_serial(g.page.tree));
+    yonder_canvas_keeps_paint(g.canvas_keeps);
+    planes_prepare();
     cost_begin(PS_RENDER);
     uint32_t count = os64_ui_render_list(&g.ui, damage);
+    if (count > 0)
+        view_damage_check(&g.view, g.ui.ctx);
+    // A video that stops qualifying at the judge leaves its plane: its old
+    // clip, marked by the judge, is painted again with the picture, and
+    // that render is judged in turn.
+    for (uint32_t from = 0, pass = 0; count > 0 && pass < PLANE_RENDERS_AGAIN && planes_judge(damage, from, count);
+         pass++) {
+        from = count;
+        count += os64_ui_render_list(&g.ui, damage + count);
+        if (pass + 1 == PLANE_RENDERS_AGAIN)
+            (void)planes_judge(damage, from, count);
+    }
     cost_end(PS_RENDER);
     if (count == 0) {
+        planes_release();
         os64_memset(s_cost.now, 0, sizeof(s_cost.now));
+        if (s_lt.on)
+            yonder_lt_inside(&s_lt, YONDER_LT_IN_DRAWING, (uint64_t)(os64_micros() - drawn_from));
+        tr_inside(YONDER_TR_IN_DRAWING, tr_drawn);
         return;
     }
+    planes_hole(damage, count);
+    planes_hides_let_go();
     cost_begin(PS_PUBLISH);
-    for (uint32_t i = 0; i < count; i++)
-        os64_draw_publish(g.ui.ctx, &damage[i]);
+    planes_publish(damage, &count);
     cost_end(PS_PUBLISH);
+    videos_glass_published();
+    planes_release();
+    lt_mark(g.page.diag, YONDER_LT_MARK_PAINT);
     paint_counted(damage, count, by, reach);
     cost_fold(PS_RENDER, PS_PUBLISH);
+    if (s_lt.on)
+        yonder_lt_inside(&s_lt, YONDER_LT_IN_DRAWING, (uint64_t)(os64_micros() - drawn_from));
+    tr_inside(YONDER_TR_IN_DRAWING, tr_drawn);
 }
 
 // What the window loop does before each paint: a whole view's paint shows
@@ -9799,12 +12237,15 @@ static void frame_follow(void)
 }
 
 // The window was covered or uncovered. The flag is the truth and the event
-// only the nudge, since a full queue drops events.
+// only the nudge, since a full queue drops events. Seen again, it pays the
+// rebuild a covered window owed (script_rendering_step) before its paint.
 static void window_seen(void)
 {
     os64_gui_window_state_t st;
     if (os64_gui_window_get_state(g.win, &st) == 0)
         g.covered = (st.flags & OS64_GUI_WINDOW_COVERED) != 0;
+    if (!g.covered && page_rebuild_owed(&g.page))
+        (void)script_rebuild();
     pictures_schedule();
 }
 
@@ -10673,7 +13114,7 @@ static void forms_place(void)
         if (gadget(b, widget_control(fw)) || !b->replaced)
             cls = unpainted_class(fw->own_class);
         bool shown = x < (int64_t)v.x + v.w && y < (int64_t)v.y + v.h && x + at.w > v.x && y + at.h > v.y &&
-                     at.w > 0 && at.h > 0 && !flow_box_covered(g.page.tree, b, scroll_now()) && cls != NULL;
+                     at.w > 0 && at.h > 0 && !page_covered(b, scroll_now()) && cls != NULL;
         fw->w->clipped = true;
         fw->w->clip = v;
         if (cls != NULL && cls != fw->w->cls) {
@@ -10905,13 +13346,19 @@ static void video_add(const os64_html_node_t *node, yonder_media_t *session)
         }
 }
 
+static void plane_close(Video *v);
+static void plane_mark_window(os64_gui_rect_t r);
+
 // Its session closed: the slot, and the pixels the session's player held,
-// go with it.
+// go with it; a plane it left placed is hidden by the next publish
+// (plane_close).
 static void video_remove(const yonder_media_t *session)
 {
     for (int32_t i = 0; i < VIDEOS_MAX; i++)
-        if (s_videos[i].node != NULL && s_videos[i].session == session)
+        if (s_videos[i].node != NULL && s_videos[i].session == session) {
+            plane_close(&s_videos[i]);
             s_videos[i] = (Video){0};
+        }
 }
 
 // ── Posters (VIDEO.md § 8, V.6.2) ───────────────────────────────────────
@@ -10965,6 +13412,22 @@ static PosterSlot *poster_seen(Page *p, const os64_html_node_t *node)
     // loop turns again to ask for it, whatever else is quiet.
     (void)os64_gui_event_ring(g.win, BELL_MEDIA);
     return slot;
+}
+
+// `node`'s poster when it is shown in its box: its picture has arrived, and
+// the show poster flag is set or the video has no picture in hand yet (an
+// autoplay shows no gap between them). NULL otherwise. A video showing its
+// poster is no cover (video_cover_rect), so it never asks for its plane and
+// is never placed while the poster is up: the page paints the poster.
+static const PosterSlot *poster_showing(const Video *v, const os64_html_node_t *node)
+{
+    const PosterSlot *poster = poster_seen(&g.page, node);
+    if (poster == NULL || poster->pic < 0 || g.page.pics[poster->pic].state != PIC_SHOWN)
+        return NULL;
+    const uint32_t *px;
+    uint32_t w, h;
+    bool picture = v != NULL && v->width > 0 && video_picture(v, &px, &w, &h);
+    return poster->flag || !picture ? poster : NULL;
 }
 
 // After a layout is published: each laid-out video's poster read as it
@@ -11067,13 +13530,14 @@ static bool video_on_view(const Video *v, os64_gui_rect_t *out)
 
 // Whether `v` wants the display's frames: it has a picture, plays or its
 // facts moved while paused (a seek's picture, the first one) or a new size
-// waits for its picture, and is seen. A sound given to a <video> has no
+// waits for its picture, and is seen, and it is not placed on its plane,
+// whose pictures are the show thread's. A sound given to a <video> has no
 // picture to ask for.
 static bool video_wants_frames(const Video *v)
 {
     os64_gui_rect_t part;
     return v->node != NULL && v->seen.picture && (v->playing || v->poked || v->sizing > 0) && !g.covered &&
-           video_on_view(v, &part);
+           !v->placed && video_on_view(v, &part);
 }
 
 // The media turn's follow-up: each shown video's facts read for the size
@@ -11095,38 +13559,334 @@ static void videos_turn(void)
             g.pictures_moved = true;
         }
         v->playing = f.running;
+        v->played |= f.running;
         v->poked |= f.seeked != v->seen.seeked || f.current != v->seen.current || f.probed != v->seen.probed ||
                     f.ended != v->seen.ended || f.running != v->seen.running;
         v->seen = f;
+        // Its plane's verdict, or a placed plane gone stale or gone: a paint
+        // decides again (planes_prepare), so the box is marked for one.
+        os64_media_player_facts_t pf;
+        if (yonder_media_player_facts(v->session, &pf) &&
+            (pf.plane_state != v->plane_state || (v->placed && (pf.plane_stale || !pf.plane_ready)))) {
+            os64_gui_rect_t part;
+            if (video_on_view(v, &part))
+                mark_part(part);
+            if (v->placed)
+                plane_mark_window(v->placed_clip);
+        }
     }
 }
 
 // The earliest a video wants a frame: now, or never.
 static uint64_t videos_next(void)
 {
-    for (int32_t i = 0; i < VIDEOS_MAX; i++)
+    uint64_t due = FRAME_PLAN_NEVER;
+    for (int32_t i = 0; i < VIDEOS_MAX; i++) {
         if (video_wants_frames(&s_videos[i]))
             return yonder_now_ms();
-    return FRAME_PLAN_NEVER;
+        // A layer pass owed when its wait is over (videos_tick marks it):
+        // the loop wakes for it, though nothing else may be due.
+        if (s_videos[i].node != NULL && s_videos[i].owed_any && s_videos[i].layer_next_ms < due)
+            due = s_videos[i].layer_next_ms;
+    }
+    return due;
+}
+
+// `--video-rate[=S]`: every S seconds (5 unless said) while a video on the
+// view asks for frames or is placed on its plane, one line on the console
+// per video, its fields labelled, after a legend line once:
+// `video-rate,t=<ms since boot>,v=<video>,scr=<a second>,gap=<ms>,pick=<a second>,drop=<a second>,plane=<1|0>`.
+// `scr` is the pictures of it that reached the glass (the page's paints of
+// a new picture in its box that left it off its plane, and its plane's
+// publishes while placed and shown) a second since that video's last line,
+// a page's paint counted when it draws some of the picture, even when the
+// page paints over all of that afterwards (what survives is not judged by
+// its colours),
+// in tenths; `gap` the longest the glass went without a new picture of it,
+// in ms, among the gaps that ended since its last line or are still open,
+// counted while it was watched (video_glass_watched: its clock running,
+// its box on the view, the window not wholly covered; a window partly
+// behind another, its video hidden, reads as a gap). `pick` and `drop` are
+// its player's pace a second
+// (the show thread's picks while its plane is on, which keep the clock's
+// pace whether or not a picture reaches the glass), `plane` 1 on its plane.
+// The rates are `-` on a video's first line, or when its counts started
+// again. The running totals are the record's (video_glass_reading).
+static uint32_t s_video_rate_s;
+static uint64_t s_video_rate_next_ms;
+static bool s_video_rate_legend;
+static struct {
+    uint64_t ms, glass, shown, dropped;
+    bool said;
+} s_video_rate_last[VIDEOS_MAX];
+
+// `n` events over `ms` milliseconds, a second, in tenths: "29.8".
+static void video_rate_tenths(char *out, size_t cap, uint64_t n, uint64_t ms)
+{
+    uint64_t tenths = ms > 0 ? (n * 10000 + ms / 2) / ms : 0;
+    os64_snprintf(out, cap, "%lu.%lu", (unsigned long)(tenths / 10), (unsigned long)(tenths % 10));
+}
+
+// Whether the glass's pictures of `v` are measured: its clock runs, its box
+// is on the view, and the window is not wholly covered, on its plane or
+// off it. A window partly behind another, its video hidden, still counts,
+// and reads as a gap: whether one box is seen is not asked of the GUI for
+// a measuring line, and a display that stalls must stay inside the watch.
+static bool video_glass_watched(const Video *v)
+{
+    os64_gui_rect_t part;
+    return v->node != NULL && v->seen.picture && v->playing && !g.covered && video_on_view(v, &part);
+}
+
+static void video_glass_gap(Video *v, int64_t gap)
+{
+    if (gap > v->glass_gap_us)
+        v->glass_gap_us = gap;
+    if (gap > v->glass_gap_reading_us)
+        v->glass_gap_reading_us = gap;
+}
+
+// Every turn of the loop: a watch begins when a video becomes watched and
+// ends when it stops being, so a pause, a scroll away or a covered window
+// is no gap. (A page thread held for seconds runs no turn, and the video
+// plays on: that is the gap this measures.) A watched video's plane is
+// folded at every turn, so at most one of its runs begins between two
+// folds unless the page thread was held; a watch's end first counts what
+// it saw, the plane's gaps and the one still open, and the plane's gaps
+// that ended between watches are let go as the next begins.
+static void video_glass_fold(Video *v);
+static void video_glass_open_gap(Video *v, int64_t now);
+
+static void videos_glass_watch(void)
+{
+    int64_t now = os64_micros();
+    for (int32_t i = 0; i < VIDEOS_MAX; i++) {
+        Video *v = &s_videos[i];
+        if (v->node == NULL)
+            continue;
+        bool watched = video_glass_watched(v);
+        if (watched && v->glass_watch_from_us == 0) {
+            os64_media_player_facts_t f;
+            v->glass_watch_from_us = v->glass_last_us = now;
+            v->glass_runs = yonder_media_player_facts(v->session, &f) ? f.plane_placed_runs : 0;
+            (void)yonder_media_plane_gap_take(v->session);
+        } else if (watched) {
+            video_glass_fold(v);
+        } else if (v->glass_watch_from_us != 0) {
+            video_glass_open_gap(v, now);
+            v->glass_watch_from_us = v->glass_last_us = 0;
+        }
+    }
+}
+
+// The plane's share since the last fold, inside the watch: the player's
+// gaps between two of its placed pictures; the gap to the first of a run
+// from the later of the glass's last picture and the run before's last,
+// when that run is the only one begun since the last fold (with more, the earlier runs' pictures lie between, and
+// the time before the latest is not known to be a gap); and the last
+// placed picture as the glass's latest. `glass_last_us` is never before the
+// watch's start, so a picture before it, from an earlier watch, changes
+// nothing.
+static void video_glass_fold(Video *v)
+{
+    if (v->glass_watch_from_us == 0)
+        return;
+    video_glass_gap(v, yonder_media_plane_gap_take(v->session));
+    os64_media_player_facts_t f;
+    if (!yonder_media_player_facts(v->session, &f))
+        return;
+    // The bridge runs from the later of the glass's latest folded picture
+    // and the run before's last publish: while the page's thread was held,
+    // that run may have published pictures no fold saw.
+    int64_t from = f.plane_placed_prev_last_us > v->glass_last_us ? f.plane_placed_prev_last_us : v->glass_last_us;
+    if (f.plane_placed_runs == v->glass_runs + 1 && f.plane_placed_first_us > from)
+        video_glass_gap(v, f.plane_placed_first_us - from);
+    v->glass_runs = f.plane_placed_runs;
+    if (f.plane_placed_last_us > v->glass_last_us)
+        v->glass_last_us = f.plane_placed_last_us;
+}
+
+// After a publish: each video whose box it painted with a new picture, and
+// which the publish left off its plane, has that picture on the glass now
+// (as far as this line knows: a box the page painted over whole afterwards
+// is counted all the same, since what survives is not judged by colour),
+// the time since its last one in the watch a gap. A placed video's box is
+// rendered too, but the publish cuts it to a hole, and what shows there is
+// the plane's.
+static void videos_glass_published(void)
+{
+    int64_t now = os64_micros();
+    for (int32_t i = 0; i < VIDEOS_MAX; i++) {
+        Video *v = &s_videos[i];
+        if (v->node == NULL || !v->painted_new)
+            continue;
+        v->painted_new = false;
+        if (v->placed)
+            continue;
+        v->page_pictures++;
+        video_glass_fold(v);
+        if (v->glass_watch_from_us != 0) {
+            video_glass_gap(v, now - v->glass_last_us);
+            v->glass_last_us = now;
+        }
+    }
+}
+
+// What reached the glass of `v` since its player began.
+static uint64_t video_glass_pictures(const Video *v, const os64_media_player_facts_t *f)
+{
+    return v->page_pictures + f->plane_placed_published;
+}
+
+// The gap still open at `now`, counted into the maxima so far. It stays
+// open: the picture that ends it counts it whole, so a hold longer than
+// the interval between lines reads as growing in each line it touches and
+// whole in the line that sees it end, and a reading is cut by no line.
+static void video_glass_open_gap(Video *v, int64_t now)
+{
+    video_glass_fold(v);
+    if (v->glass_watch_from_us != 0)
+        video_glass_gap(v, now - v->glass_last_us);
+}
+
+static void video_rate_say(void)
+{
+    uint64_t now = yonder_now_ms();
+    if (s_video_rate_s == 0 || now < s_video_rate_next_ms)
+        return;
+    s_video_rate_next_ms = now + (uint64_t)s_video_rate_s * 1000;
+    if (!s_video_rate_legend) {
+        s_video_rate_legend = true;
+        os64_printf("video-rate legend: t ms since boot; v the video; scr pictures that reached the glass a "
+                    "second (off its plane, a page paint that drew the picture, even one the page then painted "
+                    "over); gap the longest the glass went without a new one, ms, while it played in view and the "
+                    "window was not wholly covered (one partly behind another, the video hidden, reads as a "
+                    "gap); pick the pace's picks "
+                    "a second; drop its drops a second; plane 1 on its plane, 0 not\n");
+    }
+    for (int32_t i = 0; i < VIDEOS_MAX; i++) {
+        Video *v = &s_videos[i];
+        os64_media_player_facts_t vf;
+        if (v->node == NULL || !yonder_media_player_facts(v->session, &vf))
+            continue;
+        video_glass_open_gap(v, os64_micros());
+        uint64_t glass = video_glass_pictures(v, &vf);
+        char gfps[24] = "-", fps[24] = "-", drops[24] = "-";
+        __typeof__(s_video_rate_last[0]) *last = &s_video_rate_last[i];
+        if (last->said && now > last->ms && glass >= last->glass && vf.pace.shown >= last->shown &&
+            vf.pace.dropped >= last->dropped) {
+            video_rate_tenths(gfps, sizeof(gfps), glass - last->glass, now - last->ms);
+            video_rate_tenths(fps, sizeof(fps), vf.pace.shown - last->shown, now - last->ms);
+            video_rate_tenths(drops, sizeof(drops), vf.pace.dropped - last->dropped, now - last->ms);
+        }
+        *last = (__typeof__(*last)){now, glass, vf.pace.shown, vf.pace.dropped, true};
+        os64_printf("video-rate,t=%lu,v=%d,scr=%s,gap=%lu,pick=%s,drop=%s,plane=%d\n", (unsigned long)now, (int)i,
+                    gfps, (unsigned long)(v->glass_gap_us / 1000), fps, drops, v->placed ? 1 : 0);
+        v->glass_gap_us = 0;
+    }
+}
+
+// The record's words for what reached the glass of `v` since the last
+// reading, which starts them again (videos_glass_reading_restart).
+static void video_glass_reading(DiagText *t, Video *v, const os64_media_player_facts_t *f)
+{
+    video_glass_open_gap(v, os64_micros());
+    uint64_t glass = video_glass_pictures(v, f);
+    dt_put(t, ", reached the glass %lu pictures since the last reading, the longest without a new one %lu ms",
+           (unsigned long)(glass >= v->reading_pictures ? glass - v->reading_pictures : glass),
+           (unsigned long)(v->glass_gap_reading_us / 1000));
+}
+
+static void videos_glass_reading_restart(void)
+{
+    for (int32_t i = 0; i < VIDEOS_MAX; i++) {
+        Video *v = &s_videos[i];
+        os64_media_player_facts_t f;
+        if (v->node == NULL)
+            continue;
+        v->glass_gap_reading_us = 0;
+        if (yonder_media_player_facts(v->session, &f))
+            v->reading_pictures = video_glass_pictures(v, &f);
+    }
+}
+
+static bool video_cover_rect(const Video *v, const flow_box_t *b, os64_gui_rect_t *out);
+static bool backdrop_read_meets(os64_gui_rect_t r);
+static bool video_fitted(const Video *v, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t *at);
+
+// What a new frame of `v` marks, its box's visible part being `part`: only
+// the pixels its copy writes when it is a cover, since nothing else
+// changed — unless a backdrop reader may read the box's part, which reads
+// the frame there too (VIDEO.md § 5, The paint beneath the picture).
+static os64_gui_rect_t video_frame_mark(const Video *v, os64_gui_rect_t part)
+{
+    os64_gui_rect_t covered;
+    if (g.page.tree != NULL && video_cover_rect(v, flow_box_for(g.page.tree, v->node), &covered) &&
+        os64_rect_intersect(covered, part, &covered) && !backdrop_read_meets(part))
+        return covered;
+    return part;
 }
 
 // In an open frame of the display: each video that wants it is asked for
 // the picture shown at the blank a publish now is seen at (the answer's
-// blank plus one period), and its box marked when the picture changed.
+// blank plus one period), and its box marked when the picture changed —
+// only the part its copy writes, when the video is a cover and no backdrop
+// reader may read the box (backdrop_read_meets).
+static bool planes_placed_any(void);
+
+static void videos_glass_watch(void);
+
 static void videos_tick(void)
 {
-    if (!s_frames.open)
+    videos_glass_watch();
+    // The parts a waiting pass owes, marked again once its wait is over:
+    // a change of the paint's own, so the next judge layers it.
+    for (int32_t i = 0; i < VIDEOS_MAX; i++) {
+        Video *v = &s_videos[i];
+        if (v->node != NULL && v->owed_any && yonder_now_ms() >= v->layer_next_ms) {
+            v->owed_any = false;
+            plane_mark_window(v->owed);
+        }
+    }
+    if (!s_frames.open) {
+        if (planes_placed_any())
+            video_rate_say();
         return;
+    }
     int64_t period = s_frames.period_us > 0 ? (int64_t)s_frames.period_us : 16667;
     int64_t blank = (int64_t)s_frames.blank_us + period;
+    bool asked = false;
     for (int32_t i = 0; i < VIDEOS_MAX; i++) {
         Video *v = &s_videos[i];
         os64_gui_rect_t part;
         if (!video_wants_frames(v) || !video_on_view(v, &part))
             continue;
+        asked = true;
         v->poked = false;
         if (v->sizing > 0)
             v->sizing--;
+        if (v->plane_state == OS64_MEDIA_PLANE_ON) {
+            // The show thread paces (`frame` is refused): the page paints
+            // its box from `shown`, marked when `shown` moves on.
+            os64_media_player_view_t now;
+            if (!yonder_media_shown(v->session, &now))
+                continue;
+            uint32_t serial = now.serial, w = now.w, h = now.h;
+            yonder_media_shown_done(v->session, &now);
+            if (serial == v->polled_serial)
+                continue;
+            if (w == v->asked_w && h == v->asked_h)
+                v->sizing = 0;
+            v->polled_serial = serial;
+            s_cost.video_pictures++;
+            lt_mark(g.page.diag, YONDER_LT_MARK_PICTURE);
+            s_video_marking = true;
+            s_frame_marking = i;
+            mark_part(part);
+            s_frame_marking = -1;
+            s_video_marking = false;
+            continue;
+        }
         os64_media_player_frame_t fr;
         s_cost.video_frames++;
         int64_t began = os64_micros();
@@ -11134,14 +13894,1443 @@ static void videos_tick(void)
         s_cost.video_ask_us += (uint64_t)(os64_micros() - began);
         if (!fr.changed)
             continue;
+        // A picture answered while the plane is asked for, starting or on
+        // may be retired by its show thread; one answered after `frame` was
+        // handed back is the page's to keep.
+        if (!v->plane_asked || v->plane_state == OS64_MEDIA_PLANE_REFUSED || v->plane_state == OS64_MEDIA_PLANE_ENDED)
+            v->frame_fresh = true;
         if (fr.w == v->asked_w && fr.h == v->asked_h)
             v->sizing = 0;          // the picture at the size told
         v->frame = fr;
         s_cost.video_pictures++;
+        lt_mark(g.page.diag, YONDER_LT_MARK_PICTURE);
+        part = video_frame_mark(v, part);
         s_video_marking = true;
+        s_frame_marking = i;
         mark_part(part);
+        s_frame_marking = -1;
         s_video_marking = false;
     }
+    if (asked || planes_placed_any())
+        video_rate_say();
+}
+
+// ── Videos on planes (VIDEO_PLANE.md § 5) ──────────────────────────────
+//
+// A video whose player has a plane is shown by the kernel from the
+// player's own show thread, and the page paints a hole where its picture
+// goes: a new picture then costs the page's thread nothing, and a script
+// holding that thread no longer holds the picture. The plane is asked for
+// at the video's first cover once it has played (`played`: a window's
+// planes are few, and a paused first picture gains nothing from one), from
+// a thread of its own (the ask waits for
+// the plane to be made: yonder_media_plane_ask), and kept until its
+// session closes; a plane that ends while its session plays is asked for
+// again, no sooner than a second apart, PLANE_ASKS_AGAIN times a session.
+//
+// EACH PAINT DECIDES each video's place (plane_place.h; the reasons, in
+// order, are its yonder_plane_reason_t), and the publish that paints it
+// carries the place or the hide (one publish, VIDEO_PLANE.md § 3.5):
+// - planes_prepare, before the render: the facts read, `shown` pinned, the
+//   reasons asked with what the map knew so far; a video that may be
+//   placed has its whole clip marked, so the render paints all of it, and
+//   one leaving its plane has its old clip marked, so the picture is
+//   painted back where the hole was;
+// - planes_judge, after the render: where the page changed something over
+//   a picture at this paint (planes_take_changes) and the render may have
+//   drawn there (a cut a glass verb made after the video's own box, a shown
+//   widget painted after the view, or a pixel of the clip that differs from
+//   `shown`, from which the render painted the picture), each part is
+//   painted twice more from the video up, over black and over white, and
+//   what lies over the picture taken apart as a layer: its colour,
+//   premultiplied, and its coverage (THE LAYERS). The map (plane_place.h)
+//   keeps which tiles carry any, across partial paints, and gives the
+//   overlay rectangles, joined to the kernel's eight. A video is placed
+//   with those overlays unless what lies over it was no layer, needs more
+//   overlay than the kernel blends, or covers a part not yet painted;
+//   planes_hole then writes the layer into the clip, zero (see-through)
+//   where there is none (§ 3.3). A placed video that stops qualifying
+//   leaves, its clip painted again with the picture before the publish;
+// - planes_publish: the damage rectangles meeting no changed place's clip
+//   published plain, then the edits, with damage covering what the
+//   kernel's rule 2 asks and every rectangle meeting such a clip, whole; or
+//   the plain publishes alone when there are no edits. A refused publish is
+//   published again plain, the newly placed clips painted back with the
+//   picture, and placing that video is held off a while.
+//
+// A PLANE IS PLACED ONLY ON THE PICTURE THE PAGE WOULD SHOW: ready at the
+// fitted size, and holding `shown`'s picture (facts.plane_serial) at the
+// paint that places it, or the glass would step back to an older one. Once
+// placed, the plane shows its own pictures and the serial is not asked.
+//
+// NO BLACK HOLE WHERE A VIDEO WAS (plane_close, plane_closed_paint): a
+// session that closes with its plane placed leaves a hide owed, a copy of
+// its last picture and its clip marked; the next paint, in the same turn of
+// the loop, paints that copy in the box's own turn of the walk when the
+// page that held it is still the one shown, unchanged, and its publish
+// hides the plane. The player's close waits for that hide
+// (os64/media_player.h § A plane, CLOSING).
+
+#define PLANE_HIDES_MAX OS64_GUI_PLANES
+#define PLANE_HOLD_OFF_MS 1000
+#define PLANE_ASKS_AGAIN 3
+
+static struct {
+    bool owed;
+    bool sent;                          // in the publish under way (planes_edits)
+    uint32_t name;
+    os64_gui_rect_t origin, clip;       // window coordinates at the close
+    uint32_t *copy;                     // the last picture, origin-sized; NULL none
+    uint32_t copy_w, copy_h;
+    const os64_html_document_t *doc;    // the page it was on, its tree's serial and its scroll then
+    uint64_t tree_serial;
+    int32_t sx, sy;
+    const os64_html_node_t *node;       // its element, compared and never read: on an unchanged tree
+                                        // it is still that element
+} s_plane_hides[PLANE_HIDES_MAX];
+
+// The window's counts for the record, started again with every other
+// count at each reading (cost_reset).
+static struct {
+    uint64_t asks, edit_publishes, union_area, union_beyond;
+    uint64_t refused[18];               // publishes refused, by the GUI's code (index -code)
+    uint64_t hides_owed, hides_copied, hides_dropped;
+    // The layer passes (plane_layer_make): how many, their time, the longest;
+    // none of it counted in the paint's own cost.
+    uint64_t layer_passes, layer_us, layer_us_most;
+    uint64_t layer_buffers_grown;       // a kept buffer (a layer's, a pass's or the check's row) made larger (plane_buf)
+    uint64_t heap_maps, heap_unmaps;    // libos64's heap's regions taken and given back at the restart
+                                        // (heap_regions_reading: every reading, planes or none)
+    uint64_t overlay_retries;           // a refused publish whose places changed only their overlays
+} s_plane_counts;
+
+static void planes_counts_restart(void)
+{
+    os64_memset(&s_plane_counts, 0, sizeof(s_plane_counts));
+    os64_heap_report_t heap;
+    os64_heap_report_copy(&heap);
+    s_plane_counts.heap_maps = heap.calls_map;
+    s_plane_counts.heap_unmaps = heap.calls_unmap;
+    for (int32_t i = 0; i < VIDEOS_MAX; i++)
+        s_videos[i].first_disagree_said = false;   // a reading names its own first
+}
+
+// A window rectangle marked for the render, as a part of the page view.
+static void plane_mark_window(os64_gui_rect_t r)
+{
+    if (r.w <= 0 || r.h <= 0)
+        return;
+    const os64_gui_rect_t vb = g.view.bounds;
+    s_video_marking = true;
+    mark_part((os64_gui_rect_t){r.x - vb.x + g.sx, r.y - vb.y + g.sy, r.w, r.h});
+    s_video_marking = false;
+}
+
+// The time spent in `v`'s reason so far, then `r` its reason from now.
+static void plane_reason_set(Video *v, yonder_plane_reason_t r)
+{
+    uint64_t now = (uint64_t)os64_micros();
+    if (v->reason_since_us != 0 && (unsigned)v->reason < YONDER_PLANE_REASONS)
+        v->reason_us[v->reason] += now - v->reason_since_us;
+    v->reason_since_us = now;
+    v->reason = r;
+}
+
+// `v`'s origin (the fitted picture) and clip (the part of it the box shows
+// inside the view) in window coordinates, from its box `b`; false when the
+// paint would not copy the picture plain (video_cover_rect).
+static bool plane_geometry(const Video *v, const flow_box_t *b, os64_gui_rect_t *origin, os64_gui_rect_t *clip)
+{
+    os64_gui_rect_t covered;
+    if (!video_cover_rect(v, b, &covered))
+        return false;
+    os64_gui_rect_t content = yonder_content_rect(b), at;
+    flow_point_t off = flow_box_doc_offset(b, scroll_now());
+    content.x += off.x;
+    content.y += off.y;
+    (void)video_fitted(v, b, content, &at);
+    const os64_gui_rect_t vb = g.view.bounds;
+    int32_t dx = vb.x - g.sx, dy = vb.y - g.sy;
+    *origin = (os64_gui_rect_t){at.x + dx, at.y + dy, at.w, at.h};
+    os64_gui_rect_t win = {covered.x + dx, covered.y + dy, covered.w, covered.h};
+    return os64_rect_intersect(win, vb, clip);
+}
+
+static yonder_plane_rect_t to_plane_rect(os64_gui_rect_t r)
+{
+    return (yonder_plane_rect_t){r.x, r.y, r.w, r.h};
+}
+
+// Whether `v`'s place this paint is the one the kernel holds already.
+static bool plane_place_same(const Video *v)
+{
+    return v->placed && v->placed_name == v->name &&
+           os64_memcmp(&v->placed_origin, &v->origin, sizeof(v->origin)) == 0 &&
+           os64_memcmp(&v->placed_clip, &v->clip, sizeof(v->clip)) == 0 && v->placed_noverlays == v->noverlays &&
+           os64_memcmp(v->placed_overlays, v->overlays, sizeof(v->overlays[0]) * v->noverlays) == 0;
+}
+
+// The map laid on `origin`, kept when it already is.
+static bool plane_map_on(Video *v, os64_gui_rect_t origin)
+{
+    yonder_plane_rect_t o = to_plane_rect(origin);
+    if (v->map.tiles != NULL && v->map.origin.x == o.x && v->map.origin.y == o.y && v->map.origin.w == o.w &&
+        v->map.origin.h == o.h)
+        return true;
+    size_t need = yonder_plane_map_tiles(o);
+    if (need > v->ntiles) {
+        uint8_t *grown = os64_realloc(v->tiles, need);
+        if (grown == NULL)
+            return false;
+        v->tiles = grown;
+        v->ntiles = need;
+    }
+    // A map laid anew knows nothing, and what was owed or unlearned was
+    // in the old one's place.
+    v->owed_any = v->unlearned_any = false;
+    return yonder_plane_map_reset(&v->map, o, v->tiles, v->ntiles);
+}
+
+// WHERE A RENDER DREW OVER A PICTURE AT THIS PAINT, whatever its colours,
+// which is where its layer is made (plane_part_touched): every
+// rectangle a glass verb drew after a video's own box in the paint part's
+// order that meets its clip (plane_note_over: from on_glass for a verb whose
+// rectangle is its drawing, and from the verb itself, with its drawing's own
+// bounds, for one that hands over a clip), and every shown widget libui
+// painted after the view (planes_note_widgets). A pixel that differs
+// from `shown` says the same, but only when the colours differ: a black
+// overlay on a black frame does not.
+#define PLANE_OVER_MAX 64
+static struct {
+    os64_gui_rect_t r;
+    int32_t video;                  // s_videos' index of the video it is over
+} s_plane_over[PLANE_OVER_MAX];
+static uint32_t s_plane_over_n;
+static bool s_plane_over_all;       // more than PLANE_OVER_MAX: all of every clip counts as drawn over,
+                                    // so a layer is made wherever a render paints a clip
+static bool s_plane_watch;          // a video is mapped at this paint
+
+static void plane_over_add(os64_gui_rect_t r, int32_t video)
+{
+    if (s_plane_over_n < PLANE_OVER_MAX)
+        s_plane_over[s_plane_over_n++] = (__typeof__(s_plane_over[0])){r, video};
+    else
+        s_plane_over_all = true;
+}
+
+// A paint part begins (view_paint, paint_part): no video's box painted yet.
+static void planes_part_begin(void)
+{
+    for (int32_t i = 0; i < VIDEOS_MAX; i++)
+        s_videos[i].drawn = false;
+}
+
+// The shown widgets libui paints after the view (in its tree's order: a
+// parent before its children, children in list order), noted where they
+// meet a mapped clip.
+static void planes_note_widgets(os64_ui_widget_t *w, bool *after)
+{
+    for (; w != NULL; w = w->next_sibling) {
+        if (w == &g.view) {
+            *after = true;
+            continue;   // the view's own children are its paint's, whose cuts are noted
+        }
+        if (*after && !w->hidden)
+            for (int32_t i = 0; i < VIDEOS_MAX; i++) {
+                os64_gui_rect_t met;
+                if (s_videos[i].node != NULL && s_videos[i].mapped &&
+                    os64_rect_intersect(w->bounds, s_videos[i].clip, &met))
+                    plane_over_add(met, i);
+            }
+        if (!w->hidden)
+            planes_note_widgets(w->first_child, after);
+    }
+}
+
+// THE LAYERS (VIDEO_PLANE.md § 5.2): what lies over a mapped video's
+// picture where a render may have drawn over it (plane_part_touched), made
+// by painting that part again from the video up, once over black and once
+// over white (plane_layer_paint), and taken apart by yonder_plane_layer:
+// the colour over black, premultiplied, with its coverage in the top byte.
+// One for each part a render changed and touched, joined to
+// PLANE_LAYERS_A_VIDEO a video a render by least added area; let go when
+// the paint ends (planes_release). A later layer of a pixel is the one
+// that holds.
+#define PLANE_LAYERS_MAX 32
+#define PLANE_LAYERS_A_VIDEO 4          // a render's parts joined to this many layers a video
+static struct {
+    int32_t video;
+    os64_gui_rect_t at;             // window coordinates
+    uint32_t *px;                   // at.w * at.h, in the slot's own kept buffer
+    size_t cap;                     // that buffer's pixels
+} s_plane_layers[PLANE_LAYERS_MAX];
+static uint32_t s_plane_nlayers;
+
+// THE LAYER PASSES ALLOCATE NOTHING, nor does the hole or --plane-check:
+// the render's pixels kept, the white pass, each slot's layer and the
+// check's row live in buffers kept across paints, grown when a part needs
+// more and let go at a paint with no video mapped or no page shown
+// (planes_prepare). A
+// buffer of 128 KiB or more is a region of its own in libos64's heap, taken
+// from and given back to the kernel under the heap's one lock, so allocating
+// three a pass made every pass six such calls under it, and the player's
+// decoding and sound threads waited on that lock (the sound ran dry on the
+// P5).
+static uint32_t *s_layer_kept, *s_layer_white, *s_check_row;
+static size_t s_layer_kept_cap, s_layer_white_cap, s_check_row_cap;
+
+// `*buf` holding at least `n` pixels, grown (its contents not kept) when it
+// holds fewer; NULL with no memory, the old buffer let go.
+static uint32_t *plane_buf(uint32_t **buf, size_t *cap, size_t n)
+{
+    if (*cap >= n && *buf != NULL)
+        return *buf;
+    os64_free(*buf);
+    s_plane_counts.layer_buffers_grown++;
+    *buf = os64_malloc(n * 4);
+    *cap = *buf != NULL ? n : 0;
+    return *buf;
+}
+
+static void planes_buffers_free(void)
+{
+    os64_free(s_layer_kept);
+    os64_free(s_layer_white);
+    os64_free(s_check_row);
+    s_layer_kept = s_layer_white = s_check_row = NULL;
+    s_layer_kept_cap = s_layer_white_cap = s_check_row_cap = 0;
+    for (uint32_t k = 0; k < PLANE_LAYERS_MAX; k++) {
+        os64_free(s_plane_layers[k].px);
+        s_plane_layers[k].px = NULL;
+        s_plane_layers[k].cap = 0;
+        s_plane_layers[k].at = (os64_gui_rect_t){0, 0, 0, 0};
+    }
+}
+
+// The kernel's overlay budget (GUI_PLANE_OVERLAY_PIXELS, kernel/include/gui/
+// plane.h, which the ABI does not carry): a place whose overlays' union is
+// larger is refused, so none is asked for.
+#define PLANE_OVERLAY_BUDGET 393216u
+
+// Whether a render may have drawn over `v`'s picture in `part` (window
+// coordinates, inside the origin): a draw noted there, or a pixel that
+// differs from `shown`'s, which the render painted the picture from.
+static bool plane_part_touched(const Video *v, os64_gui_rect_t part)
+{
+    os64_gui_rect_t met;
+    if (s_plane_over_all)
+        return true;
+    for (uint32_t k = 0; k < s_plane_over_n; k++)
+        if (&s_videos[s_plane_over[k].video] == v && os64_rect_intersect(s_plane_over[k].r, part, &met))
+            return true;
+    const os64_gui_surface_t *s = &g.ui.ctx->surf;
+    for (int32_t y = part.y; y < part.y + part.h; y++) {
+        const uint32_t *row = s->pixels + (size_t)y * s->pitch_px;
+        const uint32_t *pic = v->view.pixels + (size_t)(y - v->origin.y) * v->view.w;
+        for (int32_t x = part.x; x < part.x + part.w; x++)
+            if ((row[x] ^ pic[x - v->origin.x]) & 0x00ffffffu)
+                return true;
+    }
+    return false;
+}
+
+// What this paint's layers say lies over `v` at (x, y): the latest layer
+// holding the pixel, or 0 (nothing: the picture) where none does.
+static uint32_t plane_layer_at(const Video *v, int32_t x, int32_t y)
+{
+    for (uint32_t k = s_plane_nlayers; k-- > 0;) {
+        const os64_gui_rect_t *a = &s_plane_layers[k].at;
+        if (&s_videos[s_plane_layers[k].video] == v && x >= a->x && x < a->x + a->w && y >= a->y && y < a->y + a->h)
+            return s_plane_layers[k].px[(size_t)(y - a->y) * (size_t)a->w + (size_t)(x - a->x)];
+    }
+    return 0;
+}
+
+// Whether something lies over `v`'s picture in `part` (window coordinates,
+// inside the origin), for its map: a pixel of this paint's layers with any
+// coverage, the widgets' coverage among them.
+static bool plane_ink(void *ctx, yonder_plane_rect_t part)
+{
+    const Video *v = ctx;
+    os64_gui_rect_t r = {part.x, part.y, part.w, part.h};
+    for (int32_t y = r.y; y < r.y + r.h; y++)
+        for (int32_t x = r.x; x < r.x + r.w; x++)
+            if (plane_layer_at(v, x, y) >> 24)
+                return true;
+    return false;
+}
+
+// A layer pass under way (plane_layer_paint): the video whose box the walk
+// hands over first, the part being painted, and whether its box was
+// reached. Until it is, the glass's clip is empty, so the box's own
+// background, beneath the picture, is not drawn; pane_video for it puts
+// the clip back and draws nothing, the picture being the plane's.
+static struct {
+    const Video *video;
+    os64_gui_rect_t clip;
+    bool reached;
+} s_layer;
+
+static bool plane_layer_paint(const Video *v, os64_gui_rect_t part, uint32_t paper);
+
+// `part` (window coordinates, inside `v`'s clip) read into `out`.
+static void plane_read(os64_gui_rect_t part, uint32_t *out)
+{
+    const os64_gui_surface_t *s = &g.ui.ctx->surf;
+    for (int32_t y = 0; y < part.h; y++)
+        os64_memcpy(out + (size_t)y * part.w, s->pixels + (size_t)(part.y + y) * s->pitch_px + part.x,
+                    (size_t)part.w * 4);
+}
+
+static void plane_write(os64_gui_rect_t part, const uint32_t *in)
+{
+    os64_gui_surface_t *s = &g.ui.ctx->surf;
+    for (int32_t y = 0; y < part.h; y++)
+        os64_memcpy(s->pixels + (size_t)(part.y + y) * s->pitch_px + part.x, in + (size_t)y * part.w,
+                    (size_t)part.w * 4);
+}
+
+// A layer that was no layer, for the record: counted by how far apart its
+// channels' coverages were, and the first such pixel since the reading
+// kept, where it is in the clip, its two passes' pixels and the element
+// there (flow_hit, once a reading).
+static void plane_disagreement_note(Video *v, os64_gui_rect_t at, const yonder_plane_layer_counts_t *counts)
+{
+    v->no_layer_disagree++;
+    for (int32_t k = 0; k < 4; k++)
+        v->no_layer_spread[k] += counts->spread[k];
+    if (v->first_disagree_said)
+        return;
+    v->first_disagree_said = true;
+    int32_t x = at.x + (int32_t)(counts->first % (size_t)at.w), y = at.y + (int32_t)(counts->first / (size_t)at.w);
+    v->first_disagree_x = x - v->clip.x;
+    v->first_disagree_y = y - v->clip.y;
+    v->first_disagree_b = counts->first_b;
+    v->first_disagree_w = counts->first_w;
+    os64_strcopy(v->first_disagree_at, sizeof(v->first_disagree_at), "?");
+    const flow_box_t *hit = g.page.tree != NULL ? flow_hit(g.page.tree, x - g.view.bounds.x + g.sx,
+                                                            y - g.view.bounds.y + g.sy, scroll_now())
+                                                : NULL;
+    const os64_html_node_t *el = box_element(hit);
+    if (el != NULL)
+        element_named(v->first_disagree_at, sizeof(v->first_disagree_at), "", el);
+}
+
+// The layer of what lies over `v` in `at` (window coordinates, inside its
+// clip): the render's pixels kept, the two passes made and read, the
+// render's put back. False, and none kept, when a pass could not be made,
+// a pixel was no layer's (yonder_plane_layer's `disagree`), or there was no
+// memory or no room for it.
+static bool plane_layer_make(Video *v, os64_gui_rect_t at)
+{
+    size_t n = (size_t)at.w * (size_t)at.h;
+    if (s_plane_nlayers == PLANE_LAYERS_MAX) {
+        v->layers_made++;
+        v->layers_refused++;
+        v->no_layer_full++;
+        return false;
+    }
+    uint32_t *kept = plane_buf(&s_layer_kept, &s_layer_kept_cap, n);
+    uint32_t *white = plane_buf(&s_layer_white, &s_layer_white_cap, n);
+    uint32_t *black = plane_buf(&s_plane_layers[s_plane_nlayers].px, &s_plane_layers[s_plane_nlayers].cap, n);
+    bool made = kept != NULL && black != NULL && white != NULL, reached = true;
+    if (!made)
+        v->no_layer_memory++;
+    yonder_plane_layer_counts_t counts = {0};
+    if (made) {
+        bool watch = s_plane_watch;
+        s_plane_watch = false;      // the passes' draws are no render's
+        uint64_t began = cycles();
+        int64_t began_us = os64_micros();
+        plane_read(at, kept);
+        made = plane_layer_paint(v, at, 0xff000000u);
+        plane_read(at, black);
+        made = made && plane_layer_paint(v, at, 0xffffffffu);
+        plane_read(at, white);
+        plane_write(at, kept);
+        s_plane_watch = watch;
+        // Counted apart, and taken out of the render's open stage, whose
+        // start moves on by what the passes took.
+        uint64_t us = (uint64_t)(os64_micros() - began_us);
+        s_plane_counts.layer_passes++;
+        s_plane_counts.layer_us += us;
+        if (us > s_plane_counts.layer_us_most)
+            s_plane_counts.layer_us_most = us;
+        if (s_cost.depth[PS_RENDER] > 0)
+            s_cost.began[PS_RENDER] += cycles_since(began);
+        reached = made;
+        if (made)
+            yonder_plane_layer(black, white, n, black, &counts);
+        if (!reached)
+            v->no_layer_reach++;
+        if (counts.disagree > 0)
+            plane_disagreement_note(v, at, &counts);
+        made = made && counts.disagree == 0;
+    }
+    v->layers_made++;
+    v->layer_pixels += n;
+    if (!made) {
+        v->layers_refused++;
+        return false;
+    }
+    s_plane_layers[s_plane_nlayers].video = (int32_t)(v - s_videos);
+    s_plane_layers[s_plane_nlayers].at = at;
+    s_plane_nlayers++;
+    return true;
+}
+
+static void planes_release(void)
+{
+    s_plane_watch = false;
+    for (uint32_t k = 0; k < s_plane_nlayers; k++)
+        s_plane_layers[k].at = (os64_gui_rect_t){0, 0, 0, 0};   // the buffers are kept; no place is
+    s_plane_nlayers = 0;
+    for (int32_t i = 0; i < VIDEOS_MAX; i++)
+        if (s_videos[i].node != NULL && s_videos[i].view.frame != NULL)
+            yonder_media_shown_done(s_videos[i].session, &s_videos[i].view);
+}
+
+// Whether what the map knows lies over `v`'s picture in `clip` needs more
+// overlay than the kernel blends; the overlays then in `v`.
+static bool plane_over_budget(Video *v, os64_gui_rect_t clip)
+{
+    yonder_plane_rect_t ov[OS64_GUI_PLANE_OVERLAYS];
+    v->noverlays = yonder_plane_map_overlays(&v->map, to_plane_rect(clip), ov, OS64_GUI_PLANE_OVERLAYS,
+                                             &v->overlay_area);
+    for (uint32_t k = 0; k < v->noverlays; k++)
+        v->overlays[k] = (os64_gui_rect_t){ov[k].x, ov[k].y, ov[k].w, ov[k].h};
+    if (v->overlay_area > v->overlay_area_most)
+        v->overlay_area_most = v->overlay_area;
+    if (v->overlay_area > PLANE_OVERLAY_BUDGET && v->overlay_area > v->budget_refused_most)
+        v->budget_refused_most = v->overlay_area;
+    return v->overlay_area > PLANE_OVERLAY_BUDGET;
+}
+
+// THE CHANGES OVER A PICTURE AT THIS PAINT (VIDEO_PLANE.md § 5.2): for each
+// mapped video, every view mark since the last paint (s_marks, kept by
+// mark_part with the video whose own new picture it marked) but its own,
+// and every damage entry libui holds for the render that is none of its own
+// marks (a widget's own invalidation, which reaches libui without a view
+// mark), each cut to its clip. Its own picture changes nothing over it; a
+// page mark, another video's picture, prepare's marks of a place and a
+// widget all do. A widget's invalidation that libui folds into the video's
+// own picture's rectangle is lost to this; it delays only what an
+// off-plane video's map knows, since a placed video marks no picture of its
+// own. With no list to tell changes by (none kept, or more than s_marks
+// holds), every part of the clip counts. Taken once a paint, after prepare
+// has marked, and the marks let go for the next.
+static void planes_buffers_free(void);
+static os64_gui_rect_t s_taken[OS64_UI_DAMAGE_MAX];
+static uint32_t s_ntaken;
+
+static void planes_take_changes(void)
+{
+    for (int32_t i = 0; i < VIDEOS_MAX; i++) {
+        Video *v = &s_videos[i];
+        v->nchanges = 0;
+        v->changes_all = !g.ui.any_dirty || s_marks_lost;
+        if (v->node == NULL || !v->mapped || v->changes_all)
+            continue;
+        for (uint32_t k = 0; k < s_nmarks + g.ui.damage_count; k++) {
+            os64_gui_rect_t met, d = k < s_nmarks ? s_marks[k].r : g.ui.damage[k - s_nmarks];
+            // A mark is its own entry unless it was this video's picture; a
+            // damage entry is taken only when no mark made it, since every
+            // mark reaches libui's list too.
+            bool skip = k < s_nmarks && s_marks[k].video == i;
+            for (uint32_t m = 0; m < s_nmarks && k >= s_nmarks && !skip; m++)
+                skip = os64_memcmp(&s_marks[m].r, &d, sizeof(d)) == 0;
+            if (skip || !os64_rect_intersect(d, v->clip, &met))
+                continue;
+            if (v->nchanges < sizeof(v->changes) / sizeof(v->changes[0]))
+                v->changes[v->nchanges++] = met;
+            else
+                v->changes_all = true;
+        }
+    }
+    s_nmarks = 0;
+    s_marks_lost = false;
+    // The list as taken: the render may add to it (libui's own reconcile of
+    // a widget disabled or detached marks inside os64_ui_render_list), and
+    // what it adds is a change no one was told of (plane_changed_parts).
+    s_ntaken = g.ui.any_dirty ? g.ui.damage_count : 0;
+    for (uint32_t k = 0; k < s_ntaken; k++)
+        s_taken[k] = g.ui.damage[k];
+}
+
+// Before the render: each video's facts, its plane asked for at its first
+// cover, `shown` pinned for the paint, and the reasons asked with what the
+// map knew so far.
+static void planes_prepare(void)
+{
+    for (int32_t i = 0; i < VIDEOS_MAX; i++)
+        s_videos[i].candidate = s_videos[i].mapped = s_videos[i].place = false;
+    s_plane_over_n = 0;
+    s_plane_over_all = false;
+    s_plane_watch = false;
+    if (g.page.tree == NULL) {
+        planes_buffers_free();      // no page, no video's layers to make
+        return;
+    }
+    for (int32_t i = 0; i < VIDEOS_MAX; i++) {
+        Video *v = &s_videos[i];
+        if (v->node == NULL)
+            continue;
+        os64_media_player_facts_t f;
+        if (!yonder_media_player_facts(v->session, &f))
+            continue;
+        if (f.plane_state != OS64_MEDIA_PLANE_ON && v->plane_state == OS64_MEDIA_PLANE_ON) {
+            // The plane went (ended, or refused at a new size): the player
+            // is gone from it and so is the kernel's place; the box is the
+            // page's again, painted from `frame`. Said on the console with
+            // the GUI's answer, since a plane ending under a live window is
+            // not meant to happen.
+            os64_printf("plane: video %d's plane %s (the GUI's answer %d)\n", (int)i,
+                        f.plane_state == OS64_MEDIA_PLANE_ENDED ? "ended" : "was refused", f.plane_refusal);
+            v->ask_again_ms = yonder_now_ms() + PLANE_HOLD_OFF_MS;
+            if (v->placed)
+                plane_mark_window(v->placed_clip);
+            v->placed = false;
+            plane_reason_set(v, v->reason);
+            v->reason_since_us = 0;
+        }
+        if (f.plane_state == OS64_MEDIA_PLANE_ON && v->plane_state != OS64_MEDIA_PLANE_ON) {
+            // Its first paint with the plane on: no reason yet, so the
+            // first verdict, placed or not, starts its clock.
+            v->reason = YONDER_PLANE_REASONS;
+            v->reason_since_us = 0;
+        }
+        v->plane_state = f.plane_state;
+        const flow_box_t *b = flow_box_for(g.page.tree, v->node);
+        os64_gui_rect_t part;
+        bool on_view = video_on_view(v, &part);
+        if (f.plane_state == OS64_MEDIA_PLANE_ENDED && v->plane_asked && v->asks_again < PLANE_ASKS_AGAIN &&
+            yonder_now_ms() >= v->ask_again_ms) {
+            // A plane that ended while its session plays is not meant to
+            // happen; it is asked for again, no sooner than a second apart
+            // (and only when it is a cover in view again),
+            // PLANE_ASKS_AGAIN times a session, counted. A refused one is
+            // not: that answer does not change.
+            v->plane_asked = false;
+            v->asks_again++;
+            v->ask_again_ms = yonder_now_ms() + PLANE_HOLD_OFF_MS;
+        }
+        if (f.plane_state == OS64_MEDIA_PLANE_NONE || (f.plane_state == OS64_MEDIA_PLANE_ENDED && !v->plane_asked)) {
+            os64_gui_rect_t c;
+            // Only once it has played: a paused first picture gains nothing
+            // from a plane, and a window has few (GUI_WINDOW_PLANES), kept
+            // until the session closes, so a page of videos nobody plays
+            // must not spend them.
+            if (s_planes && !v->plane_asked && v->played && on_view && v->seen.picture && b != NULL &&
+                video_cover_rect(v, b, &c)) {
+                v->plane_asked = true;
+                v->frame_fresh = false;
+                s_plane_counts.asks++;
+                (void)yonder_media_plane_ask(v->session, g.win);
+            }
+        }
+        // From the ask until a frame call answers again once `frame` is
+        // handed back, the page paints from a pinned `shown`: the show
+        // thread may take the pace at any moment of it, and the picture the
+        // last frame call gave may be retired and its pixels reused
+        // (video_picture).
+        bool handed_back = f.plane_state == OS64_MEDIA_PLANE_REFUSED || f.plane_state == OS64_MEDIA_PLANE_ENDED;
+        if ((v->plane_asked || f.plane_state != OS64_MEDIA_PLANE_NONE) && (!handed_back || !v->frame_fresh) &&
+            v->view.frame == NULL)
+            (void)yonder_media_shown(v->session, &v->view);
+        if (f.plane_state != OS64_MEDIA_PLANE_ON)
+            continue;
+        os64_gui_rect_t origin = {0}, clip = {0};
+        bool cover = b != NULL && plane_geometry(v, b, &origin, &clip);
+        bool meets = false;
+        for (int32_t k = 0; k < i && cover; k++)
+            meets |= s_videos[k].candidate && os64_rect_intersect(s_videos[k].clip, clip, &part);
+        os64_gui_rect_t box = b != NULL ? flow_box_doc_rect(b, scroll_now()) : (os64_gui_rect_t){0, 0, 0, 0};
+        bool mapped = cover && plane_map_on(v, origin);
+        if (mapped) {
+            // Whatever its verdict, this render tells its map what lies
+            // over its picture, so ink that goes away is seen to go.
+            v->mapped = true;
+            s_plane_watch = true;
+            v->origin = origin;
+            v->clip = clip;
+        }
+        yonder_plane_input_t in = {
+            .on_view = on_view,
+            .cover = cover && mapped,
+            .backdrop = cover && backdrop_read_meets(box),
+            .clip_meets = meets,
+            .not_layer = mapped && v->not_layer,
+            .over_budget = mapped && plane_over_budget(v, clip),
+            // Off for no layer or the budget, with tiles forgotten since: not
+            // yet painted until a pass relearns them, so a forgotten tile
+            // (counted as no ink) cannot shrink the overlays under the
+            // budget and make it a candidate whose place marks all of its
+            // clip. Otherwise asked after the render (planes_judge).
+            .unpainted = mapped && !v->placed &&
+                         (v->reason == YONDER_PLANE_NOT_LAYER || v->reason == YONDER_PLANE_BUDGET ||
+                          v->reason == YONDER_PLANE_UNPAINTED) &&
+                         !yonder_plane_map_known(&v->map, to_plane_rect(clip)),
+            .ready = f.plane_ready && f.plane_pic_w == (uint32_t)origin.w && f.plane_pic_h == (uint32_t)origin.h,
+            // The serial is the placing paint's question: a placed plane
+            // shows its own pictures, and between the show thread's pick
+            // and its publish `shown` is ahead of the plane by one.
+            .shown = v->placed || (v->view.frame != NULL && f.plane_serial != 0 && f.plane_serial == v->view.serial),
+            .held_off = yonder_now_ms() < v->held_until_ms,
+        };
+        yonder_plane_verdict_t verdict = yonder_plane_decide(&in);
+        if (!v->want_told || verdict.want != v->want) {
+            v->want = verdict.want;
+            v->want_told = true;
+            yonder_media_plane_want(v->session, v->want);
+        }
+        v->candidate = verdict.reason == YONDER_PLANE_PLACED;
+        if (v->candidate) {
+            v->name = f.plane_name;
+            if (!plane_place_same(v)) {
+                // All of the clip painted at this render, so the map knows
+                // all of it and the hole is all of it.
+                plane_mark_window(v->clip);
+                if (v->placed)
+                    plane_mark_window(v->placed_clip);
+            }
+        } else {
+            if (v->placed)
+                plane_mark_window(v->placed_clip);
+            if (verdict.reason != v->reason)
+                plane_reason_set(v, verdict.reason);
+        }
+    }
+    planes_take_changes();
+    bool any_mapped = false;
+    for (int32_t i = 0; i < VIDEOS_MAX && !any_mapped; i++)
+        any_mapped = s_videos[i].node != NULL && s_videos[i].mapped;
+    if (!any_mapped)
+        planes_buffers_free();      // no video's layers to make: their buffers go back
+}
+
+// The record's words for `v`'s plane (P3's design state § 10): its state,
+// what its show thread published and missed, and the time placed against
+// the time wanted and not placed, by reason (out of view is not wanted).
+static void plane_reading(DiagText *t, const Video *v, const os64_media_player_facts_t *f)
+{
+    static const char *const kState[] = {"none", "starting", "on", "refused", "ended"};
+    if (f->plane_state == OS64_MEDIA_PLANE_NONE)
+        return;
+    dt_put(t, ", its plane %s", (unsigned)f->plane_state < 5 ? kState[f->plane_state] : "?");
+    if (f->plane_state == OS64_MEDIA_PLANE_REFUSED || f->plane_state == OS64_MEDIA_PLANE_ENDED)
+        dt_put(t, " (the GUI's answer %d)", f->plane_refusal);
+    dt_put(t, " %u %ux%u: published %lu, display frames missed %lu, recreates %lu, waits ended by patience %lu, %s",
+           f->plane_name, f->plane_cap_w, f->plane_cap_h, (unsigned long)f->plane_published,
+           (unsigned long)f->frames_missed, (unsigned long)f->plane_recreates, (unsigned long)f->waits_patience,
+           v->placed ? "placed" : "not placed");
+    uint64_t now = (uint64_t)os64_micros();
+    bool first = true;
+    for (int32_t r = 0; r < YONDER_PLANE_REASONS; r++) {
+        uint64_t us = v->reason_us[r];
+        if (r == (int32_t)v->reason && v->reason_since_us != 0 && f->plane_state == OS64_MEDIA_PLANE_ON)
+            us += now - v->reason_since_us;
+        if (us == 0)
+            continue;
+        if (r == YONDER_PLANE_PLACED)
+            dt_put(t, "; placed %lu ms", (unsigned long)(us / 1000));
+        else if (r == YONDER_PLANE_OUT_OF_VIEW)
+            dt_put(t, "; out of view %lu ms", (unsigned long)(us / 1000));
+        else {
+            dt_put(t, "%s%s %lu ms", first ? "; wanted and not placed: " : ", ",
+                   yonder_plane_reason_name((yonder_plane_reason_t)r), (unsigned long)(us / 1000));
+            first = false;
+        }
+    }
+    if (v->asks_again > 0)
+        dt_put(t, "; asked again after it ended %u", (unsigned)v->asks_again);
+    dt_put(t, "; moves onto the plane %lu, off %lu; the page's paints of its clip while placed %lu",
+           (unsigned long)v->moves_on, (unsigned long)v->moves_off, (unsigned long)v->placed_paints);
+    if (v->layers_made > 0)
+        dt_put(t, "; layers of what lies over it %lu (%lu pixels), no layer %lu, overlays %u (%lu pixels), the "
+               "most asked for %lu pixels, the most kept off its plane for the budget %lu (the budget %u)",
+               (unsigned long)v->layers_made, (unsigned long)v->layer_pixels, (unsigned long)v->layers_refused,
+               v->placed ? v->placed_noverlays : 0u, (unsigned long)(v->placed ? v->placed_overlay_area : 0),
+               (unsigned long)v->overlay_area_most, (unsigned long)v->budget_refused_most,
+               (unsigned)PLANE_OVERLAY_BUDGET);
+    if (v->no_layer_disagree + v->no_layer_full + v->no_layer_memory + v->no_layer_reach > 0) {
+        dt_put(t, "; no layer: channels disagreed %lu (pixels 2 apart %lu, 3 %lu, 4 %lu, 5 or more %lu)",
+               (unsigned long)v->no_layer_disagree, (unsigned long)v->no_layer_spread[0],
+               (unsigned long)v->no_layer_spread[1], (unsigned long)v->no_layer_spread[2],
+               (unsigned long)v->no_layer_spread[3]);
+        if (v->first_disagree_said) {
+            uint32_t b = v->first_disagree_b, w = v->first_disagree_w;
+            dt_put(t, ", the first at %d,%d of the clip, over black %06x and over white %06x, coverages %d %d %d, "
+                   "in %s", (int)v->first_disagree_x, (int)v->first_disagree_y, (unsigned)(b & 0xffffffu),
+                   (unsigned)(w & 0xffffffu), 255 - (int)((w >> 16 & 0xff) - (b >> 16 & 0xff)),
+                   255 - (int)((w >> 8 & 0xff) - (b >> 8 & 0xff)), 255 - (int)((w & 0xff) - (b & 0xff)),
+                   v->first_disagree_at);
+        }
+        dt_put(t, "; could not be made: the layers' room full %lu, no memory %lu, the walk never reached it %lu",
+               (unsigned long)v->no_layer_full, (unsigned long)v->no_layer_memory, (unsigned long)v->no_layer_reach);
+    }
+    if (v->layers_capped > 0)
+        dt_put(t, "; layer passes waited for (off its plane, a quarter second apart) %lu", (unsigned long)v->layers_capped);
+    if (v->checked > 0)
+        dt_put(t, "; plane-check %lu pixels, off by one %lu, by two %lu, wrong %lu, the largest difference %d",
+               (unsigned long)v->checked, (unsigned long)v->checked_near, (unsigned long)v->checked_two,
+               (unsigned long)v->checked_wrong, (int)v->checked_far_most);
+}
+
+// The record's words for the planes of the whole window.
+// The heap's regions since the reading began, a line of its own in every
+// reading: each a kernel map or unmap made under libos64's one heap lock,
+// which the player's threads wait on too (a region is an allocation of
+// 128 KiB or more, or a pool).
+static void heap_regions_reading(DiagText *t)
+{
+    os64_heap_report_t heap;
+    os64_heap_report_copy(&heap);
+    dt_put(t, "the heap's regions taken from the kernel %lu, given back %lu",
+           (unsigned long)(heap.calls_map - s_plane_counts.heap_maps),
+           (unsigned long)(heap.calls_unmap - s_plane_counts.heap_unmaps));
+}
+
+static void plane_counts_reading(DiagText *t)
+{
+    if (s_plane_counts.asks == 0 && s_plane_counts.edit_publishes == 0 && s_plane_counts.hides_owed == 0 &&
+        s_plane_counts.layer_passes == 0)
+        return;
+    dt_put(t, "; planes: %lu asked, %lu publishes carrying edits (%lu pixels of damage in all, %lu of them past "
+           "their rectangles' own area), %lu hides owed by closed sessions (%lu pictures painted back, %lu dropped)",
+           (unsigned long)s_plane_counts.asks, (unsigned long)s_plane_counts.edit_publishes,
+           (unsigned long)s_plane_counts.union_area, (unsigned long)s_plane_counts.union_beyond,
+           (unsigned long)s_plane_counts.hides_owed, (unsigned long)s_plane_counts.hides_copied,
+           (unsigned long)s_plane_counts.hides_dropped);
+    for (size_t c = 1; c < sizeof(s_plane_counts.refused) / sizeof(s_plane_counts.refused[0]); c++)
+        if (s_plane_counts.refused[c] > 0)
+            dt_put(t, ", publishes refused %d: %lu", -(int)c, (unsigned long)s_plane_counts.refused[c]);
+    if (s_plane_counts.overlay_retries > 0)
+        dt_put(t, ", refused overlay changes kept for the next paint %lu", (unsigned long)s_plane_counts.overlay_retries);
+    if (s_plane_counts.layer_passes > 0)
+        dt_put(t, "; layer passes (what lies over a picture, painted twice, not in the paint's cost) %lu, %s in all, "
+               "the longest %s, their buffers grown %lu times", (unsigned long)s_plane_counts.layer_passes,
+               dt_ms(s_plane_counts.layer_us).text, dt_ms(s_plane_counts.layer_us_most).text,
+               (unsigned long)s_plane_counts.layer_buffers_grown);
+}
+
+// The parts of `damage[from..count)` in `v`'s clip that changed over its
+// picture: met with this paint's changes on the first render, whole on a
+// later one (a render the judge asked for, whose marks are the picture
+// painted back where a plane was, a change over anything under it), and
+// whole for a rectangle the render added after the changes were taken. At
+// most PLANE_PARTS_MAX in `out`, joined by least added area when more come.
+#define PLANE_PARTS_MAX 32
+static uint32_t plane_changed_parts(const Video *v, const os64_gui_rect_t *damage, uint32_t from, uint32_t count,
+                                    yonder_plane_rect_t *out)
+{
+    uint32_t n = 0;
+    for (uint32_t k = from; k < count; k++) {
+        os64_gui_rect_t part;
+        if (!os64_rect_intersect(damage[k], v->clip, &part))
+            continue;
+        bool taken = false;
+        for (uint32_t t = 0; t < s_ntaken && !taken; t++)
+            taken = os64_memcmp(&s_taken[t], &damage[k], sizeof(damage[k])) == 0;
+        bool whole = from > 0 || v->changes_all || !taken;   // a rectangle the render added is a change
+        for (uint32_t c = 0; c < (whole ? 1u : v->nchanges); c++) {
+            os64_gui_rect_t piece = part;
+            if (!whole && !os64_rect_intersect(part, v->changes[c], &piece))
+                continue;
+            if (n == PLANE_PARTS_MAX)
+                n = yonder_plane_join(out, n, PLANE_PARTS_MAX - 1);
+            out[n++] = to_plane_rect(piece);
+        }
+    }
+    return n;
+}
+
+// `n` layer parts with every two that meet made one (their bounds), so no
+// pixel is painted by two passes. The count left.
+static uint32_t plane_parts_unoverlapped(yonder_plane_rect_t *r, uint32_t n)
+{
+    for (bool joined = true; joined;) {
+        joined = false;
+        for (uint32_t i = 0; i < n && !joined; i++)
+            for (uint32_t j = i + 1; j < n && !joined; j++) {
+                os64_gui_rect_t a = {r[i].x, r[i].y, r[i].w, r[i].h}, b = {r[j].x, r[j].y, r[j].w, r[j].h}, met;
+                if (!os64_rect_intersect(a, b, &met))
+                    continue;
+                os64_gui_rect_t u = os64_rect_union(a, b);
+                r[i] = (yonder_plane_rect_t){u.x, u.y, u.w, u.h};
+                r[j] = r[--n];
+                joined = true;
+            }
+    }
+    return n;
+}
+
+// Whether a pass for `v` waits (VIDEO_PLANE.md § 5.2): it cannot be placed
+// at this paint for a reason no layer cures (out of view, a backdrop
+// reader, another plane's clip; relearned whole at the paint that places
+// it), or it is off its plane for no layer, the budget or not yet painted
+// (where forgotten tiles leave the other two) and asked less than
+// PLANE_LAYER_WAIT_MS ago, which a change at the display's rate would
+// otherwise ask at its own (`*capped`: the parts are owed, marked again
+// when the wait is over). A placed video never waits.
+#define PLANE_LAYER_WAIT_MS 250
+static bool plane_layers_wait(Video *v, bool *capped)
+{
+    *capped = false;
+    if (v->candidate || v->placed)
+        return false;
+    if (v->reason == YONDER_PLANE_OUT_OF_VIEW || v->reason == YONDER_PLANE_BACKDROP ||
+        v->reason == YONDER_PLANE_CLIP_MEETS)
+        return true;
+    if (v->reason != YONDER_PLANE_NOT_LAYER && v->reason != YONDER_PLANE_BUDGET &&
+        v->reason != YONDER_PLANE_UNPAINTED)
+        return false;   // not yet painted waits too: it is where forgetting leaves the other two
+    uint64_t now = yonder_now_ms();
+    if (now < v->layer_next_ms) {
+        v->layers_capped++;
+        *capped = true;
+        return true;
+    }
+    v->layer_next_ms = now + PLANE_LAYER_WAIT_MS;
+    return false;
+}
+
+// After a render that painted `damage[from..count)`: each mapped video's
+// layers made where the render may have drawn over its picture, and its map
+// told what lies over it (a video kept off its plane included, so it comes
+// back once that is gone). A candidate is placed with the overlays the map
+// gives, unless what lies over it was no layer, needs more overlay than the
+// kernel blends, or covers a part not yet painted. True when a placed video
+// must leave, its old clip marked to be painted again; a video leaves once
+// a paint at most, so a paint judges again at most once for each plane it
+// has.
+static bool planes_judge(const os64_gui_rect_t *damage, uint32_t from, uint32_t count)
+{
+    bool again = false;
+    if (from == 0 && s_plane_watch) {
+        bool after = false;
+        planes_note_widgets(g.ui.root, &after);
+    }
+    for (int32_t i = 0; i < VIDEOS_MAX; i++) {
+        Video *v = &s_videos[i];
+        if (v->node == NULL)
+            continue;
+        if (v->placed && from == 0)
+            for (uint32_t k = 0; k < count; k++) {
+                os64_gui_rect_t met;
+                if (os64_rect_intersect(damage[k], v->placed_clip, &met)) {
+                    v->placed_paints++;
+                    break;
+                }
+            }
+        if (!v->mapped)
+            continue;
+        if (from == 0)
+            v->layers_failed = false;
+        // Only what changed over the picture is layered and told to the
+        // map: a part painted again for the video's own picture keeps what
+        // the map knew. A pass that waits leaves the changed parts
+        // forgotten, as one that fails does, since a part the render
+        // painted with no layer would read as nothing over the picture.
+        // A part that gets a layer is layered and told to the map on all of
+        // the tiles it meets (yonder_plane_map_whole_tiles): a layer pass
+        // paints what it is asked, so no tile is left half known, which only
+        // a later paint of all of it could settle. A part with nothing over
+        // it tells the map only its own rectangle, since nothing was looked
+        // at beyond it.
+        yonder_plane_rect_t parts[PLANE_PARTS_MAX], layers[PLANE_PARTS_MAX];
+        uint32_t nparts = plane_changed_parts(v, damage, from, count, parts);
+        bool capped = false;
+        if (nparts > 0 && plane_layers_wait(v, &capped)) {
+            for (uint32_t k = 0; k < nparts; k++) {
+                // Forgotten, and unlearned: the next change that meets it
+                // (the owed mark among them) is layered with all of it on
+                // whole tiles, whether or not anything is over it then.
+                os64_gui_rect_t r = {parts[k].x, parts[k].y, parts[k].w, parts[k].h};
+                yonder_plane_map_forget(&v->map, parts[k]);
+                v->unlearned = v->unlearned_any ? os64_rect_union(v->unlearned, r) : r;
+                v->unlearned_any = true;
+                if (capped) {
+                    // Owed: marked again once the wait is over, so the last
+                    // change of a burst is not dropped.
+                    v->owed = v->owed_any ? os64_rect_union(v->owed, r) : r;
+                    v->owed_any = true;
+                }
+            }
+        } else if (nparts > 0) {
+            uint32_t nlayers = 0;
+            bool meets_unlearned = false;
+            for (uint32_t k = 0; k < nparts; k++) {
+                os64_gui_rect_t r = {parts[k].x, parts[k].y, parts[k].w, parts[k].h}, met;
+                meets_unlearned |= v->unlearned_any && os64_rect_intersect(r, v->unlearned, &met);
+                if (v->view.pixels != NULL && !plane_part_touched(v, r))
+                    continue;   // nothing over it here: the map is told of this rectangle alone
+                // A layered part is grown to the tiles it meets, the layer
+                // saying what lies over all of them.
+                yonder_plane_rect_t whole;
+                if (yonder_plane_map_whole_tiles(&v->map, parts[k], to_plane_rect(v->clip), &whole))
+                    parts[k] = whole;
+                layers[nlayers++] = parts[k];
+            }
+            if (meets_unlearned && nparts < PLANE_PARTS_MAX) {
+                // A change over what a failed layer left forgotten: all of it
+                // is layered again with the change, since the cause may lie
+                // anywhere in it and no later change need meet the rest.
+                yonder_plane_rect_t again;
+                if (yonder_plane_map_whole_tiles(&v->map, to_plane_rect(v->unlearned), to_plane_rect(v->clip), &again)) {
+                    parts[nparts++] = again;
+                    layers[nlayers++] = again;
+                }
+                v->unlearned_any = false;
+            }
+            nlayers = plane_parts_unoverlapped(layers, nlayers);
+            nlayers = yonder_plane_join(layers, nlayers, PLANE_LAYERS_A_VIDEO);
+            bool made[PLANE_PARTS_MAX];
+            for (uint32_t k = 0; k < nlayers; k++)
+                made[k] = plane_layer_make(v, (os64_gui_rect_t){layers[k].x, layers[k].y, layers[k].w, layers[k].h});
+            for (uint32_t k = 0; k < nparts; k++)
+                yonder_plane_map_paint(&v->map, parts[k], to_plane_rect(v->clip), plane_ink, v);
+            for (uint32_t k = 0; k < nlayers; k++)
+                if (!made[k]) {
+                    os64_gui_rect_t r = {layers[k].x, layers[k].y, layers[k].w, layers[k].h};
+                    v->layers_failed = true;
+                    yonder_plane_map_forget(&v->map, layers[k]);
+                    v->unlearned = v->unlearned_any ? os64_rect_union(v->unlearned, r) : r;
+                    v->unlearned_any = true;
+                }
+        }
+        yonder_plane_rect_t clip = to_plane_rect(v->clip);
+        bool known = yonder_plane_map_known(&v->map, clip);
+        if (v->layers_failed)
+            v->not_layer = true;
+        else if (known)
+            v->not_layer = false;
+        if (!v->candidate)
+            continue;
+        // In the reasons' order (plane_place.h): the overlays of what the
+        // map knows are asked before whether it knows all of the clip.
+        yonder_plane_reason_t why = YONDER_PLANE_PLACED;
+        if (v->not_layer)
+            why = YONDER_PLANE_NOT_LAYER;
+        else if (plane_over_budget(v, v->clip) ||
+                 (v->noverlays > 0 && v->overlays_refused_area != 0 && v->overlay_area >= v->overlays_refused_area))
+            why = YONDER_PLANE_BUDGET;
+        else if (!known)
+            why = YONDER_PLANE_UNPAINTED;
+        if (why == YONDER_PLANE_PLACED) {
+            v->place = true;
+            continue;
+        }
+        v->candidate = v->place = false;
+        plane_reason_set(v, why);
+        if (v->placed) {
+            plane_mark_window(v->placed_clip);
+            again = true;
+        }
+    }
+    return again;
+}
+
+// `--plane-check`'s judgement of one row of `v`'s hole: `painted` the
+// page's pixels, `content` what the hole now holds, `n` from (x, y).
+static void plane_check_row(Video *v, int32_t x, int32_t y, const uint32_t *painted, const uint32_t *content,
+                            int32_t n, const os64_gui_rect_t *earlier, uint32_t nearlier, bool *said)
+{
+    const uint32_t *pic = v->view.pixels + (size_t)(y - v->origin.y) * v->view.w + (x - v->origin.x);
+    for (int32_t i = 0; i < n; i++) {
+        // A pixel an earlier damage rectangle reached was judged there,
+        // against the page's own paint; here it already holds the hole.
+        bool seen = false;
+        for (uint32_t e = 0; e < nearlier && !seen; e++)
+            seen = x + i >= earlier[e].x && x + i < earlier[e].x + earlier[e].w && y >= earlier[e].y &&
+                   y < earlier[e].y + earlier[e].h;
+        if (seen)
+            continue;
+        bool inside = false;
+        for (uint32_t k = 0; k < v->noverlays && !inside; k++) {
+            const os64_gui_rect_t *o = &v->overlays[k];
+            inside = x + i >= o->x && x + i < o->x + o->w && y >= o->y && y < o->y + o->h;
+        }
+        uint32_t c = content[i], a = c >> 24;
+        uint32_t shown = inside ? plane_blend(c, pic[i]) : pic[i];
+        int32_t far = 0;
+        for (int32_t sh = 0; sh < 24; sh += 8) {
+            int32_t d = (int32_t)(shown >> sh & 0xff) - (int32_t)(painted[i] >> sh & 0xff);
+            d = d < 0 ? -d : d;
+            far = d > far ? d : far;
+        }
+        // A coverage between 0 and 255 is measured within one of each
+        // channel's own (yonder_plane_layer takes green's), which can add
+        // one to the blend's own rounding: two, counted apart.
+        bool wrong = (!inside && a != 0) || far > 2 || (far >= 1 && (a == 0 || a == 255));
+        v->checked++;
+        if (far > v->checked_far_most)
+            v->checked_far_most = far;
+        v->checked_near += !wrong && far == 1;
+        v->checked_two += !wrong && far == 2;
+        v->checked_wrong += wrong;
+        if (wrong && !*said) {
+            *said = true;
+            os64_printf("plane-check: video %d at %d,%d: the page painted %06x, the plane would show %06x "
+                        "(content %08x, %s)\n", (int)(v - s_videos), (int)(x + i), (int)y,
+                        (unsigned)(painted[i] & 0xffffffu), (unsigned)(shown & 0xffffffu), (unsigned)c,
+                        inside ? "inside an overlay" : "outside every overlay");
+        }
+    }
+}
+
+// The hole: each video placed by this publish has the pixels of its clip
+// that `damage` painted set to what lies over its picture there: this
+// paint's layer (the widgets over it included), or zero, see-through,
+// where there is none.
+static void planes_hole(const os64_gui_rect_t *damage, uint32_t count)
+{
+    os64_gui_surface_t *s = &g.ui.ctx->surf;
+    bool check = false;
+    for (int32_t i = 0; i < VIDEOS_MAX && s_plane_check != 0 && !check; i++)
+        check = s_videos[i].node != NULL && s_videos[i].place;
+    if (check)
+        check = s_plane_check_due++ % s_plane_check == 0;
+    // A row of the page's pixels, for the check alone, in a buffer kept
+    // with the layers' (THE LAYER PASSES ALLOCATE NOTHING): with no memory
+    // for it this paint goes unchecked, and the holes are cut all the same.
+    uint32_t *painted = check ? plane_buf(&s_check_row, &s_check_row_cap, s->width > 0 ? s->width : 1) : NULL;
+    check = check && painted != NULL;
+    for (int32_t i = 0; i < VIDEOS_MAX; i++) {
+        Video *v = &s_videos[i];
+        if (v->node == NULL || !v->place)
+            continue;
+        bool said = false;
+        for (uint32_t k = 0; k < count; k++) {
+            os64_gui_rect_t met;
+            if (!os64_rect_intersect(damage[k], v->clip, &met))
+                continue;
+            for (int32_t y = met.y; y < met.y + met.h; y++) {
+                uint32_t *row = s->pixels + (size_t)y * s->pitch_px + met.x;
+                if (check)
+                    os64_memcpy(painted, row, (size_t)met.w * 4);
+                os64_memset(row, 0, (size_t)met.w * 4);
+                for (uint32_t l = 0; l < s_plane_nlayers; l++) {
+                    const os64_gui_rect_t *a = &s_plane_layers[l].at;
+                    int32_t x0 = a->x > met.x ? a->x : met.x, x1 = a->x + a->w < met.x + met.w ? a->x + a->w : met.x + met.w;
+                    if (&s_videos[s_plane_layers[l].video] != v || y < a->y || y >= a->y + a->h || x0 >= x1)
+                        continue;
+                    os64_memcpy(row + (x0 - met.x), s_plane_layers[l].px + (size_t)(y - a->y) * a->w + (x0 - a->x),
+                                (size_t)(x1 - x0) * 4);
+                }
+                if (check && v->view.pixels != NULL)
+                    plane_check_row(v, met.x, y, painted, row, met.w, damage, k, &said);
+            }
+        }
+    }
+}
+
+// After the render that painted the closed sessions' boxes (their clips
+// marked at the close): the copies go. A later paint of the place is the
+// page's as it now is, as it always was once a video's session had closed.
+static void planes_hides_let_go(void)
+{
+    for (int32_t i = 0; i < PLANE_HIDES_MAX; i++) {
+        os64_free(s_plane_hides[i].copy);
+        s_plane_hides[i].copy = NULL;
+    }
+}
+
+static void plane_hide_free(int32_t i)
+{
+    os64_free(s_plane_hides[i].copy);
+    s_plane_hides[i] = (__typeof__(s_plane_hides[0])){0};
+}
+
+// The edits this publish carries: the places that change, then (with
+// `owed`) the hides owed by closed sessions. What the kernel's rule 2 asks
+// the publish's damage to cover grows `*all`: a place whose overlays alone
+// change, its new overlays; one shown, hidden or moved, its old clip and its
+// new. The clips of the places that change, old and new, go to `clips` (at
+// most PLANE_EDIT_CLIPS), for the damage that must ride with the edits
+// (planes_publish). A window has at most OS64_GUI_PLANES planes, so the live
+// videos' edits always fit; a hide owed for a plane the kernel has already
+// taken out could make one edit too many, and it is the one that waits for
+// the next publish, never a place whose hole is already painted.
+#define PLANE_EDIT_CLIPS (2 * OS64_GUI_PLANE_EDITS_MAX)
+
+// `*all` grown to hold `r`; an empty `*all` becomes `r`.
+static void plane_reach(os64_gui_rect_t *all, os64_gui_rect_t r)
+{
+    *all = all->w > 0 && all->h > 0 ? os64_rect_union(*all, r) : r;
+}
+static uint32_t planes_edits(os64_gui_plane_edit_t *edits, os64_gui_rect_t *all, bool owed, os64_gui_rect_t *clips,
+                             uint32_t *nclips)
+{
+    uint32_t n = 0;
+    *nclips = 0;
+    for (int32_t i = 0; i < VIDEOS_MAX && n < OS64_GUI_PLANE_EDITS_MAX; i++) {
+        const Video *v = &s_videos[i];
+        if (v->node == NULL)
+            continue;
+        if (v->place) {
+            if (plane_place_same(v))
+                continue;
+            os64_gui_plane_edit_t e = {.plane = v->name, .origin = v->origin, .clip = v->clip,
+                                       .noverlays = v->noverlays};
+            os64_memcpy(e.overlay, v->overlays, sizeof(v->overlays[0]) * v->noverlays);
+            edits[n++] = e;
+            bool overlays_only = v->placed && v->placed_name == v->name &&
+                                 os64_memcmp(&v->placed_origin, &v->origin, sizeof(v->origin)) == 0 &&
+                                 os64_memcmp(&v->placed_clip, &v->clip, sizeof(v->clip)) == 0;
+            if (overlays_only) {
+                for (uint32_t k = 0; k < v->noverlays; k++)
+                    plane_reach(all, v->overlays[k]);
+            } else {
+                plane_reach(all, v->clip);
+                if (v->placed)
+                    plane_reach(all, v->placed_clip);
+            }
+            clips[(*nclips)++] = v->clip;
+            if (v->placed && !overlays_only)
+                clips[(*nclips)++] = v->placed_clip;
+        } else if (v->placed) {
+            edits[n++] = (os64_gui_plane_edit_t){.plane = v->placed_name, .hide = 1};
+            plane_reach(all, v->placed_clip);
+            clips[(*nclips)++] = v->placed_clip;
+        }
+    }
+    for (int32_t i = 0; i < PLANE_HIDES_MAX; i++) {
+        s_plane_hides[i].sent = owed && s_plane_hides[i].owed && n < OS64_GUI_PLANE_EDITS_MAX;
+        if (s_plane_hides[i].sent) {
+            edits[n++] = (os64_gui_plane_edit_t){.plane = s_plane_hides[i].name, .hide = 1};
+            plane_reach(all, s_plane_hides[i].clip);
+            clips[(*nclips)++] = s_plane_hides[i].clip;
+        }
+    }
+    return n;
+}
+
+// What the kernel took: each video's place, the moves counted, the hides
+// owed that it carried done.
+static void planes_commit(void)
+{
+    for (int32_t i = 0; i < PLANE_HIDES_MAX; i++)
+        if (s_plane_hides[i].sent)
+            plane_hide_free(i);
+    for (int32_t i = 0; i < VIDEOS_MAX; i++) {
+        Video *v = &s_videos[i];
+        if (v->node == NULL || v->plane_state != OS64_MEDIA_PLANE_ON)
+            continue;
+        if (v->place && !v->placed)
+            v->moves_on++;
+        if (!v->place && v->placed)
+            v->moves_off++;
+        v->placed = v->place;
+        if (v->place) {
+            v->placed_name = v->name;
+            v->placed_origin = v->origin;
+            v->placed_clip = v->clip;
+            v->placed_noverlays = v->noverlays;
+            os64_memcpy(v->placed_overlays, v->overlays, sizeof(v->overlays));
+            v->placed_overlay_area = v->overlay_area;
+            if (v->noverlays > 0)
+                v->overlays_refused_area = 0;   // taken: the kernel's budget is not what it was thought
+            if (v->reason != YONDER_PLANE_PLACED)
+                plane_reason_set(v, YONDER_PLANE_PLACED);
+        }
+    }
+}
+
+// The damage rectangles that ride with the edits (those meeting a changed
+// place's clip at all, each whole, never cut at the clip, so a box across
+// the video's edge reaches the glass in one publish) grow `*all`, and
+// `*area` is the sum of their own areas; the others are published plain,
+// first, and marked `sent`. Between the plain publishes and the edit
+// one the glass may show unrelated parts of the window a frame apart,
+// which no reader can tell from a slower paint: none of them is a place's,
+// and the parts that meet one are all in the edit publish.
+static void planes_publish_split(const os64_gui_rect_t *damage, uint32_t count, const os64_gui_rect_t *clips,
+                                 uint32_t nclips, os64_gui_rect_t *all, bool *sent, int64_t *area)
+{
+    *area = 0;
+    for (uint32_t k = 0; k < count; k++) {
+        bool meets = false;
+        for (uint32_t c = 0; c < nclips && !meets; c++) {
+            os64_gui_rect_t met;
+            meets = os64_rect_intersect(damage[k], clips[c], &met);
+        }
+        if (!meets) {
+            if (!sent[k])
+                os64_draw_publish(g.ui.ctx, &damage[k]);
+            sent[k] = true;
+            continue;
+        }
+        plane_reach(all, damage[k]);
+        *area += (int64_t)damage[k].w * damage[k].h;
+    }
+}
+
+// The render's damage published: with the planes' edits when there are
+// any (the damage meeting a changed place's clip with them, the rest plain
+// before them, planes_publish_split); plainly otherwise.
+static void planes_publish(os64_gui_rect_t *damage, uint32_t *count)
+{
+    os64_gui_plane_edit_t edits[OS64_GUI_PLANE_EDITS_MAX];
+    os64_gui_rect_t clips[PLANE_EDIT_CLIPS];
+    uint32_t nclips;
+    bool sent[PAINT_DAMAGE_MAX] = {false};
+    os64_gui_rect_t all = {0, 0, 0, 0};
+    int64_t plain_area = 0;
+    uint32_t n = planes_edits(edits, &all, true, clips, &nclips);
+    if (n == 0) {
+        for (uint32_t k = 0; k < *count; k++)
+            os64_draw_publish(g.ui.ctx, &damage[k]);
+        return;
+    }
+    planes_publish_split(damage, *count, clips, nclips, &all, sent, &plain_area);
+    int64_t rc = os64_gui_window_publish_edits(g.win, &all, edits, n);
+    bool owed_sent = false;
+    for (int32_t i = 0; i < PLANE_HIDES_MAX; i++)
+        owed_sent |= s_plane_hides[i].sent;
+    if (rc == OS64_GUI_ERR_NO_PLANE && owed_sent) {
+        // A hide owed may name a plane already gone (its show thread's
+        // closing bound passed and the kernel took it out): once more
+        // without the owed hides, and when that is taken, each owed hide on
+        // its own, so a gone plane's is dropped and a living one's is made.
+        all = (os64_gui_rect_t){0, 0, 0, 0};
+        n = planes_edits(edits, &all, false, clips, &nclips);
+        planes_publish_split(damage, *count, clips, nclips, &all, sent, &plain_area);
+        rc = n == 0 ? 0 : os64_gui_window_publish_edits(g.win, &all, edits, n);
+        for (uint32_t k = 0; k < *count && n == 0; k++)
+            if (!sent[k])
+                os64_draw_publish(g.ui.ctx, &damage[k]);
+        for (int32_t i = 0; i < PLANE_HIDES_MAX && rc == 0; i++) {
+            if (!s_plane_hides[i].owed)
+                continue;
+            os64_gui_plane_edit_t hide = {.plane = s_plane_hides[i].name, .hide = 1};
+            int64_t one = os64_gui_window_publish_edits(g.win, &s_plane_hides[i].clip, &hide, 1);
+            if (one == OS64_GUI_ERR_NO_PLANE)
+                s_plane_counts.hides_dropped++;
+            if (one == 0 || one == OS64_GUI_ERR_NO_PLANE)
+                plane_hide_free(i);
+        }
+    }
+    if (rc == 0) {
+        if (n > 0) {
+            s_plane_counts.edit_publishes++;
+            s_plane_counts.union_area += (uint64_t)all.w * (uint64_t)all.h;
+            if ((int64_t)all.w * all.h > plain_area)
+                s_plane_counts.union_beyond++;
+        }
+        planes_commit();
+        return;
+    }
+    // Refused whole: the kernel holds every place as it did. A clip an edit
+    // made a hole is painted again with the picture (a new place's, a
+    // move's new clip) before the damage is published plain, but for a
+    // place whose overlays alone changed, whose clip the kernel keeps; a new
+    // place is held off a while; and the clips of refused hides, moves and
+    // overlay changes are marked after the publish, for the next paint to
+    // try again. Overlays the kernel refused as too large are remembered,
+    // so the next paint takes the video off its plane for the budget
+    // instead of asking again.
+    if (rc < 0 && -rc < (int64_t)(sizeof(s_plane_counts.refused) / sizeof(s_plane_counts.refused[0])))
+        s_plane_counts.refused[-rc]++;
+    bool repaint = false, retry[VIDEOS_MAX] = {false}, overlays_kept[VIDEOS_MAX] = {false};
+    for (int32_t i = 0; i < VIDEOS_MAX; i++) {
+        Video *v = &s_videos[i];
+        if (v->node == NULL || (!v->place && !v->placed) || (v->place && plane_place_same(v)))
+            continue;
+        if (v->place && v->noverlays > 0 && rc == OS64_GUI_ERR_PLANE_OVERLAP)
+            v->overlays_refused_area = v->overlay_area;     // asked again, it would be refused again
+        bool overlays_only = v->place && v->placed && v->placed_name == v->name &&
+                             os64_memcmp(&v->placed_origin, &v->origin, sizeof(v->origin)) == 0 &&
+                             os64_memcmp(&v->placed_clip, &v->clip, sizeof(v->clip)) == 0;
+        if (overlays_only) {
+            // The kernel keeps the same clip with the old overlays: the new
+            // hole stays (cut again below where a render paints it), the old
+            // overlays blending what lies over the picture now, and the
+            // change is asked for again.
+            s_plane_counts.overlay_retries++;
+            overlays_kept[i] = true;
+        } else if (v->place) {
+            plane_mark_window(v->clip);
+            repaint = true;
+            if (!v->placed) {
+                v->held_until_ms = yonder_now_ms() + PLANE_HOLD_OFF_MS;
+                plane_reason_set(v, YONDER_PLANE_REFUSED);
+            }
+        }
+        retry[i] = v->placed;
+        v->place = v->placed;   // what the kernel holds
+    }
+    if (repaint) {
+        // That render may meet a place the kernel keeps: its hole is cut
+        // again (planes_hole cuts where `place` stands, which is now what
+        // the kernel holds, with this paint's layers; a refused move's new
+        // clip is no longer a place, and a placed one's old clip is marked
+        // for the next paint).
+        uint32_t from = *count;
+        *count += os64_ui_render_list(&g.ui, damage + *count);
+        for (int32_t i = 0; i < VIDEOS_MAX; i++)
+            if (s_videos[i].node != NULL && s_videos[i].place && !plane_place_same(&s_videos[i]) &&
+                !overlays_kept[i])
+                s_videos[i].place = false;
+        planes_hole(damage + from, *count - from);
+        for (int32_t i = 0; i < VIDEOS_MAX; i++)
+            s_videos[i].place = s_videos[i].node != NULL && s_videos[i].placed;
+    }
+    for (uint32_t k = 0; k < *count; k++)
+        if (!sent[k])           // the split published the rest already
+            os64_draw_publish(g.ui.ctx, &damage[k]);
+    for (int32_t i = 0; i < VIDEOS_MAX; i++)
+        if (retry[i])
+            plane_mark_window(s_videos[i].placed_clip);
+}
+
+static bool planes_placed_any(void)
+{
+    for (int32_t i = 0; i < VIDEOS_MAX; i++)
+        if (s_videos[i].node != NULL && s_videos[i].placed)
+            return true;
+    return false;
+}
+
+static uint64_t plane_rate_due(void)
+{
+    return s_video_rate_s != 0 && planes_placed_any() ? s_video_rate_next_ms : YONDER_NEVER;
+}
+
+// A video's session closing (video_remove) with its plane placed: the hide
+// is owed to the next publish, with a copy of its last picture to paint
+// back where the page still shows its box.
+static void plane_close(Video *v)
+{
+    if (v->view.frame != NULL)
+        yonder_media_shown_done(v->session, &v->view);
+    if (v->placed) {
+        int32_t at = -1;
+        for (int32_t i = 0; i < PLANE_HIDES_MAX && at < 0; i++)
+            if (!s_plane_hides[i].owed)
+                at = i;
+        if (at >= 0) {
+            __typeof__(s_plane_hides[0]) *h = &s_plane_hides[at];
+            *h = (__typeof__(*h)){.owed = true, .name = v->placed_name, .origin = v->placed_origin,
+                                  .clip = v->placed_clip, .doc = page_doc(&g.page),
+                                  .tree_serial = g.page.tree != NULL ? flow_tree_serial(g.page.tree) : 0,
+                                  .sx = g.sx, .sy = g.sy, .node = v->node};
+            os64_media_player_view_t last;
+            if (yonder_media_shown(v->session, &last)) {
+                if (last.w == (uint32_t)v->placed_origin.w && last.h == (uint32_t)v->placed_origin.h) {
+                    h->copy = os64_malloc((size_t)last.w * last.h * sizeof(uint32_t));
+                    if (h->copy != NULL) {
+                        os64_memcpy(h->copy, last.pixels, (size_t)last.w * last.h * sizeof(uint32_t));
+                        h->copy_w = last.w;
+                        h->copy_h = last.h;
+                    }
+                }
+                yonder_media_shown_done(v->session, &last);
+            }
+            s_plane_counts.hides_owed++;
+            plane_mark_window(v->placed_clip);
+        }
+    }
+    os64_free(v->tiles);
 }
 
 static void strips_turn(bool moved);
@@ -11340,8 +15529,8 @@ static void players_place(void)
         bool placed = b != NULL && b->replaced && b->style->visibility == FLOW_VISIBLE && cls != NULL &&
                       at.w > 0 && at.h > 0 && x < (int64_t)v.x + v.w && y < (int64_t)v.y + v.h &&
                       x + at.w > v.x && y + at.h > v.y &&
-                      !flow_box_covered_at(g.page.tree, b, (int32_t)((int64_t)at.x + at.w / 2),
-                                           (int32_t)((int64_t)at.y + at.h / 2), scroll_now());
+                      !page_covered_at(b, (int32_t)((int64_t)at.x + at.w / 2),
+                                         (int32_t)((int64_t)at.y + at.h / 2), scroll_now());
         bool shown = placed && (!g.players[i]->video || yonder_strip_drawn(&g.players[i]->strip));
         g.players[i]->placed_drawn = yonder_strip_drawn(&g.players[i]->strip);
         if (cls != NULL && cls != w->cls) {
@@ -11472,6 +15661,7 @@ static void players_drop(void)
 static void script_alert(void *opaque, const char *text, size_t length)
 {
     (void)opaque;
+    fs_leave(true);     // it speaks in the status row, hidden in full screen (C.7)
     char line[512];
     os64_snprintf(line, sizeof(line), "Page says: %.*s", (int)(length < 450 ? length : 450), text);
     status_rest(line);
@@ -11527,16 +15717,155 @@ static void sheets_restage(Page *p)
 static void canvas_damage_part(Page *p,const flow_box_t *box,uint32_t width,uint32_t height,
                                const draw2d_damage_t *damage);
 
+// Why a canvas cannot show, whatever its bitmap holds (canvas_unseen):
+// it can, it or an ancestor is culled as transparent (`unpainted`), a
+// group around it is laid at alpha 0 (yonder_group_alpha), or, with no
+// group round it drawn through its matrix, all it can paint lies outside
+// the view (canvas_reach).
+typedef enum { CANVAS_SEEN = 0, CANVAS_CULLED, CANVAS_ALPHA0, CANVAS_OUT_OF_VIEW } CanvasUnseen;
+
+// Where a canvas's bitmap can show, in page coordinates at `scroll`: its
+// content box (the bitmap is drawn inside it, whatever object-fit says)
+// taken out through every matrix round it, grown on every side by each
+// filter round it — its own included — at the reach that filter paints to
+// (flow_filter_reach) and the farther a reduced blur reads
+// (yonder_filter_reads_more), each in page pixels: that reach as a square
+// in the filtered box's own coordinates, taken out through its matrices.
+// What clips it is left out, so the answer is never too small — but only
+// where every matrix is one the face lays through: one it refuses (too
+// large a sheet, too deep, no memory) is drawn upright instead, elsewhere
+// (flow_box_through's `upright`), so a canvas inside a group drawn through
+// its matrix is never asked of here (canvas_unseen).
+static os64_gui_rect_t canvas_reach(const flow_box_t *box, flow_point_t scroll)
+{
+    os64_gui_rect_t r = flow_box_doc_rect_of(box, yonder_content_rect(box), scroll);
+    int64_t grow = 0;
+    for (const flow_box_t *b = box; b != NULL; b = b->parent) {
+        if (b->style->nfilter == 0)
+            continue;
+        int32_t reach[4];
+        flow_filter_reach(b, reach);
+        int32_t most = reach[0];
+        for (int k = 1; k < 4; k++)
+            most = reach[k] > most ? reach[k] : most;
+        most += yonder_filter_reads_more(b->style->filter, b->style->nfilter);
+        if (most <= 0)
+            continue;
+        os64_gui_rect_t square = flow_box_doc_rect_of(b, (os64_gui_rect_t){0, 0, most, most}, scroll);
+        grow += square.w > square.h ? square.w : square.h;
+    }
+    if (grow > INT32_MAX / 4)
+        grow = INT32_MAX / 4;
+    // Each edge grown and held to 32 bits on its own, so holding one never
+    // moves the other.
+    int64_t x0 = (int64_t)r.x - grow, y0 = (int64_t)r.y - grow;
+    int64_t x1 = (int64_t)r.x + r.w + grow, y1 = (int64_t)r.y + r.h + grow;
+    x0 = x0 < INT32_MIN ? INT32_MIN : x0, y0 = y0 < INT32_MIN ? INT32_MIN : y0;
+    x1 = x1 > INT32_MAX ? INT32_MAX : x1, y1 = y1 > INT32_MAX ? INT32_MAX : y1;
+    int64_t w = x1 - x0, h = y1 - y0;
+    return (os64_gui_rect_t){(int32_t)x0, (int32_t)y0, (int32_t)(w > INT32_MAX ? INT32_MAX : w),
+                             (int32_t)(h > INT32_MAX ? INT32_MAX : h)};
+}
+
+// Why the shown page's canvas `box` cannot show (CanvasUnseen); a page not
+// shown is asked only of its styles.
+static CanvasUnseen canvas_unseen(const Page *p, const flow_box_t *box)
+{
+    for (const flow_box_t *b = box; b != NULL; b = b->parent)
+        if (b->unpainted)
+            return CANVAS_CULLED;
+    for (const flow_box_t *b = box; b != NULL; b = b->parent)
+        if (b->style->opacity < 1000 && yonder_group_alpha(b) == 0)
+            return CANVAS_ALPHA0;
+    // Out of view only where nothing round it may be drawn elsewhere than
+    // its matrix says (canvas_reach).
+    bool through = false;
+    for (const flow_box_t *b = box; b != NULL && !through; b = b->parent)
+        through = flow_box_through(b, scroll_now(), (double[6]){0}, NULL, NULL);
+    if (p == &g.page && !through) {
+        os64_gui_rect_t view = {g.sx, g.sy, g.view.bounds.w, g.view.bounds.h}, meet;
+        if (view.w > 0 && view.h > 0 && !os64_rect_intersect(canvas_reach(box, scroll_now()), view, &meet))
+            return CANVAS_OUT_OF_VIEW;
+    }
+    return CANVAS_SEEN;
+}
+
+// The canvases a damage visit found unseen (canvas_damage_mark), to be
+// acknowledged once the visit has returned (canvases_unseen_acknowledge):
+// a visit may not touch a canvas. The list grows as it must; one it has
+// no memory to hold is marked as any canvas is, which nothing may draw
+// and so acknowledge, but no canvas is lost for want of room alone.
+typedef struct {
+    const os64_html_node_t *node;
+    CanvasUnseen why;
+} UnseenCanvas;
+static UnseenCanvas *s_unseen_canvases;
+static int32_t s_nunseen_canvases, s_unseen_cap;
+
+static bool unseen_canvas_keep(const os64_html_node_t *node, CanvasUnseen why)
+{
+    if (s_nunseen_canvases == s_unseen_cap) {
+        int32_t cap = s_unseen_cap == 0 ? 16 : s_unseen_cap < (1 << 20) ? s_unseen_cap * 2 : 0;
+        UnseenCanvas *more = cap > 0 ? os64_realloc(s_unseen_canvases, (size_t)cap * sizeof(*more)) : NULL;
+        if (more == NULL)
+            return false;
+        s_unseen_canvases = more;
+        s_unseen_cap = cap;
+    }
+    s_unseen_canvases[s_nunseen_canvases++] = (UnseenCanvas){node, why};
+    return true;
+}
+
 static void canvas_damage_mark(void *opaque,const os64_html_node_t *node,uint32_t width,uint32_t height,
                                const draw2d_damage_t *damage)
 {
     Page *p=opaque;
     const flow_box_t *box=p->tree?flow_box_for(p->tree,node):NULL;
     if(!box || !box->replaced || box->style->visibility!=FLOW_VISIBLE)return;
+    // A canvas that cannot show marks nothing: its damage is acknowledged
+    // instead, as a covered paint acknowledges one it culled. That is
+    // exact because every way it can show again marks where it shows, its
+    // bitmap as it is then: its group's opacity ticked from 0 (the tick
+    // marks the group's bounds, tick_marks) or written (the group's own
+    // change, its whole bounds), a new tree in which the group is no
+    // longer at 0 or no longer a group, or no longer transparent (the
+    // trees' compare marks it by its style), and an enclosing group
+    // leaving 0 (which marks that group's bounds, this one inside); and,
+    // for one whose reach lies wholly outside the view (canvas_reach),
+    // whatever brings any of it in paints that area: a scroll paints what
+    // it exposes, and a move, a matrix's tick or a resize marks where the
+    // box lands. A canvas partly in view is marked as ever, and only the
+    // paint that draws it acknowledges it. Left pending, it would be
+    // visited again after every script task, and under a group its mark is
+    // the whole view (canvas_damage_part).
+    CanvasUnseen why=canvas_unseen(p,box);
+    if(why!=CANVAS_SEEN && unseen_canvas_keep(node,why))
+        return;
     s_cost.canvas_marks++;
+    // The shown page's, which a covered paint acknowledges (canvases_acknowledge).
+    if(p==&g.page){
+        if(s_nmarked_canvases<MARKED_CANVASES)s_marked_canvases[s_nmarked_canvases++]=node;
+        else s_marked_canvases_lost=true;
+    }
     s_marking_canvas=node;
     canvas_damage_part(p,box,width,height,damage);
     s_marking_canvas=NULL;
+}
+
+// The canvases the damage visit just found unseen, each looked up (which
+// applies a pending reset) and acknowledged, no script between, and
+// counted by why.
+static void canvases_unseen_acknowledge(Page *p)
+{
+    for(int32_t i=0;i<s_nunseen_canvases;i++){
+        canvas_bitmap_t bitmap;
+        if(!yonder_scripts_canvas_bitmap(p->scripts,s_unseen_canvases[i].node,&bitmap))continue;
+        yonder_scripts_canvas_painted(p->scripts,s_unseen_canvases[i].node);
+        if(s_unseen_canvases[i].why==CANVAS_ALPHA0)s_cost.unseen_alpha0++;
+        else if(s_unseen_canvases[i].why==CANVAS_OUT_OF_VIEW)s_cost.unseen_offview++;
+        else s_cost.unseen_culled++;
+    }
+    s_nunseen_canvases=0;
 }
 
 // canvas_damage_mark's part: the canvas's changed texels where the
@@ -11575,6 +15904,543 @@ static void canvas_damage_part(Page *p,const flow_box_t *box,uint32_t width,uint
     if(x1>x0 && y1>y0)mark_part((os64_gui_rect_t){x0,y0,x1-x0,y1-y0});
 }
 
+// `whole views by a script's change reading N` in the record
+// (--layout-profile, written at each reading, diag_paint_reading): at each
+// script rebuild, which repaints the whole view, what changed since the
+// tree on screen, read from the document's change log by a reader of its
+// own, made and freed here: each change by its kind (an attribute by its
+// name, children, text, state) at what it changed (change_target_named),
+// once a rebuild, with the latest's note (an inline style as it now
+// stands, the children put in and taken out). A log that no longer
+// reaches the tree on screen counts as `lost` (WHOLE_REPAINTS.md W0).
+// What a change was made to, named for the record: an element as a
+// selector would name it; a shadow root by its host; the document; a
+// fragment; and any other node (text) by the element holding it.
+static void change_target_named(char *at, size_t cap, const os64_html_node_t *n)
+{
+    const os64_html_node_t *host = n != NULL && n->kind == OS64_HTML_FRAGMENT ? os64_html_shadow_host(n) : NULL;
+    if (n == NULL)
+        os64_strcopy(at, cap, "nothing");
+    else if (n->kind == OS64_HTML_ELEMENT)
+        element_named(at, cap, "", n);
+    else if (host != NULL)
+        element_named(at, cap, "the shadow of ", host);
+    else if (n->kind == OS64_HTML_DOCUMENT)
+        os64_strcopy(at, cap, "the document");
+    else if (n->kind == OS64_HTML_FRAGMENT)
+        os64_strcopy(at, cap, "a fragment");
+    else if (n->parent != NULL && n->parent->kind == OS64_HTML_ELEMENT)
+        element_named(at, cap, "text in ", n->parent);
+    else
+        os64_strcopy(at, cap, "a node");
+}
+
+static void script_changes_note(Page *p)
+{
+    if (!s_layout_profile || layout_profile_diag(p) == NULL)
+        return;
+    os64_html_reader_t *reader = os64_html_reader_new((os64_html_document_t *)page_doc(p), p->rendered_version);
+    const os64_html_change_entry_t *entry = NULL;
+    if (reader == NULL || os64_html_changes(reader, &entry) < 0) {
+        counted_at(&s_script_changes, "lost", "", "the log no longer reaches the tree on screen");
+        entry = NULL;
+    }
+    // As many seen as are read, so each change counts once a rebuild
+    // however many others it does.
+    enum { CHANGES_READ = 256 };
+    struct {
+        const os64_html_node_t *at;
+        const char *attr;
+        os64_html_change_kind_t kind;
+    } seen[CHANGES_READ];
+    int nseen = 0;
+    for (int read = 0; entry != NULL && read < CHANGES_READ; entry = entry->next, read++) {
+        int k = 0;
+        for (; k < nseen && (seen[k].at != entry->target || seen[k].kind != entry->kind ||
+                             !os64_streq(seen[k].attr ? seen[k].attr : "", entry->attr_name ? entry->attr_name : ""));
+             k++) {}
+        if (k < nseen)
+            continue;
+        seen[nseen++] = (__typeof__(seen[0])){entry->target, entry->attr_name, entry->kind};
+        char what[48], at[96] = "", note[160] = "";
+        os64_snprintf(what, sizeof(what), "%s%s",
+                      entry->kind == OS64_HTML_CHANGE_CHILDREN ? "children"
+                      : entry->kind == OS64_HTML_CHANGE_ATTR   ? "attribute "
+                      : entry->kind == OS64_HTML_CHANGE_TEXT   ? "text"
+                                                               : "state",
+                      entry->kind == OS64_HTML_CHANGE_ATTR && entry->attr_name ? entry->attr_name : "");
+        change_target_named(at, sizeof(at), entry->target);
+        if (entry->kind == OS64_HTML_CHANGE_CHILDREN) {
+            os64_snprintf(note, sizeof(note), "+%lu -%lu", (unsigned long)entry->nadded,
+                          (unsigned long)entry->nremoved);
+        } else if (entry->kind == OS64_HTML_CHANGE_ATTR && entry->attr_name != NULL &&
+                   os64_streq(entry->attr_name, "style") && entry->target != NULL &&
+                   entry->target->kind == OS64_HTML_ELEMENT) {
+            const os64_html_attr_t *style = os64_html_attr(entry->target, "style");
+            os64_strcopy(note, sizeof(note), style != NULL && style->value != NULL ? style->value : "removed");
+        }
+        counted_at(&s_script_changes, what, at, note);
+    }
+    os64_html_reader_free(reader);
+}
+
+// An attribute that reaches what a box draws only through the styles,
+// which flow_change_parts compares whole (LAYOUT_NEEDS_N3.md § 3 B 4): a
+// generated text that reads one with attr() is a text box's bytes, which
+// it compares too.
+static bool attr_styles_only(const char *name)
+{
+    static const char *const kOnly[] = {"class", "id", "style", "role", "title", "tabindex"};
+    if (name == NULL)
+        return false;
+    for (size_t i = 0; i < sizeof(kOnly) / sizeof(kOnly[0]); i++)
+        if (os64_streq(name, kOnly[i]))
+            return true;
+    return os64_strlen(name) > 5 && (os64_memcmp(name, "aria-", 5) == 0 || os64_memcmp(name, "data-", 5) == 0);
+}
+
+// Whether element `n` is drawn by a box that draws what is inside it from
+// the document itself, in tree `t`: it has no box of its own (inside an
+// inline svg, a select), or its box is replaced.
+static bool drawn_from_document(const flow_tree_t *t, const os64_html_node_t *n)
+{
+    const flow_box_t *b = flow_box_for(t, n);
+    return b == NULL || b->kind == FLOW_BOX_REPLACED || (b->kind == FLOW_BOX_ATOMIC && b->first == NULL);
+}
+
+// What a script changed since the tree shown (`was`) that no style says,
+// for flow_change_parts (LAYOUT_NEEDS_N3.md § 3 B 4 and 5), read from
+// s_change's reader, into `out` (`cap` of them), how many; -1 when the
+// change log no longer reaches the tree shown, or holds more than `cap`:
+// - an attribute changed, unless it reaches the paint only through the
+//   styles and its element has a box of its own in both trees (inside an
+//   svg an id is a reference, and a box drawn from the document reads
+//   what it likes);
+// - text, or children, changed in an element drawn from the document
+//   (`drawn_from_document`): other text and children are boxes the trees'
+//   compare finds;
+// - a picture's source's attribute, or its children: its img, whose
+//   picture the sources choose;
+// - a base's change, or a base added or removed, refuses (CHANGE_BASE):
+//   every address resolves against it.
+// `*refs` is set when what an id names may have changed: an id or xml:base
+// attribute, or an element holding either added or removed, the nodes the
+// log lists or anything inside them (the log lists a subtree's root
+// alone). An svg's reference by id finds the document's first element of
+// that id, whatever it is (svg.c's fragment_target), so change_svgs marks
+// the svgs that refer by id.
+#define CHANGE_TOUCHED 1024
+#define CHANGE_BASE (-2)
+
+// Whether node `n` is an HTML base element.
+static bool html_base(const os64_html_node_t *n)
+{
+    return n != NULL && n->kind == OS64_HTML_ELEMENT && n->ns == OS64_HTML_NS_HTML && n->name != NULL &&
+           os64_streq(n->name, "base");
+}
+// The last rebuild's verdict as the record words it (`in parts`, `nothing
+// to paint`, or why the whole view), which the host's tests read.
+static const char *s_change_said = "";
+
+// What the change log held from `entry` on, in words, into `out`: the
+// first CHANGE_LOG_SAID entries by kind and element (a node that is no
+// element by the nearest element round it, a shadow root's host
+// included; an attribute's name to its first 48 bytes, so that the first
+// entry fits the room s_change.log gives it), then how many more.
+#define CHANGE_LOG_SAID 4
+static void change_log_said(char *out, size_t cap, const os64_html_change_entry_t *entry)
+{
+    size_t at = 0;
+    int32_t told = 0, more = 0;
+    out[0] = '\0';
+    for (; entry != NULL; entry = entry->next) {
+        if (told == CHANGE_LOG_SAID) {
+            more++;
+            continue;
+        }
+        const os64_html_node_t *n = entry->target;
+        while (n != NULL && n->kind != OS64_HTML_ELEMENT)
+            n = os64_html_shadow_including_parent(n);
+        char named[64] = "the document";
+        if (n != NULL)
+            element_named(named, sizeof(named), "", n);
+        int w = entry->kind == OS64_HTML_CHANGE_CHILDREN
+                    ? os64_snprintf(out + at, cap - at, "%schildren of %s (%lu in, %lu out)", told ? "; " : "", named,
+                                    (unsigned long)entry->nadded, (unsigned long)entry->nremoved)
+                : entry->kind == OS64_HTML_CHANGE_ATTR
+                    ? os64_snprintf(out + at, cap - at, "%sattribute %.48s of %s", told ? "; " : "",
+                                    entry->attr_name != NULL ? entry->attr_name : "?", named)
+                : entry->kind == OS64_HTML_CHANGE_TEXT
+                    ? os64_snprintf(out + at, cap - at, "%stext in %s", told ? "; " : "", named)
+                    : os64_snprintf(out + at, cap - at, "%sstate of %s", told ? "; " : "", named);
+        if (w < 0 || (size_t)w >= cap - at) {
+            out[at] = '\0';
+            told = CHANGE_LOG_SAID;
+            more++;
+            continue;
+        }
+        at += (size_t)w;
+        told++;
+    }
+    if (more > 0)
+        os64_snprintf(out + at, cap - at, "%sand %d more", at > 0 ? "; " : "", (int)more);
+    else if (told == 0)
+        os64_strcopy(out, cap, "nothing");
+}
+
+static int32_t change_touched(const flow_tree_t *was, const flow_tree_t *now, const os64_html_node_t **out,
+                              int32_t cap, bool *refs)
+{
+    os64_html_reader_t *reader = s_change.reader;
+    s_change.reader = NULL;
+    const os64_html_change_entry_t *entry = NULL;
+    int32_t n = 0;
+    *refs = false;
+    if (reader == NULL || os64_html_changes(reader, &entry) < 0)
+        n = -1;
+    if (s_damage_check != 0)
+        change_log_said(s_change.log, sizeof(s_change.log), n < 0 ? NULL : entry);
+    if (s_damage_check != 0 && n < 0)
+        os64_strcopy(s_change.log, sizeof(s_change.log), "lost, or no reader");
+    for (; n >= 0 && entry != NULL; entry = entry->next) {
+        const os64_html_node_t *at = entry->target;
+        if (entry->kind == OS64_HTML_CHANGE_TEXT && at != NULL)
+            at = at->parent;
+        if (at == NULL || at->kind != OS64_HTML_ELEMENT || entry->kind == OS64_HTML_CHANGE_STATE)
+            continue;
+        if (entry->kind == OS64_HTML_CHANGE_ATTR && entry->attr_name != NULL &&
+            (os64_streq(entry->attr_name, "id") || os64_streq(entry->attr_name, "xml:base")))
+            *refs = true;
+        // Every address resolves against a base's: the whole view.
+        bool base = html_base(at);
+        for (int list = 0; entry->kind == OS64_HTML_CHANGE_CHILDREN && list < 2; list++) {
+            const os64_html_node_t *const *nodes = list == 0 ? entry->added : entry->removed;
+            size_t count = list == 0 ? entry->nadded : entry->nremoved;
+            // Each subtree walked through its links as they are now: a node
+            // moved out of it since is not in it.
+            for (size_t i = 0; i < count && !base; i++)
+                for (const os64_html_node_t *d = nodes[i]; d != NULL && !base; d = next_within(d, nodes[i])) {
+                    base = html_base(d);
+                    *refs = *refs || (d->kind == OS64_HTML_ELEMENT && os64_html_attr(d, "id") != NULL) ||
+                            (d->kind == OS64_HTML_ELEMENT && os64_html_attr(d, "xml:base") != NULL);
+                }
+        }
+        if (base) {
+            n = CHANGE_BASE;
+            break;
+        }
+        // A picture's sources choose what its img draws (image_sources_sync):
+        // a source's attribute, or the picture's children, mark the img.
+        const os64_html_node_t *picture =
+            at->ns != OS64_HTML_NS_HTML || at->name == NULL                            ? NULL
+            : os64_streq(at->name, "picture") && entry->kind == OS64_HTML_CHANGE_CHILDREN ? at
+            : os64_streq(at->name, "source") && at->parent != NULL && at->parent->name != NULL &&
+                    os64_streq(at->parent->name, "picture")
+                ? at->parent
+                : NULL;
+        for (const os64_html_node_t *c = picture != NULL ? picture->first_child : NULL; n >= 0 && c != NULL;
+             c = c->next) {
+            if (c->kind != OS64_HTML_ELEMENT || c->name == NULL || !os64_streq(c->name, "img"))
+                continue;
+            if (n == cap)
+                n = -1;
+            else
+                out[n++] = c;
+        }
+        if (picture != NULL)
+            continue;
+        bool drawn = drawn_from_document(was, at) || drawn_from_document(now, at);
+        if (entry->kind == OS64_HTML_CHANGE_ATTR ? attr_styles_only(entry->attr_name) && !drawn : !drawn)
+            continue;
+        if (n == cap)
+            n = -1;
+        else
+            out[n++] = at;
+    }
+    os64_html_reader_free(reader);
+    return n;
+}
+
+// Whether svg element `n` is a definition another svg may draw through a
+// reference (as flow.c's svg_referable asks): a defs, symbol, paint
+// server, clip, mask, marker or filter, or inside one.
+static bool svg_definition(const os64_html_node_t *n)
+{
+    static const char *const kDefinitions[] = {"defs",    "symbol",   "linearGradient", "radialGradient", "pattern",
+                                               "clipPath", "mask",    "marker",         "filter"};
+    for (const os64_html_node_t *a = n; a != NULL && a->ns == OS64_HTML_NS_SVG; a = a->parent)
+        for (size_t i = 0; a->name != NULL && i < sizeof(kDefinitions) / sizeof(kDefinitions[0]); i++)
+            if (os64_streq(a->name, kDefinitions[i]))
+                return true;
+    return false;
+}
+
+// The outer svg element `n` is in, or NULL.
+static const os64_html_node_t *svg_root_of(const os64_html_node_t *n)
+{
+    const os64_html_node_t *root = NULL;
+    for (const os64_html_node_t *a = n; a != NULL && a->ns == OS64_HTML_NS_SVG; a = a->parent)
+        root = a;
+    return root != NULL && flow_svg_root(root) ? root : NULL;
+}
+
+// Whether svg node `d` draws another element by its id: a `<use>`, or a
+// `url(` in an attribute or among its winners in the cascade `c` (the
+// adapter paints from both), as a fill, a clip or a filter does.
+static bool svg_refers(const garb_cascade_t *c, const os64_html_node_t *d)
+{
+    if (d->kind != OS64_HTML_ELEMENT)
+        return false;
+    if (d->name != NULL && os64_streq(d->name, "use"))
+        return true;
+    for (const os64_html_attr_t *a = d->attrs; a != NULL; a = a->next)
+        for (const char *v = a->value; v != NULL && *v != '\0'; v++)
+            if (v[0] == 'u' && v[1] == 'r' && v[2] == 'l' && v[3] == '(')
+                return true;
+    garb_style_t style = c != NULL ? garb_style_for(c, d) : (garb_style_t){0};
+    for (int32_t j = 0; j < style.n; j++) {
+        const garb_val_t *v = &style.sets[j].value;
+        if (v->kind == GARB_V_URL)
+            return true;
+        for (int32_t k = 0; k < v->nitems; k++)
+            if (v->items[k].kind == GARB_V_URL)
+                return true;
+    }
+    return false;
+}
+
+// Whether an element svg `root` is in hands it a reference by id among its
+// winners in the cascade `c`: an inherited property naming a `url(`, as a
+// fill set on a wrapper does.
+static bool svg_inherits_reference(const garb_cascade_t *c, const os64_html_node_t *root)
+{
+    for (const os64_html_node_t *a = root->parent; c != NULL && a != NULL && a->kind == OS64_HTML_ELEMENT;
+         a = a->parent) {
+        garb_style_t style = garb_style_for(c, a);
+        for (int32_t j = 0; j < style.n; j++)
+            if (garb_prop_inherited(style.sets[j].prop) && style.sets[j].value.kind == GARB_V_URL)
+                return true;
+    }
+    return false;
+}
+
+// Whether the cascade `c` recomputed element `n`'s winners since the shown
+// tree's update `since`, or is not that cascade brought up to date
+// (`fresh`), in which case every element's may have changed.
+static bool svg_restyled(const garb_cascade_t *c, const os64_html_node_t *n, uint64_t since, bool fresh)
+{
+    return fresh || garb_style_updated_since(c, n, since);
+}
+
+// THE SVGS THE CASCADE RESTYLED (LAYOUT_NEEDS_N3.md § 8): yonder's svg
+// adapter takes an svg's paint (fill, stroke and the rest) from the live
+// cascade, not from libflow's styles, so no compare of the trees sees a
+// class that recolours a shape. Each inline svg drawn in `now` is added to
+// `out` (`*n` of `cap`) when the cascade `c` recomputed the winners of it,
+// of anything inside it, or of an element it is in (paint is inherited)
+// since the shown tree's update. Every one is added when `c` is not that
+// cascade brought up to date, or when it restyled a definition another svg
+// may draw by reference (a defs, symbol, paint server, clip, mask, marker
+// or filter, or anything in an svg that draws nothing itself, a sprite
+// sheet's): only an svg draws one, and which does is not known here. And
+// whenever anything in an svg changed, by the cascade or in the change log
+// (`svg_touched`: `out` already names an svg element), or what an id names
+// may have changed (`refs`, change_touched), so is every one that refers
+// by id, itself or anything in it (svg_refers) or by what it inherits
+// (svg_inherits_reference), which may draw any element of the document
+// that way.
+// False past `cap`, for the whole view.
+static bool change_svgs(const Page *p, const flow_tree_t *now, const garb_cascade_t *c, const os64_html_node_t **out,
+                        int32_t *n, int32_t cap, bool refs)
+{
+    bool fresh = c == NULL || c != s_change.cascade || garb_cascade_generation(c) != s_change.cascade_generation;
+    uint64_t since = s_change.cascade_updates;
+    bool svg_touched = refs;
+    for (int32_t i = 0; i < *n && !svg_touched; i++)
+        svg_touched = out[i] != NULL && out[i]->ns == OS64_HTML_NS_SVG;
+    if (!fresh && garb_cascade_updates(c) == since && !svg_touched)
+        return true;
+    // Every svg element of the document, for a definition restyled.
+    const os64_html_node_t *top = page_doc(p)->document;
+    bool all = fresh;
+    for (const os64_html_node_t *e = top; !all && e != NULL; e = next_within(e, top)) {
+        if (e->kind != OS64_HTML_ELEMENT || e->ns != OS64_HTML_NS_SVG)
+            continue;
+        const os64_html_node_t *root = svg_root_of(e);
+        bool definition = svg_definition(e) || root == NULL || flow_box_for(now, root) == NULL;
+        all = definition && svg_restyled(c, e, since, fresh);
+    }
+    // Twice over the svgs drawn: those restyled, then, when anything in an
+    // svg changed or an id may name another element, those that refer by id.
+    for (int pass = 0; pass < 2; pass++) {
+        for (const flow_box_t *b = flow_root(now); b != NULL;) {
+            const os64_html_node_t *root = b->pseudo == GARB_PSEUDO_NONE ? b->node : NULL;
+            if (root != NULL && flow_svg_root(root) && flow_box_for(now, root) == b) {
+                bool named = false;
+                if (pass == 0) {
+                    named = all;
+                    for (const os64_html_node_t *a = root; !named && a != NULL; a = a->parent)
+                        named = a->kind == OS64_HTML_ELEMENT && svg_restyled(c, a, since, fresh);
+                    for (const os64_html_node_t *d = root->first_child; !named && d != NULL; d = next_within(d, root))
+                        named = d->kind == OS64_HTML_ELEMENT && svg_restyled(c, d, since, fresh);
+                    svg_touched = svg_touched || named;
+                } else {
+                    for (const os64_html_node_t *d = root; !named && d != NULL; d = next_within(d, root))
+                        named = svg_refers(c, d);
+                    named = named || svg_inherits_reference(c, root);
+                }
+                if (named) {
+                    if (*n == cap)
+                        return false;
+                    out[(*n)++] = root;
+                }
+            }
+            if (b->first != NULL) {
+                b = b->first;
+                continue;
+            }
+            while (b != NULL && b->next == NULL)
+                b = b->parent;
+            b = b != NULL ? b->next : NULL;
+        }
+        if (!svg_touched)
+            break;
+    }
+    return true;
+}
+
+// Whether the change script_rebuild just laid out can be painted in the
+// parts s_change holds (NULL), or why the whole view must be. `next` is
+// the staged page. A link the rebuild puts out (g.hover_link) is not a
+// reason: the number drives the status line, and what a lit link paints
+// is its :hover or :active style, which the trees' compare sees. The
+// verdict is counted by change_said, once script_rebuild knows whether the
+// view scrolled with the change.
+static const char *change_parts(Page *p, const Page *next, bool zoom_changed)
+{
+    const char *why = NULL;
+    const os64_html_node_t *at = NULL;
+    if (zoom_changed || next->laid_width != p->laid_width || next->laid_height != p->laid_height)
+        why = kRefused[REFUSED_SIZE];
+    else if (p->tree == NULL || next->tree == NULL)
+        why = "no tree shown";
+    else if (next->tree == p->tree && !s_change.kept)
+        why = "the shown tree written without its marks";
+    else if (s_change.wrote)
+        why = "a restyle that wrote the shown tree, then declined";
+    else if (next->tree == p->tree && s_change.kept_parts != FLOW_PARTS_MARKED)
+        why = s_change.kept_parts >= 0 && s_change.kept_parts < FLOW_PARTS_COUNT ? kRefused[s_change.kept_parts]
+                                                                                 : "a kept restyle's marks";
+    // The trees compared: a kept tree is compared with itself, which finds
+    // what the script changed that no style says (an svg's attribute) and
+    // nothing else, its styles' parts being the restyle's.
+    if (why == NULL) {
+        static const os64_html_node_t *touched[CHANGE_TOUCHED];
+        bool refs = false;
+        int32_t ntouched = change_touched(p->tree, next->tree, touched, CHANGE_TOUCHED, &refs);
+        flow_parts_said_t said = {FLOW_PARTS_MARKED, NULL, -1};
+        if (ntouched == CHANGE_BASE)
+            why = "a base changed";
+        else if (ntouched < 0)
+            why = "the change log lost, or past its room";
+        else if (!change_svgs(p, next->tree, next->cascade, touched, &ntouched, CHANGE_TOUCHED, refs))
+            why = "more restyled svgs than the room";
+        else if (!flow_change_parts(p->tree, next->tree, scroll_now(), touched, ntouched, change_mark, NULL,
+                                    &said)) {
+            why = said.why < FLOW_PARTS_COUNT ? kRefused[said.why] : "?";
+            at = said.node;
+        }
+    }
+    // The reader is let go whichever way it went, read or not.
+    os64_html_reader_free(s_change.reader);
+    s_change.reader = NULL;
+    if (why == NULL && s_change.over)
+        why = "more parts than the room";
+    os64_gui_rect_t reach = {0, 0, 0, 0};
+    for (int32_t i = 0; why == NULL && i < s_change.n; i++)
+        reach = i == 0 ? s_change.part[i] : os64_rect_union(reach, s_change.part[i]);
+    // Parts reaching across more than half of the view are the whole of it:
+    // the toolkit's list of rectangles becomes one round all of them past
+    // its room (OS64_UI_DAMAGE_MAX), and so many parts so far apart save
+    // little over the whole.
+    if (why == NULL && (int64_t)reach.w * reach.h * 2 > (int64_t)s_change.view.w * s_change.view.h) {
+        why = "parts past half the view";
+        at = s_change.biggest_node;     // what marked the biggest of them
+    }
+    s_change.named[0] = s_change.biggest_named[0] = '\0';
+    if (s_change.biggest_node != NULL)
+        element_named(s_change.biggest_named, sizeof(s_change.biggest_named), "", s_change.biggest_node);
+    if (s_layout_profile && layout_profile_diag(p) != NULL) {
+        if (at != NULL && at->kind != OS64_HTML_ELEMENT)
+            at = os64_html_flat_parent(page_doc(p), at);
+        if (at != NULL && at->kind == OS64_HTML_ELEMENT)
+            element_named(s_change.named, sizeof(s_change.named), "", at);
+    }
+    return why;
+}
+
+// The verdict on a script's rebuild, `why` (NULL: painted in the parts
+// s_change holds), counted in the record's `script changes painted`.
+static void change_said(const Page *p, const char *why)
+{
+    s_change_said = why != NULL ? why : s_change.n == 0 ? "nothing to paint" : "in parts";
+    if (why != NULL)
+        s_damage_since.rebuilt_whole++;
+    else if (s_change.n == 0)
+        s_damage_since.rebuilt_nothing++;
+    else
+        s_damage_since.rebuilt_parts++;
+    if (!s_layout_profile || layout_profile_diag(p) == NULL)
+        return;
+    if (why != NULL) {
+        counted_at(&s_script_parts, why, s_change.named, "");
+    } else if (s_change.n == 0) {
+        counted_at(&s_script_parts, "nothing to paint", "", "");
+    } else {
+        os64_gui_rect_t reach = s_change.part[0];
+        for (int32_t i = 1; i < s_change.n; i++)
+            reach = os64_rect_union(reach, s_change.part[i]);
+        char note[96];
+        s_script_parts_area += (uint64_t)reach.w * (uint64_t)reach.h;
+        os64_snprintf(note, sizeof(note), "%d parts in %dx%d; area in all %lu", (int)s_change.n, (int)reach.w,
+                      (int)reach.h, (unsigned long)s_script_parts_area);
+        counted_at(&s_script_parts, "in parts", "", note);
+    }
+}
+
+// A rebuild owed the page on screen made with no layout (shown_advance),
+// counted for the record by the read that asked for it (or as another
+// rebuild's), and with --geometry-check
+// every Nth tree so advanced laid out whole beside itself and the two
+// compared (`unchanged check`).
+static bool rebuild_unchanged(Page *p)
+{
+    // The read check (read_checked) compares a kept answer with a layout's,
+    // so it is never answered by an advance, which would compare the tree
+    // with itself.
+    if (p != &g.page || s_read_checking || !shown_advance())
+        return false;
+    s_damage_since.advanced++;
+    unchanged_counted(p);
+    if (s_geometry_check != 0 && ++s_unchanged_checked % s_geometry_check == 0) {
+        // The page's own inputs, as page_lay_out sets them for a layout of it.
+        flow_env_t env = s_env;
+        env.ctx = p;
+        env.svg = p->modern;
+        env.cascade = p->cascade;
+        env.scripting = p->scripting;
+        env.media = p->scripting && p->modern;
+        env.viewport_height = (int32_t)css_view(1, p->laid_height, p->laid_zoom).height;
+        env.zoom = p->laid_zoom;
+        env.timeline = s_animations ? p->timeline : NULL;
+        env.ticks = env.timeline != NULL;
+        env.now_ms = animation_time_ms();
+        tree_checked(p, p->laid_width, &env, "an advanced tree", "unchanged check", &s_unchanged_compared,
+                     &s_unchanged_differed);
+    }
+    return true;
+}
+
 static bool script_rebuild(void)
 {
     Page *p = &g.page;
@@ -11599,7 +16465,11 @@ static bool script_rebuild(void)
             os64_debug_log(line);
         }
     }
-    if (version != p->rendered_version) {
+    // Changes that moved nothing the tree was styled from (inline styles
+    // written back to what the cascade parsed) make it current with no
+    // layout, whichever read or other rebuild asked (rebuild_unchanged).
+    if (version != p->rendered_version && !rebuild_unchanged(p)) {
+        script_changes_note(p);
         int64_t began = s_script_audit ? os64_micros() : 0;
         bool zoom_changed = p->laid_zoom != 0 && p->laid_zoom != g.zoom;
         int32_t offset = 0, sx = g.sx;
@@ -11622,10 +16492,29 @@ static bool script_rebuild(void)
         next.sheets_changed = true;
         next.serial = ++g.pages_made;
         sheets_start(&next);
+        // What the change painted is collected from here (s_change): a
+        // restyle kept in the shown tree hands its parts during the layout,
+        // and the two trees are compared once it is made.
+        os64_html_reader_free(s_change.reader);
+        s_change = (__typeof__(s_change)){.armed = true, .view = {g.sx, g.sy, g.view.bounds.w, g.view.bounds.h},
+                                         .biggest = -1};
+        s_change.reader = os64_html_reader_new((os64_html_document_t *)page_doc(p), p->rendered_version);
+        s_change.cascade = p->cascade;
+        s_change.cascade_generation = p->cascade != NULL ? garb_cascade_generation(p->cascade) : 0;
+        s_change.cascade_updates = p->cascade != NULL ? garb_cascade_updates(p->cascade) : 0;
+        // Before the layout updates the cascade, which then lists no
+        // inline change.
+        offsets_noted(p, p->rendered_version);
         // The shown Page holds the old faces; an incomplete staged layout
         // can reclaim its tree and cascade before retrying in that room.
-        if (!lay_out_page_reclaim(&next, g.view.bounds.w > 0 ? g.view.bounds.w : 1,
-                                 g.view.bounds.h > 0 ? g.view.bounds.h : 1, p)) {
+        yonder_lt_why_t why_was = lt_why_begin(YONDER_LT_WHY_REBUILD);
+        bool rebuilt = lay_out_page_reclaim(&next, g.view.bounds.w > 0 ? g.view.bounds.w : 1,
+                                            g.view.bounds.h > 0 ? g.view.bounds.h : 1, p);
+        lt_why_end(why_was);
+        s_change.armed = false;
+        if (!rebuilt) {
+            os64_html_reader_free(s_change.reader);
+            s_change.reader = NULL;
             sheets_leave(&next);
             tree_free(next.tree);
             garb_cascade_free(next.cascade);
@@ -11635,9 +16524,12 @@ static bool script_rebuild(void)
                 ? "Out of memory laying out the changed page; this is the last layout that fit."
                 : "Out of memory laying out the changed page.");
             forms_build();
+            s_damage_since.rebuilt_whole++;
             mark_whole(WHOLE_SCRIPT, false);
             return false;
         }
+        // Read while the shown tree is alive: page_show frees it.
+        const char *whole = change_parts(p, &next, zoom_changed);
         sheets_leave(p);
         page_show(p, next.tree);
         g.script_painting = true;
@@ -11646,6 +16538,7 @@ static bool script_rebuild(void)
         p->laid_width = next.laid_width;
         p->laid_height = next.laid_height;
         p->laid_zoom = next.laid_zoom;
+        p->laid_state = next.laid_state;
         p->cascade = next.cascade;
         p->sheets = next.sheets;
         p->nsheets = next.nsheets;
@@ -11667,11 +16560,45 @@ static bool script_rebuild(void)
         css_pictures(p);
         webfonts_feed(true);
         forms_build();
+        // A page that no longer reaches as far scrolls the view back with
+        // it, which moves everything: the whole view.
+        int32_t sx_shown = g.sx, sy_shown = g.sy;
         clamp_scroll();
+        if (whole == NULL && (g.sx != sx_shown || g.sy != sy_shown))
+            whole = "the view scrolled with it";
+        change_said(p, whole);
         sync_bars();
         forms_place();
         pictures_schedule();
-        mark_whole(WHOLE_SCRIPT, false);
+        if (whole != NULL)
+            mark_whole(WHOLE_SCRIPT, false);
+        else
+            for (int32_t i = 0; i < s_change.n; i++) {
+                s_marking_named = i == s_change.biggest ? s_change.biggest_named : NULL;
+                mark_part(s_change.part[i]);
+                s_marking_named = NULL;
+            }
+        // A check due for a rebuild painted in parts, with what it marked
+        // for the record's line.
+        // How it was made (a restyle kept in the shown tree, and what it
+        // wrote, or a layout) and what the change log held say which
+        // verdict let it mark what it did.
+        if (whole == NULL && s_damage_check != 0 && ++s_damage_counted % s_damage_check == 0) {
+            s_damage_due = true;
+            const char *made = !s_change.kept                             ? "a layout"
+                               : s_change.kept_kind == FLOW_RESTYLE_NOTHING ? "kept in the shown tree, nothing written"
+                                                                            : "kept in the shown tree, paint only";
+            char marked[32] = "marked nothing";
+            if (s_change.n > 0)
+                os64_snprintf(marked, sizeof(marked), "marked %d parts", (int)s_change.n);
+            os64_snprintf(s_damage_after, sizeof(s_damage_after), "a rebuild that %s (%s; the change log: %s)",
+                          marked, made, s_change.log[0] != '\0' ? s_change.log : "not read");
+            if (s_change.n == 0) {
+                s_damage_marking = true;
+                mark_part((os64_gui_rect_t){g.sx, g.sy, 1, 1});
+                s_damage_marking = false;
+            }
+        }
         if (s_script_audit) {
             char line[128];
             os64_snprintf(line,sizeof(line),"yonder: rendering rebuild in %ld us",
@@ -11690,8 +16617,28 @@ static bool script_rebuild(void)
     forms_pull_selections();
     // Pixel-only changes reuse layout. Plain canvases invalidate mapped pixel
     // damage; resets and effects retain the conservative viewport fallback.
+    s_nunseen_canvases=0;
     yonder_scripts_canvas_visit_damage(p->scripts,canvas_damage_mark,p);
+    canvases_unseen_acknowledge(p);
     return true;
+}
+
+// The rendering step around a script task: the page made current for its
+// paint. A window nobody can see (g.covered: minimized, entirely behind
+// another, or a text terminal on the glass) owes it while only paint-only
+// writes, or writes back to what the cascade parsed, are pending
+// (shown_pending, N2): they cost nothing until something reads what they
+// change, a layout is asked (lay_out_shown pays first), or the window is
+// seen again (window_seen pays it). Anything else pending is rebuilt as
+// before, seen or not, since observers and timers may read it. Each step
+// owed is counted, so a turn may count two.
+static bool script_rendering_step(void)
+{
+    if (g.covered && page_rebuild_owed(&g.page) && shown_pending().verdict != FLOW_PENDING_RESTYLE) {
+        reads_counted(&g.page, -1, false, true);
+        return true;
+    }
+    return script_rebuild();
 }
 
 // ── Scripts ─────────────────────────────────────────────────────────────
@@ -11890,6 +16837,7 @@ static void stream_request_facts(char *referrer, size_t cap, int64_t *modified)
 
 static os64_dom_image_status_t canvas_source(void *,const os64_html_node_t *,bool,os64_dom_image_view_t *);
 static void canvas_source_release(void *,os64_dom_image_view_t *);
+static uint64_t canvas_source_answers(void *);
 static Page *page_of_doc(const os64_html_document_t *);
 static os64_font_status_t canvas_text_layout(void *opaque,const os64_font_family_list_t *families,
     bool bold,bool italic,uint32_t px,const uint8_t *text,size_t length,os64_text_run_t **out)
@@ -11922,6 +16870,73 @@ static bool media_file_scheme(const char *url)
     return true;
 }
 
+static Page *page_of_host(const yonder_scripts_t *host);
+
+// A media element as a failure's record names it: its kind and its place
+// among its document's elements of that kind, in tree order ("video 2"),
+// or its kind alone when it is in no document (`new Audio()`).
+static void media_element_name(const os64_html_node_t *node, char *out, size_t cap)
+{
+    bool video = is_video_node(node);
+    const os64_html_node_t *top = node;
+    while (top != NULL && top->parent != NULL)
+        top = top->parent;
+    if (top == NULL || top->kind != OS64_HTML_DOCUMENT) {
+        os64_snprintf(out, cap, "%s, in no document", video ? "video" : "audio");
+        return;
+    }
+    uint32_t n = 0;
+    for (const os64_html_node_t *at = top; at != NULL;) {
+        if (at->kind == OS64_HTML_ELEMENT && at->ns == OS64_HTML_NS_HTML &&
+            at->tag == (video ? OS64_HTML_TAG_VIDEO : OS64_HTML_TAG_AUDIO))
+            n++;
+        if (at == node)
+            break;
+        if (at->first_child != NULL) {
+            at = at->first_child;
+            continue;
+        }
+        while (at != NULL && at->next == NULL)
+            at = at->parent;
+        at = at != NULL ? at->next : NULL;
+    }
+    os64_snprintf(out, cap, "%s %u", video ? "video" : "audio", n);
+}
+
+// A media element that failed, on its page's record and the console:
+// FAILED media, its address as a picture's is shown (picture_name), and
+// why. `line` is the whole message (yonder_media_failure_take), or NULL
+// for one built here from the element, the class the page was handed and
+// `why`, for a failure no request was made for.
+static void media_failed(uint64_t serial, const char *line, const os64_html_node_t *node, const char *url,
+                         const char *class, const char *why)
+{
+    yonder_scripts_t *host = scripts_for(serial);
+    Page *p = host != NULL ? page_of_host(host) : NULL;
+    char made[OS64_FETCH_URL_MAX + 160], element[32], name[128];
+    if (line == NULL) {
+        media_element_name(node, element, sizeof(element));
+        os64_snprintf(made, sizeof(made), "%s: %s, %s: %s (no request made)",
+                      url[0] != '\0' ? picture_name(url, name, sizeof(name)) : "(no address)", element, class, why);
+        line = made;
+    }
+    yonder_diag_failed(p != NULL ? p->diag : NULL, "media", line);
+}
+
+// Why media_open last answered NULL, and for which element: libdom tells
+// the failure (media_failed_early) with the class it handed the page, and
+// this is the reason only yonder knows.
+static struct {
+    const os64_html_node_t *node;
+    const char *why;
+} s_media_refused;
+
+static void media_refused(const os64_html_node_t *node, const char *why)
+{
+    s_media_refused.node = node;
+    s_media_refused.why = why;
+}
+
 static void *media_open(void *opaque, const os64_html_node_t *node, const char *url, os64_dom_media_cors_t cors,
                         os64_dom_media_preload_t preload)
 {
@@ -11933,16 +16948,23 @@ static void *media_open(void *opaque, const os64_html_node_t *node, const char *
     // a page from the network naming one would learn whether it exists
     // (the error tells a missing file from one that will not decode) and
     // what it holds. Refused, it is the element's network error.
-    if (media_file_scheme(url) && !media_file_scheme(page))
+    if (media_file_scheme(url) && !media_file_scheme(page)) {
+        media_refused(node, "a file on this machine, asked for by a page that is not");
         return NULL;
+    }
     // A blob: address's entry is taken here, at the resource selection's
     // turn, which is where the standard parses the element's URL too
     // (BLOB_URLS.md § 1.8).
     os64_dom_blob_t *blob = os64_dom_blob_url_take(yonder_scripts_blobs(host), url);
     bool picture = is_video_node(node);
-    yonder_media_request_t r = {url, page, serial, cors, g.way.agent, g.way.identity, blob, picture};
+    char element[32], name[128];
+    media_element_name(node, element, sizeof(element));
+    yonder_media_request_t r = {url,   page,    serial,  cors, g.way.agent, g.way.identity, blob, picture,
+                                element, picture_name(url, name, sizeof(name))};
     yonder_media_t *session = yonder_media_open(&r);
     os64_dom_blob_release(blob);
+    if (session == NULL)
+        media_refused(node, "it could not begin: no memory, no thread or no sound output");
     if (session != NULL && picture)
         video_add(node, session);
     return session;
@@ -11974,6 +16996,27 @@ static void media_facts(void *opaque, void *session, os64_dom_media_facts_t *out
     (void)opaque;
     yonder_media_facts(session, out);
 }
+// An element libdom failed (its `failed`), with the class it handed the
+// page: a session's own line (yonder_media_failure_take) with that class,
+// or, with no session, one made here, its reason yonder's own
+// (media_refused) when media_open refused this element.
+static void media_failed_told(void *opaque, const os64_html_node_t *node, void *session, const char *reference,
+                              int code, const char *why)
+{
+    static const char *const kClass[] = {"error", "aborted", "network", "decode", "not supported"};
+    char line[OS64_FETCH_URL_MAX + 512];
+    line[0] = '\0';        // written before every true answer below; said for the compiler
+    if (session != NULL) {
+        if (yonder_media_failure_take(session, code, line, sizeof(line)))
+            media_failed((uint64_t)(uintptr_t)opaque, line, NULL, NULL, NULL, NULL);
+        return;
+    }
+    if (s_media_refused.node == node && node != NULL)
+        why = s_media_refused.why;
+    s_media_refused.node = NULL;
+    media_failed((uint64_t)(uintptr_t)opaque, NULL, node, reference, code >= 1 && code <= 4 ? kClass[code] : "error",
+                 why);
+}
 static bool media_activated(void *opaque)
 {
     yonder_scripts_t *host = scripts_for((uint64_t)(uintptr_t)opaque);
@@ -12001,9 +17044,10 @@ static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state
         .activate = script_activate, .write = script_write, .now_ms = script_now, .geometry = script_geometry, .svg_hit = script_svg_hit, .hit = script_hit, .text_rects = script_text_rects,
         .intersections = script_intersections, .resizes = script_resizes, .opaque = doc,
         .view = {view_read, view_scroll, doc, view_scroll_element}, .computed = script_computed, .text_style = script_text_style,
-        .images={canvas_source,canvas_source_release,doc,image_sources_update},
+        .images={canvas_source,canvas_source_release,doc,image_sources_update,canvas_source_answers},
         .media = {(void *)(uintptr_t)serial, media_open, media_close, media_play, media_pause, media_seek,
-                  media_settings, media_facts, media_activated, media_can_play},
+                  media_settings, media_facts, media_activated, media_can_play, media_failed_told},
+        .fullscreen = {(void *)(uintptr_t)serial, fs_consume, fs_enter_asked, fs_leave_asked},
         .canvas_text={canvas_text_layout,doc},
         .history = {history_update, history_fragment, history_length, doc},
         .css_animations = {css_animations_count, css_animations_at, css_animations_drive, css_animations_version, doc},
@@ -12012,7 +17056,7 @@ static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state
         .request = script_request, .run = script_run, .release = script_release, .more = script_more,
         .referrer = referrer, .last_modified = modified, .focus = script_focus,
         .ledger = s_ledger != YONDER_LEDGER_OFF, .ledger_profile = s_ledger == YONDER_LEDGER_PROFILE,
-        .ledger_sample_ticks = ledger_sample_ticks()};
+        .ledger_sample_ticks = ledger_sample_ticks(), .timer_sites = s_diag.dir[0] != '\0'};
     yonder_scripts_t *host = yonder_scripts_new(doc, state, &options);
     yonder_scripts_set_user_agent(host, script_user_agent, NULL);
     const os64_dom_cookies_t cookies = {script_cookies_get, script_cookies_set, host, script_cookies_enabled};
@@ -12082,14 +17126,19 @@ static void script_keep_bytecode(void *opaque, const yonder_bytecode_t *where, u
 // begun task that finds nothing to run never reaches task_said, and the
 // next task_begin starts it again.
 static uint64_t s_task_began;
+// The same moment on the clock, for the load's timeline while it runs
+// (0 while it does not).
+static int64_t s_lt_task_began;
 
 // A task is about to run: the layouts it forces are counted from zero
-// (DOM.md § Geometry), and the audit's clock starts, and the paint counts'.
-// Every task kind begins here and ends at task_said.
+// (DOM.md § Geometry), and the audit's clock starts, and the paint counts',
+// and the timeline's. Every task kind begins here and ends at task_said.
 static int64_t task_begin(yonder_scripts_t *host)
 {
     (void)yonder_scripts_geometry_stats(host, true);
+    s_task_phases = (forced_phases_t){0};
     s_task_began = cycles();
+    s_lt_task_began = s_lt.on ? os64_micros() : 0;
     return s_script_audit ? os64_micros() : 0;
 }
 
@@ -12111,13 +17160,48 @@ static void task_cost(const char *what)
 // cost, then an error by its script's name, and a runtime its task retired
 // by the sentence that says the page goes on without script. The audit
 // logs every task, what it cost, what it forced and what it wrote: a page
-// that writes its whole body shows as one.
+// that writes its whole body shows as one. The load's timeline, while it
+// runs, hears of each task with its name, its time and what it forced.
 static void task_said(yonder_scripts_t *host, bool was_alive, const char *what,
                       const os64_js_outcome_t *out, int64_t began)
 {
+    uint64_t spent = cycles_since(s_task_began);
+    uint64_t said_from = tr_now();
     task_cost(what);
 
     os64_dom_geometry_stats_t forced = yonder_scripts_geometry_stats(host, false);
+    if (s_tr.on) {
+        yonder_tr_inside(&s_tr, YONDER_TR_IN_TASKS, spent);
+        // A timer by the site that set it; the forced layouts' time is the
+        // DOM's microseconds, turned into the counter's ticks.
+        uint64_t forced_ticks = forced.elapsed_us * s_tr_per_ms / 1000;
+        const char *site = os64_streq(what, "timer") ? yonder_scripts_timer_site(host) : NULL;
+        if (os64_streq(what, "timer"))
+            yonder_tr_timer(&s_tr, site, spent, forced.layouts, forced_ticks);
+        // Any task, for its turn: a timer by its site as the timers line
+        // names it, the rest by kind and script as the timeline does.
+        char named[YONDER_TR_TASK_TEXT];
+        if (site != NULL)
+            os64_snprintf(named, sizeof(named), "a timer set by %s", site);
+        else
+            os64_snprintf(named, sizeof(named), "%s%s%s", what, out->source_name[0] ? " " : "", out->source_name);
+        yonder_tr_task(&s_tr, named, spent, forced.layouts, forced_ticks);
+    }
+    if (s_lt.on) {
+        char named[YONDER_LT_TASK_MAX];
+        os64_snprintf(named, sizeof(named), "%s%s%s", what, out->source_name[0] ? " " : "", out->source_name);
+        int64_t now = os64_micros();
+        uint64_t us = s_lt_task_began != 0 && now > s_lt_task_began ? (uint64_t)(now - s_lt_task_began) : 0;
+        yonder_lt_task(&s_lt, now, named, us, (uint32_t)forced.layouts, forced.elapsed_us);
+    }
+    if (spent > s_cost.task_longest) {
+        s_cost.task_longest = spent;
+        s_cost.task_longest_layouts = forced.layouts;
+        s_cost.task_longest_layout_us = forced.elapsed_us;
+        s_cost.task_longest_phases = s_task_phases;
+        os64_snprintf(s_cost.task_longest_what, sizeof(s_cost.task_longest_what), "%s%s%s", what,
+                      out->source_name[0] ? " " : "", out->source_name);
+    }
     if (s_script_audit) {
         char line[OS64_JS_SOURCE_NAME_CAP + 160];
         os64_snprintf(line, sizeof(line), "yonder: task %s %s: status %d in %ld us, wrote %lu bytes, "
@@ -12127,9 +17211,12 @@ static void task_said(yonder_scripts_t *host, bool was_alive, const char *what,
                       (unsigned long)forced.elapsed_us);
         os64_debug_log(line);
     }
+    // The layouts a task forced are diagnostics' to say: with them off the
+    // line is never made, and a task that only forced layouts marks nothing
+    // (a page's script may force them many times a second).
     char line[512];
     size_t at = 0;
-    if (forced.layouts != 0) {
+    if (forced.layouts != 0 && s_diag.on) {
         os64_snprintf(line, sizeof(line), "Script forced %lu layouts in %lu.%03lu ms",
                       (unsigned long)forced.layouts, (unsigned long)(forced.elapsed_us / 1000),
                       (unsigned long)(forced.elapsed_us % 1000));
@@ -12161,6 +17248,7 @@ static void task_said(yonder_scripts_t *host, bool was_alive, const char *what,
         badge_follow();     // a global it missed is recorded as it runs
         if (at != 0)
             status_rest(line);
+        tr_inside(YONDER_TR_IN_SAID, said_from);
         return;
     }
     if (at != 0) {
@@ -12204,6 +17292,7 @@ static void task_said(yonder_scripts_t *host, bool was_alive, const char *what,
     badge_follow();
     status_rest(line);
     yonder_scripts_set_note(host, line);
+    tr_inside(YONDER_TR_IN_SAID, said_from);
 }
 
 // ── A script's requests (MODERN_WEB.md § Slice 2) ──────────────────────
@@ -13196,32 +18285,34 @@ static bool queued_task(yonder_scripts_t *host, const char **what, os64_js_outco
     return yonder_scripts_timer_fire(host, now, out);
 }
 
+static bool ordinary_task(yonder_scripts_t *host, task_age_t *ages, bool shown, const char **what,
+                          os64_js_outcome_t *out);
+// The ages of a host no page holds (page_of_host): a page's are its own.
+static task_age_t s_hostless_ages[TS_COUNT];
+
 static bool scripts_task(yonder_scripts_t *host, const os64_html_document_t *doc, bool shown)
 {
     if (host == NULL || !yonder_scripts_alive(host))
         return false;
     os64_js_outcome_t cleanup;
     int64_t cleanup_began = task_begin(host);
+    Page *p = page_of_host(host);
+    task_age_t *ages = p != NULL ? p->task_ages : s_hostless_ages;
     if (yonder_scripts_finalization_fire(host, false, &cleanup)) {
+        // Cleanup's turn, as if ordinary_task had chosen it: its next head
+        // is aged from now.
+        task_age_ran(&ages[TS_CLEANUP], yonder_scripts_finalization_pending(host), yonder_now_ms());
         task_said(host, true, "cleanup", &cleanup, cleanup_began);
         asks_perform(host, doc, shown);
         return true;
     }
     // History events retain their order within the ordinary task sources.
-    Page *p = page_of_host(host);
     if (p != NULL && page_event_run(p, shown))
         return true;
     os64_js_outcome_t out;
     int64_t began = task_begin(host);
     const char *what = "script";
-    bool ran = yonder_scripts_step(host, &out);
-    if (!ran) { what="image"; ran=yonder_scripts_image_fire(host,&out); }
-    if (!ran) { what="media"; ran=yonder_scripts_media_fire(host,&out); }
-    if (!ran) { what="sheet"; ran=yonder_scripts_owed_fire(host,&out); }
-    if (!ran)
-        ran = queued_task(host, &what, &out);
-    if (!ran) { what = "cleanup"; ran = yonder_scripts_finalization_fire(host, true, &out); }
-    if (!ran)
+    if (!ordinary_task(host, ages, false, &what, &out))
         return false;
     task_said(host, true, what, &out, began);
     asks_perform(host, doc, shown);
@@ -13261,16 +18352,118 @@ static bool measured_for(const os64_html_document_t *doc, int32_t width, int32_t
     return measured_layout(stream_page(), g.stream.state, g.stream.head.url, width, height);
 }
 
+// The page on screen made current for a read of its geometry: its pending
+// rebuild, then a layout owed at the view's size, zoom, sheets, pictures or
+// fonts. `asking` is the read's kind (READ_RECTS ...), or -1 for the read
+// check's own.
+static bool script_current(int32_t width, int32_t height, int asking)
+{
+    // Under the profile, a layout this forces is noted by what was pending
+    // before it (s_forced), unless it is the read check's own.
+    bool noting = s_layout_profile && !s_read_checking && layout_profile_diag(&g.page) != NULL;
+    flow_pending_t pending = noting ? shown_pending() : (flow_pending_t){.verdict = FLOW_PENDING_RESTYLE};
+    uint64_t before = geometry_layout_total;
+    int asked_before = s_asking;
+    s_asking = asking;
+    bool ready = script_rebuild();
+    s_asking = asked_before;
+    if (ready && (g.page.tree == NULL || flow_incomplete(g.page.tree) || g.page.laid_width != width ||
+                  g.page.laid_height != height || g.page.laid_zoom != g.zoom ||
+                  g.page.sheets_changed || g.pictures_moved || s_web.moved))
+        ready = relayout(true);
+    if (noting && geometry_layout_total != before)
+        counted_at(&s_forced, pending.verdict == FLOW_PENDING_NONE ? "nothing pending"
+                              : pending.why[0] != '\0' ? pending.why : "restyle",
+                   pending.at, "");
+    return ready;
+}
+
+// Whether a snapshot member a read takes differs between the kept tree's
+// answer and the current one, said at `out` when it does.
+static bool read_member_differs(char *out, size_t cap, const char *name, int64_t kept, int64_t current)
+{
+    if (kept == current)
+        return false;
+    os64_snprintf(out, cap, "%s (%ld kept, %ld current)", name, (long)kept, (long)current);
+    return true;
+}
+// The first member a read of `need` takes that differs, or "".
+static void read_difference(const os64_dom_geometry_t *a, const os64_dom_geometry_t *b,
+                            os64_dom_geometry_need_t need, char *out, size_t cap)
+{
+    out[0] = '\0';
+    if (read_member_differs(out, cap, "offsetLeft", a->offset_left, b->offset_left) ||
+        read_member_differs(out, cap, "offsetTop", a->offset_top, b->offset_top) ||
+        read_member_differs(out, cap, "offsetWidth", a->offset_width, b->offset_width) ||
+        read_member_differs(out, cap, "offsetHeight", a->offset_height, b->offset_height) ||
+        read_member_differs(out, cap, "clientLeft", a->client_left, b->client_left) ||
+        read_member_differs(out, cap, "clientTop", a->client_top, b->client_top) ||
+        read_member_differs(out, cap, "clientWidth", a->client_width, b->client_width) ||
+        read_member_differs(out, cap, "clientHeight", a->client_height, b->client_height) ||
+        read_member_differs(out, cap, "a box", a->boxed, b->boxed))
+        return;
+    if (a->offset_parent != b->offset_parent) {
+        os64_snprintf(out, cap, "offsetParent");
+        return;
+    }
+    if (need == OS64_DOM_NEED_REACH &&
+        (read_member_differs(out, cap, "scrollLeft", a->scroll_left, b->scroll_left) ||
+         read_member_differs(out, cap, "scrollTop", a->scroll_top, b->scroll_top) ||
+         read_member_differs(out, cap, "scrollWidth", a->scroll_width, b->scroll_width) ||
+         read_member_differs(out, cap, "scrollHeight", a->scroll_height, b->scroll_height)))
+        return;
+}
+
+// `--geometry-check` for a read the kept tree answered: the page made
+// current and read again, and the two compared on what the read takes. A
+// difference is said with the element and the member. The current answer
+// is the one given either way.
+static bool read_checked(const os64_html_document_t *doc, const os64_html_node_t *node,
+                         os64_dom_geometry_need_t need, int32_t width, int32_t height, os64_dom_geometry_t *out)
+{
+    os64_dom_geometry_t kept = *out;
+    // The check's own layout is no layout the page forced (script_current's
+    // note).
+    s_read_checking = true;
+    bool current = script_current(width, height, -1);
+    s_read_checking = false;
+    bool ready = current && yonder_geometry_snapshot(doc, g.page.tree, node, width, height, g.zoom,
+                                                     (flow_point_t){g.sx, g.sy}, out);
+    char member[128], named[96] = "", line[256];
+    if (ready)
+        read_difference(&kept, out, need, member, sizeof(member));
+    else
+        os64_snprintf(member, sizeof(member), "no current layout");
+    s_reads_compared++;
+    if (member[0] != '\0') {
+        s_reads_differed++;
+        if (node->kind == OS64_HTML_ELEMENT)
+            element_named(named, sizeof(named), "", node);
+        os64_snprintf(line, sizeof(line), "a read answered from the kept tree differs from the current in %s at %s",
+                      member, named[0] != '\0' ? named : "the page");
+        yonder_diag_failed_seen(g.page.diag, "read check", line);
+        os64_debug_log(line);
+    }
+    char said[96];
+    os64_snprintf(said, sizeof(said), "%lu compared, %lu differed", (unsigned long)s_reads_compared,
+                  (unsigned long)s_reads_differed);
+    yonder_diag_summary_fact(g.page.diag, "read check", said);
+    return ready;
+}
+
 // A script host's current-layout provider (DOM.md § Geometry), whose opaque
-// is its page's document. The page on screen has its pending rebuild and an
-// owed layout done now and published; a page not on screen is measured
-// beside itself (measured_layout). Either way the work is charged to the
-// asking script, and the box is read from the layout that results.
+// is its page's document. The page on screen answers from its tree as it
+// stands when the read's need allows and only paint-only writes are pending
+// (N2: shown_pending); otherwise it has its pending rebuild and an owed
+// layout done now and published (script_current). A page not on screen is
+// measured beside itself (measured_layout). Any work is charged to the
+// asking script, and the box is read from the tree that results.
 static bool script_geometry(void *opaque, const os64_html_node_t *node,
                             os64_dom_geometry_t *out)
 {
     const os64_html_document_t *doc = opaque;
     if (!os64_html_owns_node(doc, node)) return false;
+    yonder_lt_why_t why_was = lt_why_begin(YONDER_LT_WHY_READ);
     int64_t began = os64_micros();
     uint64_t before = geometry_layout_total;
     int32_t width = g.view.bounds.w > 0 ? g.view.bounds.w : 1;
@@ -13282,18 +18475,34 @@ static bool script_geometry(void *opaque, const os64_html_node_t *node,
             ready = yonder_geometry_snapshot(doc, s_measured.tree, node, width, height, g.zoom,
                                              (flow_point_t){0, 0}, out);
     } else {
-        ready = ready && script_rebuild();
-        if (ready && (g.page.tree == NULL || flow_incomplete(g.page.tree) || g.page.laid_width != width ||
-                      g.page.laid_height != height || g.page.laid_zoom != g.zoom ||
-                      g.page.sheets_changed || g.pictures_moved || s_web.moved))
-            ready = relayout(true);
-        if (ready)
-            ready = yonder_geometry_snapshot(doc, g.page.tree, node,
-                        width, height, g.zoom, (flow_point_t){g.sx, g.sy}, out);
+        // An offset or client read, or a scroll read with no transform
+        // pending, whose page has only paint-only writes pending: the tree
+        // on screen answers (N2, shown_pending), and the writes wait for
+        // the next asker that needs styles.
+        os64_dom_geometry_need_t need = out->need;
+        flow_pending_t pending = need != OS64_DOM_NEED_ALL || s_layout_profile
+                                     ? shown_pending() : (flow_pending_t){.verdict = FLOW_PENDING_RESTYLE, .transforms = true};
+        bool kept = ready && pending.verdict != FLOW_PENDING_RESTYLE &&
+                    (need == OS64_DOM_NEED_BOXES || (need == OS64_DOM_NEED_REACH && !pending.transforms));
+        if (kept) {
+            ready = yonder_geometry_snapshot(doc, g.page.tree, node, width, height, g.zoom,
+                                             (flow_point_t){g.sx, g.sy}, out);
+            reads_counted(&g.page, -1, true, false);
+            if (ready && s_geometry_check != 0 && ++s_reads_checked % s_geometry_check == 0)
+                ready = read_checked(doc, node, need, width, height, out);
+        } else {
+            if (pending.verdict == FLOW_PENDING_PAINT)
+                reads_counted(&g.page, need == OS64_DOM_NEED_ALL ? READ_RECTS : READ_SCROLL, false, false);
+            ready = ready && script_current(width, height, need == OS64_DOM_NEED_ALL ? READ_RECTS : READ_SCROLL);
+            if (ready)
+                ready = yonder_geometry_snapshot(doc, g.page.tree, node,
+                            width, height, g.zoom, (flow_point_t){g.sx, g.sy}, out);
+        }
     }
     int64_t ended = os64_micros();
     out->layouts = geometry_layout_total - before;
     out->elapsed_us = out->layouts != 0 && began >= 0 && ended >= began ? (uint64_t)(ended - began) : 0;
+    lt_why_end(why_was);
     return ready && ended >= began;
 }
 
@@ -13321,6 +18530,7 @@ static size_t script_hit(void *opaque, double x, double y, const os64_html_node_
                          os64_dom_geometry_stats_t *cost)
 {
     const os64_html_document_t *doc = opaque;
+    yonder_lt_why_t why_was = lt_why_begin(YONDER_LT_WHY_READ);
     int64_t began = os64_micros();
     uint64_t before = geometry_layout_total;
     int32_t width = g.view.bounds.w > 0 ? g.view.bounds.w : 1;
@@ -13330,10 +18540,12 @@ static size_t script_hit(void *opaque, double x, double y, const os64_html_node_
     bool ready = false;
     const os64_html_node_t *hit = NULL;
     if (inside && doc == page_doc(&g.page)) {
-        ready = script_rebuild();
-        if (ready && (g.page.tree == NULL || flow_incomplete(g.page.tree) || g.page.laid_width != width ||
-                      g.page.laid_height != height || g.page.laid_zoom != g.zoom || g.page.sheets_changed || g.pictures_moved || s_web.moved))
-            ready = relayout(true);
+        // A hit sees transforms, visibility and pointer-events, so styles
+        // are made current whatever is pending; with the profile on, the
+        // record counts those that met only paint-only writes.
+        if (s_layout_profile && shown_pending().verdict == FLOW_PENDING_PAINT)
+            reads_counted(&g.page, READ_HITS, false, false);
+        ready = script_current(width, height, READ_HITS);
         if (ready)
             hit = element_hit(g.view.bounds.x + (int32_t)dx, g.view.bounds.y + (int32_t)dy, NULL, NULL);
     } else if (inside && measured_for(doc, width, height)) {
@@ -13360,6 +18572,7 @@ static size_t script_hit(void *opaque, double x, double y, const os64_html_node_
     int64_t ended = os64_micros();
     cost->layouts = geometry_layout_total - before;
     cost->elapsed_us = cost->layouts != 0 && began >= 0 && ended >= began ? (uint64_t)(ended - began) : 0;
+    lt_why_end(why_was);
     return count;
 }
 
@@ -13371,6 +18584,7 @@ static size_t script_text_rects(void *opaque, const os64_html_node_t *node, size
                                 double *out, size_t cap, os64_dom_geometry_stats_t *cost)
 {
     const os64_html_document_t *doc = opaque;
+    yonder_lt_why_t why_was = lt_why_begin(YONDER_LT_WHY_READ);
     int64_t began = os64_micros();
     uint64_t before = geometry_layout_total;
     int32_t width = g.view.bounds.w > 0 ? g.view.bounds.w : 1;
@@ -13378,10 +18592,7 @@ static size_t script_text_rects(void *opaque, const os64_html_node_t *node, size
     size_t count = 0;
     if (began >= 0 && os64_html_owns_node(doc, node)) {
         if (doc == page_doc(&g.page)) {
-            bool ready = script_rebuild();
-            if (ready && (g.page.tree == NULL || flow_incomplete(g.page.tree) || g.page.laid_width != width ||
-                          g.page.laid_height != height || g.page.laid_zoom != g.zoom || g.page.sheets_changed || g.pictures_moved || s_web.moved))
-                ready = relayout(true);
+            bool ready = script_current(width, height, READ_RECTS);
             if (ready)
                 count = yonder_text_rects(doc, g.page.tree, node, from, to, g.zoom, (flow_point_t){g.sx, g.sy},
                                           out, cap);
@@ -13392,6 +18603,7 @@ static size_t script_text_rects(void *opaque, const os64_html_node_t *node, size
     int64_t ended = os64_micros();
     cost->layouts = geometry_layout_total - before;
     cost->elapsed_us = cost->layouts != 0 && began >= 0 && ended >= began ? (uint64_t)(ended - began) : 0;
+    lt_why_end(why_was);
     return count;
 }
 
@@ -13467,6 +18679,8 @@ static bool intersections_turn(void)
     // A step that asks nothing (every root in another document) never
     // calls the provider, and has still answered what it was asked.
     s_intersections_answered = true;
+    if (s_tr.on)
+        yonder_tr_intersections(&s_tr, yonder_scripts_intersections_observed(s));
     bool due = yonder_scripts_intersections_update(s);
     if (s_intersections_answered)
         s_observed = now;
@@ -14227,6 +19441,7 @@ static void view_read(void *opaque, os64_dom_view_t *out)
 static const flow_tree_t *layout_current(const os64_html_document_t *doc, flow_env_t *env,
                                          uint64_t *layouts, uint64_t *elapsed_us)
 {
+    yonder_lt_why_t why_was = lt_why_begin(YONDER_LT_WHY_READ);
     int64_t began = os64_micros();
     uint64_t before = geometry_layout_total;
     int32_t width = g.view.bounds.w > 0 ? g.view.bounds.w : 1;
@@ -14237,10 +19452,12 @@ static const flow_tree_t *layout_current(const os64_html_document_t *doc, flow_e
     env->timeline = NULL;
     env->ticks = false;
     if (p == &g.page) {
-        bool ready = script_rebuild();
-        if (ready && (g.page.tree == NULL || flow_incomplete(g.page.tree) || g.page.laid_width != width ||
-                      g.page.laid_height != height || g.page.laid_zoom != g.zoom || g.page.sheets_changed || g.pictures_moved || s_web.moved))
-            ready = relayout(true);
+        // Its answers are read from the tree's styles, made current whatever
+        // is pending; with the profile on, the record counts those that met
+        // only paint-only writes (the cut of BRIEF_LAYOUT_NEEDS.md N2).
+        if (s_layout_profile && shown_pending().verdict == FLOW_PENDING_PAINT)
+            reads_counted(&g.page, READ_STYLES, false, false);
+        bool ready = script_current(width, height, READ_STYLES);
         if (ready && g.page.tree != NULL) {
             tree = g.page.tree;
             env->ctx = &g.page;
@@ -14260,6 +19477,7 @@ static const flow_tree_t *layout_current(const os64_html_document_t *doc, flow_e
     int64_t ended = os64_micros();
     *layouts = geometry_layout_total - before;
     *elapsed_us = *layouts != 0 && began >= 0 && ended >= began ? (uint64_t)(ended - began) : 0;
+    lt_why_end(why_was);
     return tree;
 }
 
@@ -14506,6 +19724,75 @@ static uint64_t css_animations_version(void *opaque)
 // Whether the turn just ran one of the view's events: more may be owed.
 static bool s_view_ran;
 
+// Whether source `k` of `host` has a task ready now, as far as the source
+// says; for the timed ones, ordinary_task reads the times instead.
+static bool task_source_ready(yonder_scripts_t *host, TaskSource k, bool shown)
+{
+    switch (k) {
+    case TS_SCRIPT: return yonder_scripts_pending(host);
+    case TS_IMAGE: return yonder_scripts_images_pending(host);
+    case TS_MEDIA: return yonder_scripts_media_pending(host);
+    case TS_SHEET: return yonder_scripts_owed_pending(host);
+    case TS_INTERSECTION: return shown && yonder_scripts_intersections_due(host);
+    case TS_CLEANUP: return yonder_scripts_finalization_pending(host);
+    default: return false;
+    }
+}
+
+// ONE ORDINARY TASK of a host's (task_order.h): a script ready to run, an
+// image's, a media element's or a sheet's event, the intersection
+// observers' delivery and the view's events (`shown`: the page on screen's
+// alone), a message or a timer (queued_task, the older first), opted-in
+// engine cleanup. A task ready less than TASK_ORDER_BOUND_MS keeps to that
+// order; one ready longer goes ahead of all of those, the oldest first.
+// Messages and timers say when they were ready (posted, fell due), counted
+// no older than their source's last run (task_age_stamped); the others are
+// aged here. Both are kept in `ages`. The view's events are never old: the
+// view's due events run ahead of every ordinary source at their own
+// cadence (script_turn). True when one ran; `what` names its source.
+static bool ordinary_task(yonder_scripts_t *host, task_age_t *ages, bool shown, const char **what,
+                          os64_js_outcome_t *out)
+{
+    uint64_t now = yonder_now_ms();
+    task_source_t src[TS_COUNT];
+    for (int k = 0; k < TS_COUNT; k++)
+        src[k] = task_age_observe(&ages[k], task_source_ready(host, (TaskSource)k, shown), now);
+    // A timer's next of 0 is custom element reactions owed (libdom's
+    // timer.c), which run in a timer's place: ready now, so they keep that
+    // place among the young.
+    uint64_t message = yonder_scripts_message_next(host), timer = yonder_scripts_timer_next(host);
+    if (timer == 0)
+        timer = now;
+    uint64_t queued = message <= now ? message : UINT64_MAX;
+    if (timer <= now && timer < queued)
+        queued = timer;
+    src[TS_QUEUED] = task_age_stamped(&ages[TS_QUEUED], queued != UINT64_MAX, queued);
+    src[TS_VIEW] = (task_source_t){shown, now};
+    int order[TS_COUNT];
+    int n = task_order(src, TS_COUNT, now, order);
+    for (int i = 0; i < n; i++) {
+        TaskSource k = (TaskSource)order[i];
+        bool ran = false;
+        switch (k) {
+        case TS_SCRIPT: *what = "script"; ran = yonder_scripts_step(host, out); break;
+        case TS_IMAGE: *what = "image"; ran = yonder_scripts_image_fire(host, out); break;
+        case TS_MEDIA: *what = "media"; ran = yonder_scripts_media_fire(host, out); break;
+        case TS_SHEET: *what = "sheet"; ran = yonder_scripts_owed_fire(host, out); break;
+        // The delivery task the last rendering step queued (intersections_turn).
+        case TS_INTERSECTION: *what = "intersection-observer"; ran = yonder_scripts_intersections_fire(host, out); break;
+        case TS_QUEUED: ran = queued_task(host, what, out); break;
+        case TS_VIEW: *what = "view"; ran = s_view_ran = yonder_scripts_view_step(host, out); break;
+        case TS_CLEANUP: *what = "cleanup"; ran = yonder_scripts_finalization_fire(host, true, out); break;
+        default: break;
+        }
+        if (ran) {
+            task_age_ran(&ages[k], task_source_ready(host, k, shown), yonder_now_ms());
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool script_turn(void)
 {
     // A font-capacity retry may have released the old tree. Keep retrying
@@ -14513,16 +19800,22 @@ static bool script_turn(void)
     if (g.page.tree == NULL && (page_doc(&g.page) == NULL ||
         g.page.rendered_version == os64_html_version(page_doc(&g.page))))
         return false;
-    // A failed native rebuild is retried before another script can run.
-    if (!script_rebuild())
+    // A failed native rebuild is retried before another script can run, or
+    // owed while the window is covered (script_rendering_step).
+    if (!script_rendering_step())
         return false;
     if (!g.scripts_on || g.page.scripts == NULL)
         return false;
+    tr_call(YONDER_TR_FORMS);
     forms_flush();
     const os64_html_document_t *doc = page_doc(&g.page);
     os64_js_outcome_t out;
+    tr_call(YONDER_TR_TASK);
     int64_t began = task_begin(g.page.scripts);
     bool ran = yonder_scripts_finalization_fire(g.page.scripts, false, &out);
+    if (ran)        // its next head aged from now, as ordinary_task would age it
+        task_age_ran(&g.page.task_ages[TS_CLEANUP], yonder_scripts_finalization_pending(g.page.scripts),
+                     yonder_now_ms());
     // History precedes the other ordinary sources, preserving event order.
     if (!ran && page_event_run(&g.page, true))
         return true;
@@ -14537,38 +19830,10 @@ static bool script_turn(void)
     const char *what = ran ? "cleanup" : "view";
     if (!ran) ran = yonder_scripts_view_due(g.page.scripts) &&
                    (s_view_ran = yonder_scripts_view_step(g.page.scripts, &out));
-    if (!ran) {
-        what = "script";
-        ran = yonder_scripts_step(g.page.scripts, &out);
-    }
-    if (!ran) {
-        what = "image";
-        ran = yonder_scripts_image_fire(g.page.scripts, &out);
-    }
-    if (!ran) {
-        what = "media";
-        ran = yonder_scripts_media_fire(g.page.scripts, &out);
-    }
-    if (!ran) {
-        what = "sheet";
-        ran = yonder_scripts_owed_fire(g.page.scripts, &out);
-    }
-    // The intersection observers' delivery task, which the last rendering
-    // step queued (intersections_turn).
-    if (!ran) {
-        what = "intersection-observer";
-        ran = yonder_scripts_intersections_fire(g.page.scripts, &out);
-    }
+    // The rest of the page's ordinary tasks, the young by their sources'
+    // order and the old by age (ordinary_task).
     if (!ran)
-        ran = queued_task(g.page.scripts, &what, &out);
-    if (!ran) {
-        what = "view";
-        ran = s_view_ran = yonder_scripts_view_step(g.page.scripts, &out);
-    }
-    if (!ran) {
-        what = "cleanup";
-        ran = yonder_scripts_finalization_fire(g.page.scripts, true, &out);
-    }
+        ran = ordinary_task(g.page.scripts, g.page.task_ages, true, &what, &out);
     // And when the turn found nothing else, an idle callback (MODERN_WEB.md
     // § P2b): the loop is idle. The loop comes back for the next while one
     // is due (main's bell), and the ticker wakes it for one that waits
@@ -14596,6 +19861,7 @@ static bool script_turn(void)
     // animations and send events", then the frame callbacks. The time is
     // read only for a frame: a sample is a time handed to the animations,
     // which a later frame may never go back past (frame_plan_sample).
+    tr_call(YONDER_TR_FRAMES);
     uint64_t frame_us = s_frames.open ? animation_time_us() : 0;
     if (s_frames.open && !g.covered && !g.raf_painting &&
         yonder_scripts_web_animations_next(g.page.scripts) <= now) {
@@ -14614,14 +19880,23 @@ static bool script_turn(void)
             task_said(g.page.scripts, true, "animation-frame", &out, frame_began);
         }
     }
-    if (!ran)
+    if (!ran) {
+        tr_call(YONDER_TR_POINTER);
         return pointer_turn();
+    }
     // The rendering step before the asks: a form a script sent is read
-    // from a model as current as its tree.
-    bool rendered = script_rebuild();
+    // from a model as current as its tree, and a focus or a scroll acts on
+    // the tree, so with asks waiting the page is made current even where a
+    // covered window could owe the step.
+    tr_call(YONDER_TR_AFTER);
+    bool rendered = g.nasks > 0 ? script_rebuild() : script_rendering_step();
     if (rendered) {
+        tr_call(YONDER_TR_ASKS);
         asks_perform(g.page.scripts, doc, true);
-        if (page_doc(&g.page) == doc) (void)pointer_turn();
+        if (page_doc(&g.page) == doc) {
+            tr_call(YONDER_TR_POINTER);
+            (void)pointer_turn();
+        }
     }
     return rendered;
 }
@@ -14820,7 +20095,7 @@ static const os64_html_node_t *element_hit(int32_t x, int32_t y, const os64_html
         *boxed = NULL;
     if (g.page.tree == NULL || x < v.x || y < v.y || x >= v.x + v.w || y >= v.y + v.h)
         return NULL;
-    const flow_box_t *b = flow_hit(g.page.tree, x - v.x + g.sx, y - v.y + g.sy, scroll_now());
+    const flow_box_t *b = page_hit(x - v.x + g.sx, y - v.y + g.sy, scroll_now());
     if (b == NULL)
         return NULL;
     // A box no node made (a line, an anonymous block) is its nearest
@@ -15474,7 +20749,12 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
     os64_memset(&fresh, 0, sizeof(fresh));
     fresh.scripting = g.stream.scripting;
     fresh.modern = g.stream.modern;
+    // Its scripts go on with the same host, so their tasks keep their ages.
+    os64_memcpy(fresh.task_ages, g.stream.page.task_ages, sizeof(fresh.task_ages));
+    int64_t lt_from = s_lt.on ? os64_micros() : 0;
     os64_html_document_t *doc = os64_html_parser_finish(g.stream.parser);
+    if (s_lt.on)
+        lt_parse(NULL, "the parse's finish", 0, lt_from);
     g.stream.parser = NULL;
     if (doc == NULL) {
         stream_failed("Out of memory reading that page.");
@@ -15715,6 +20995,8 @@ static size_t stream_take(uint8_t *chunk, size_t cap)
         g.stream.local_at += n;
     }
     g.stream.bytes += n;
+    if (s_lt.on && n != 0)
+        yonder_lt_bytes(&s_lt, os64_micros(), n);
     if (s_diag.keep && n != 0)
         diag_kept(yonder_diag_keep_bytes(yonder_diag_claimed(g.stream.diag), chunk, n));
     return n;
@@ -15791,7 +21073,10 @@ static int64_t stream_parsed(int64_t r)
             stream_reactions();
             return r;
         }
+        int64_t lt_from = s_lt.on ? os64_micros() : 0;
         r = os64_html_parser_resume(g.stream.parser);
+        if (s_lt.on)
+            lt_parse(g.stream.parser, "a resume past a script not run", 0, lt_from);
     }
     stream_reactions();
     return r;
@@ -15876,6 +21161,7 @@ static void stream_sheets(void)
     if (g.stream.parser == NULL || g.stream.head.body != WAY_BODY_HTML)
         return;
     Page *p = stream_page();
+    int64_t lt_from = s_lt.on ? os64_micros() : 0;
     preloads_start(p);
     int64_t began = s_script_audit ? os64_micros() : 0;
     int32_t had = p->nsheets;
@@ -15890,6 +21176,8 @@ static void stream_sheets(void)
                       (long)(os64_micros() - began));
         os64_debug_log(line);
     }
+    if (s_lt.on)
+        lt_inside(YONDER_LT_IN_SHEETS, lt_from);
 }
 
 // Whether the script the parse is stopped at waits for the sheets still
@@ -16008,7 +21296,11 @@ static bool stream_turn(void)
         }
         g.stream.ran = false;
         g.stream.stopped = false;
-        int64_t r = stream_parsed(os64_html_parser_resume(g.stream.parser));
+        int64_t lt_from = s_lt.on ? os64_micros() : 0;
+        int64_t resumed = os64_html_parser_resume(g.stream.parser);
+        if (s_lt.on)
+            lt_parse(g.stream.parser, "a resume after a script", 0, lt_from);
+        int64_t r = stream_parsed(resumed);
         if (r != OS64_HTML_OK && r != OS64_HTML_SCRIPT) {
             stream_cut_short();
             return false;
@@ -16047,7 +21339,11 @@ static bool stream_turn(void)
                 return false;
             }
         }
-        int64_t r = stream_parsed(os64_html_parser_feed(g.stream.parser, chunk + at, n - at));
+        int64_t lt_from = s_lt.on ? os64_micros() : 0;
+        int64_t parsed = os64_html_parser_feed(g.stream.parser, chunk + at, n - at);
+        if (s_lt.on)
+            lt_parse(g.stream.parser, "a feed", n - at, lt_from);
+        int64_t r = stream_parsed(parsed);
         if (r == OS64_HTML_SCRIPT)
             break;                      // the slice ends at a script the page runs
         if (r != OS64_HTML_OK) {
@@ -16123,7 +21419,11 @@ static bool stream_turn(void)
             return false;
         }
         g.stream.ending = true;
-        int64_t r = stream_parsed(os64_html_parser_end(g.stream.parser));
+        int64_t lt_from = s_lt.on ? os64_micros() : 0;
+        int64_t ended = os64_html_parser_end(g.stream.parser);
+        if (s_lt.on)
+            lt_parse(g.stream.parser, "the input's end", 0, lt_from);
+        int64_t r = stream_parsed(ended);
         if (r == OS64_HTML_SCRIPT)
             return yonder_scripts_blocking_ready(g.stream.scripts) ||
                    yonder_scripts_connected_pending(g.stream.scripts);
@@ -16238,13 +21538,40 @@ typedef struct {
     os64_gui_rect_t whole;
 } Glass;
 
-static os64_gui_rect_t on_glass(const Glass *gl, os64_gui_rect_t r)
+// What a glass verb drew, `r` on the window: noted over each mapped video
+// whose box this paint part has already painted and whose clip it meets.
+static void plane_note_over(const Glass *gl, os64_gui_rect_t r)
+{
+    if (!s_plane_watch || gl->whole.w <= 0 || r.w <= 0 || r.h <= 0)
+        return;
+    for (int32_t i = 0; i < VIDEOS_MAX; i++) {
+        os64_gui_rect_t met;
+        if (s_videos[i].node != NULL && s_videos[i].mapped && s_videos[i].drawn &&
+            os64_rect_intersect(r, s_videos[i].clip, &met))
+            plane_over_add(met, i);
+    }
+}
+
+// A rectangle moved onto the glass and cut to what is being painted, noting
+// nothing: for a verb that hands over a clip rather than what it draws,
+// which notes its drawing's own bounds (plane_note_over).
+static os64_gui_rect_t glass_cut(const Glass *gl, os64_gui_rect_t r)
 {
     r.x += gl->dx;
     r.y += gl->dy;
     os64_gui_rect_t out;
     if (!os64_rect_intersect(r, gl->clip, &out))
         return (os64_gui_rect_t){0, 0, 0, 0};
+    return out;
+}
+
+// A verb's drawing rectangle moved onto the glass and cut to what is being
+// painted; the cut is what it draws, so on the window over a video's clip
+// it is noted (plane_note_over).
+static os64_gui_rect_t on_glass(const Glass *gl, os64_gui_rect_t r)
+{
+    os64_gui_rect_t out = glass_cut(gl, r);
+    plane_note_over(gl, out);
     return out;
 }
 
@@ -16306,7 +21633,9 @@ static void glass_group_open(void *ctx, os64_gui_rect_t bounds)
     int32_t d = gs->depth++;
     if (d >= GLASS_GROUPS)
         return;
-    os64_gui_rect_t at = on_glass(gl, bounds);
+    // Opening draws nothing: the group's boxes note what they draw, and
+    // laying it back at its close changes only pixels they drew.
+    os64_gui_rect_t at = glass_cut(gl, bounds);
     gs->open[d].at = at;
     gs->open[d].under = NULL;
     if (at.w <= 0 || at.h <= 0)
@@ -16345,13 +21674,22 @@ static void glass_group_close(void *ctx, uint8_t alpha)
 // The verbs that draw something whole — a run, a picture — cut it to
 // `clip`, the painter's view narrowed by any `overflow` that clips the box,
 // met with what is being painted.
+#define TEXT_INK_REACH 8
+
 static void glass_text(void *ctx, const flow_box_t *b, int32_t x, int32_t baseline,
                        os64_gui_rect_t clip, uint32_t colour)
 {
     const Glass *gl = ctx;
-    os64_gui_rect_t cut = on_glass(gl, clip);
+    os64_gui_rect_t cut = glass_cut(gl, clip);
     if (cut.w <= 0 || cut.h <= 0)
         return;
+    // The run's own box, grown by TEXT_INK_REACH for what a face draws past
+    // it (an italic's overhang, a descender), is what it may ink.
+    os64_gui_rect_t run = flow_box_doc_rect(b, scroll_now()), inked;
+    run = (os64_gui_rect_t){run.x + gl->dx - TEXT_INK_REACH, run.y + gl->dy - TEXT_INK_REACH,
+                            run.w + 2 * TEXT_INK_REACH, run.h + 2 * TEXT_INK_REACH};
+    if (os64_rect_intersect(run, cut, &inked))
+        plane_note_over(gl, inked);
     os64_text_draw_alpha(b->run, gl->surf, cut, x + gl->dx, baseline + gl->dy,
                          0xff000000u | colour, flow_alpha(colour));
 }
@@ -16513,6 +21851,33 @@ static os64_dom_image_status_t canvas_source(void *opaque,const os64_html_node_t
     loan->address=yonder_picture_backing_hold(pic->address);
     out->token=loan;return OS64_DOM_IMAGE_READY;
 }
+// What canvas_source's answers stand on, as one number (the image
+// provider's `answers`): which page holds the document, whether it is the
+// one on screen and modern, what an image source reads besides its
+// element (the page's address, scripting, and the view and zoom a
+// selection falls back on before the page has an environment), and
+// image_answers, which moves with every selection made, completed or
+// refused. The binding asks after its update, whose flush
+// (image_sources_flush) reads every source again: a change to the
+// document, to a picture's sources or to the environment moves
+// image_answers there, where it changes a selection. canvas_source reads
+// a picture only through its source's completed selection, so a picture's
+// own changes reach it there too. The document's changes are read first
+// here as well (image_sources_sync), for an image a change brought in
+// that has no source for a flush to read, and for changes it cannot read
+// in full. Never 0, which would say "no answers".
+static uint64_t canvas_source_answers(void *opaque)
+{
+    Page *p=page_of_doc(opaque);
+    if(p==&g.page && p->modern)image_sources_sync(p);
+    uint64_t h=1469598103934665603ull;
+    uint64_t parts[]={(uint64_t)(uintptr_t)p,p==&g.page,
+        p?p->modern:0,p?p->scripting:0,p?p->image_answers:0,
+        (uint64_t)(uint32_t)g.view.bounds.w,(uint64_t)(uint32_t)g.view.bounds.h,g.zoom};
+    for(size_t i=0;i<sizeof(parts)/sizeof(parts[0]);i++)h=(h^parts[i])*1099511628211ull;
+    for(const char *c=p?p->way.url:"";*c;c++)h=(h^(uint8_t)*c)*1099511628211ull;
+    return h|1;
+}
 static void canvas_source_release(void *opaque,os64_dom_image_view_t *view)
 {
     (void)opaque;
@@ -16611,7 +21976,9 @@ static bool glass_backdrop(void *ctx, const flow_box_t *b, int32_t layer,
         h = (uint32_t)vector_pixels.rect.h;
     }
     os64_gui_rect_t on = {area->x + gl->dx, area->y + gl->dy, area->w, area->h};
-    os64_gui_rect_t cut = on_glass(gl, clip);
+    os64_gui_rect_t cut = glass_cut(gl, clip), drawn;
+    if (os64_rect_intersect(cut, on, &drawn))
+        plane_note_over(gl, drawn);   // the tiles land in the area, not across the clip
     tile.at.x += gl->dx;
     tile.at.y += gl->dy;
     if (cut.w > 0 && cut.h > 0)
@@ -16644,6 +22011,9 @@ static bool glass_picture(const Glass *gl, const Page *p, int32_t k, const flow_
         w = (uint32_t)vector_pixels.rect.w;
         h = (uint32_t)vector_pixels.rect.h;
     }
+    os64_gui_rect_t drawn;
+    if (os64_rect_intersect(cut, box, &drawn))
+        plane_note_over(gl, drawn);
     yonder_draw_picture(gl->surf->pixels, gl->surf->pitch_px, cut, box, !b->style->pixelated, px, w, h);
     svg_picture_pixels_free(&vector_pixels);
     return true;
@@ -16654,7 +22024,7 @@ static bool glass_picture(const Glass *gl, const Page *p, int32_t k, const flow_
 static void glass_image(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip)
 {
     const Glass *gl = ctx;
-    os64_gui_rect_t cut = on_glass(gl, clip);
+    os64_gui_rect_t cut = glass_cut(gl, clip);
     if (cut.w <= 0 || cut.h <= 0)
         return;
     const Page *p = &g.page;
@@ -16689,7 +22059,7 @@ static void glass_control(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os6
     // control scrolled out of its box, or past an `overflow: hidden` edge,
     // is not drawn there.
     Glass cut = *(const Glass *)ctx;
-    cut.clip = on_glass(&cut, clip);
+    cut.clip = glass_cut(&cut, clip);    // a clip: the fills below note what they draw
     if (cut.clip.w <= 0 || cut.clip.h <= 0)
         return;
     glass_fill(&cut, c, 0xffffff);
@@ -16762,7 +22132,7 @@ static void glass_stand_in(const Glass *gl, os64_gui_rect_t c, os64_gui_rect_t c
     os64_gui_rect_t room;
     if (!os64_rect_intersect(c, clip, &room))
         return;
-    cut.clip = on_glass(&cut, room);
+    cut.clip = glass_cut(&cut, room);    // a clip: the fills below note what they draw
     if (cut.clip.w <= 0 || cut.clip.h <= 0)
         return;
     if (panel) {
@@ -16807,7 +22177,7 @@ static bool person_scrolls(flow_overflow_t o)
 // something inside it.
 static bool reaches_box(const flow_box_t *box, int32_t x, int32_t y)
 {
-    const flow_box_t *h = flow_hit(g.page.tree, x, y, scroll_now());
+    const flow_box_t *h = page_hit(x, y, scroll_now());
     while (h != NULL && h != box)
         h = h->parent;
     return h != NULL;
@@ -16893,8 +22263,9 @@ static void box_bars(Glass *gl, os64_gui_rect_t view)
 #define SHEET_SIDE 4096
 #define SHEET_PIXELS 2097152
 // A layer's sheets (a filtered or blended group's) are what the painter
-// has already cut to the view grown by the filter's spread (at most 3 x
-// FLOW_FILTER_BLUR_MAX a side), so they are bounded by the window, not by
+// has already cut to the view grown by the filter's spread and what a
+// large blur's reduced copy reads past it (a few hundred pixels a side for
+// each blur in the list), so they are bounded by the window, not by
 // a matrix: the window's size, its spread, and room for a 4K one, so a
 // page-wide filter (`html { filter: grayscale(1) }`) is drawn.
 #define FILTER_SHEET_SIDE 8192
@@ -17023,27 +22394,81 @@ static void video_mark(GlassPane *gp, const flow_box_t *b, os64_gui_rect_t c, os
     }
 }
 
+// The fitted picture of `v` in `b`'s content rectangle `c` (in any one
+// coordinate space), and whether the frame in hand is converted at its
+// size: the frame's half of the plain path's test (pane_video), the other
+// half being that the pane paints straight to the window; the cover a
+// video gives a paint (video_cover_rect) asks this, and the other half as
+// "no group around the draw".
+static bool video_fitted(const Video *v, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t *at)
+{
+    *at = yonder_object_rect(b->style, c, zoomed_px(v->width, g.page.laid_zoom),
+                             zoomed_px(v->height, g.page.laid_zoom));
+    const uint32_t *px;
+    uint32_t w, h;
+    return video_picture(v, &px, &w, &h) && w == (uint32_t)at->w && h == (uint32_t)at->h;
+}
+
+// A closed session's box painted (pane_video, for an element whose video
+// slot has gone): its last picture, the copy its hide owed keeps, at its
+// place, when the page it was on is still the one shown, laid out and
+// scrolled as it was. Painted in the box's own turn of the walk, so what
+// the page paints above the video is laid over it, the place showing that
+// picture as it showed before the plane, and not a hole.
+static void plane_closed_paint(GlassPane *gp, const flow_box_t *b, os64_gui_rect_t clip)
+{
+    if (gp->n != 1 || gp->now[0]->whole.w <= 0)
+        return;     // a group's sheet: the copy is in window pixels
+    Glass *gl = gp->now[0];
+    for (int32_t i = 0; i < PLANE_HIDES_MAX; i++) {
+        const __typeof__(s_plane_hides[0]) *h = &s_plane_hides[i];
+        if (!h->owed || h->copy == NULL || h->node != b->node || h->doc != page_doc(&g.page) ||
+            g.page.tree == NULL || flow_tree_serial(g.page.tree) != h->tree_serial || g.sx != h->sx || g.sy != h->sy)
+            continue;
+        os64_gui_rect_t cut = glass_cut(gl, clip), met;
+        if (!os64_rect_intersect(cut, h->clip, &met))
+            continue;
+        plane_note_over(gl, met);
+        for (int32_t y = met.y; y < met.y + met.h; y++)
+            os64_memcpy(gl->surf->pixels + (size_t)y * gl->surf->pitch_px + met.x,
+                        h->copy + (size_t)(y - h->origin.y) * h->copy_w + (met.x - h->origin.x),
+                        (size_t)met.w * sizeof(uint32_t));
+        if (s_layer.video == NULL)
+            s_plane_counts.hides_copied++;
+    }
+}
+
 // The paint of a video's box (the painter's retained-pixels verb): the
-// latest picture, fitted by object-fit and object-position, the rest of the
-// box the element's own background; the poster in its place while the show
-// poster flag is set, and until the first picture (nothing before either).
+// latest picture (video_picture), fitted by object-fit and object-position,
+// the rest of the box the element's own background; the poster in its place
+// while the show poster flag is set, and until the first picture (nothing
+// before either).
 // THE PLAIN PATH copies the picture's rows into the window: taken when the
 // pane paints straight to the window (no group's sheets: no opacity,
 // transform, filter, mask or blend above the box) and the picture was
-// converted at the fitted size. Otherwise THE GENERAL PATH draws it as a
-// picture is, scaled (a picture from before a resize, at its old size, is
-// drawn so until the new one comes). The size the player converts to is
-// told here, where the fitted rectangle is known.
+// converted at the fitted size (video_fitted). Otherwise THE GENERAL PATH
+// draws it as a picture is, scaled (a picture from before a resize, at its
+// old size, is drawn so until the new one comes). The size the player
+// converts to is told here, where the fitted rectangle is known.
 static void pane_video(GlassPane *gp, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip)
 {
     Video *v = video_of(b->node);
+    if (v != NULL && v == s_layer.video) {
+        // A layer pass reached the video it is made for: what follows is
+        // over the picture, which the plane shows (plane_layer_paint).
+        for (int32_t k = 0; k < gp->n; k++)
+            gp->now[k]->clip = s_layer.clip;
+        s_layer.reached = true;
+        return;
+    }
     // The poster while the show poster flag is set, and after it until the
     // first picture (an autoplay shows no gap between them): drawn as a
     // picture is, on the general path.
-    const PosterSlot *poster = poster_seen(&g.page, b->node);
-    bool poster_ready = poster != NULL && poster->pic >= 0 && g.page.pics[poster->pic].state == PIC_SHOWN;
-    bool picture_ready = v != NULL && v->width > 0 && v->frame.pixels != NULL && v->frame.w > 0 && v->frame.h > 0;
-    bool showing_poster = poster_ready && (poster->flag || !picture_ready);
+    const PosterSlot *poster = poster_showing(v, b->node);
+    const uint32_t *pixels = NULL;
+    uint32_t pw = 0, ph = 0;
+    bool picture_ready = v != NULL && v->width > 0 && video_picture(v, &pixels, &pw, &ph);
+    bool showing_poster = poster != NULL;
     if (showing_poster) {
         for (int32_t k = 0; k < gp->n; ++k) {
             Glass *gl = gp->now[k];
@@ -17052,12 +22477,17 @@ static void pane_video(GlassPane *gp, const flow_box_t *b, os64_gui_rect_t c, os
                 (void)glass_picture(gl, &g.page, poster->pic, b, c, cut);
         }
     }
+    if (v == NULL) {
+        if (!showing_poster)
+            plane_closed_paint(gp, b, clip);
+        return;
+    }
     // The player is told its size whatever is shown, so the first picture
     // comes converted to fit.
-    if (v == NULL || v->width == 0 || v->height == 0)
+    if (v->width == 0 || v->height == 0)
         return;
-    os64_gui_rect_t at = yonder_object_rect(b->style, c, zoomed_px(v->width, g.page.laid_zoom),
-                                            zoomed_px(v->height, g.page.laid_zoom));
+    os64_gui_rect_t at;
+    bool fits = video_fitted(v, b, c, &at);
     // Converted at most VIDEO_CONVERT_MAX a side (each of the player's
     // frames is that large); a bigger fitted rectangle takes the general
     // path, scaled up.
@@ -17075,30 +22505,38 @@ static void pane_video(GlassPane *gp, const flow_box_t *b, os64_gui_rect_t c, os
         // it comes, a second's worth at most.
         v->sizing = 60;
     }
-    const os64_media_player_frame_t *fr = &v->frame;
-    if (fr->pixels == NULL || fr->w == 0 || fr->h == 0 || showing_poster)
+    if (showing_poster || !picture_ready)
         return;
-    bool fits = fr->w == (uint32_t)at.w && fr->h == (uint32_t)at.h;
     int64_t began = os64_micros();
+    bool drew = false;      // some of the picture's pixels, not only its box's letterboxing
     for (int32_t k = 0; k < gp->n; ++k) {
         Glass *gl = gp->now[k];
-        os64_gui_rect_t cut = on_glass(gl, clip);
+        os64_gui_rect_t cut = glass_cut(gl, clip);
         os64_gui_rect_t content = {c.x + gl->dx, c.y + gl->dy, c.w, c.h};
         os64_gui_rect_t box = {at.x + gl->dx, at.y + gl->dy, at.w, at.h};
         if (!os64_rect_intersect(cut, content, &cut) || !os64_rect_intersect(cut, box, &cut))
             continue;
+        drew = true;
+        plane_note_over(gl, cut);   // over a video painted before it, not over itself (its `drawn` is set after)
         if (fits && gp->n == 1 && gl->whole.w > 0) {
-            s_cost.video_plain++;
+            s_cost.video_plain += s_layer.video == NULL;    // a layer pass's draw is no paint's
             for (int32_t y = cut.y; y < cut.y + cut.h; y++)
                 os64_memcpy(gl->surf->pixels + (size_t)y * gl->surf->pitch_px + cut.x,
-                            fr->pixels + (size_t)(y - box.y) * fr->w + (cut.x - box.x), (size_t)cut.w * 4);
+                            pixels + (size_t)(y - box.y) * pw + (cut.x - box.x), (size_t)cut.w * 4);
         } else {
-            s_cost.video_general++;
-            yonder_draw_picture(gl->surf->pixels, gl->surf->pitch_px, cut, box, !b->style->pixelated, fr->pixels,
-                                fr->w, fr->h);
+            s_cost.video_general += s_layer.video == NULL;
+            yonder_draw_picture(gl->surf->pixels, gl->surf->pitch_px, cut, box, !b->style->pixelated, pixels, pw,
+                                ph);
         }
     }
-    s_cost.video_draw_us += (uint64_t)(os64_micros() - began);
+    if (s_layer.video == NULL)
+        s_cost.video_draw_us += (uint64_t)(os64_micros() - began);
+    v->drawn = true;    // what this paint part draws from here is over it
+    uint32_t serial = v->view.frame != NULL ? v->view.serial : v->frame.serial;
+    if (drew && s_layer.video == NULL && serial != v->glass_serial) {   // a layer pass's draw reaches no glass
+        v->glass_serial = serial;
+        v->painted_new = true;      // on the glass with this render's publish, unless placed (videos_glass_published)
+    }
 }
 
 static void pane_canvas(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip)
@@ -17110,22 +22548,40 @@ static void pane_canvas(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_
         return;
     }
     canvas_bitmap_t bitmap;
-    if (!yonder_scripts_canvas_bitmap(g.page.scripts, b->node, &bitmap)) return;
+    s_canvas_last = (__typeof__(s_canvas_last)){0};
+    uint64_t asked = cycles();
+    bool got = yonder_scripts_canvas_bitmap(g.page.scripts, b->node, &bitmap);
+    s_canvas_last.got_cycles = cycles_since(asked);
+    if (!got) return;
+    s_canvas_last.bitmap_w = bitmap.width;
+    s_canvas_last.bitmap_h = bitmap.height;
     draw2d_surface_t source = {(void *)bitmap.pixels, bitmap.width, bitmap.height,
         bitmap.stride, bitmap.capacity, DRAW2D_ARGB8_PREMULTIPLIED};
     os64_gui_rect_t at = yonder_object_rect(b->style, c, zoomed_px(bitmap.width, g.page.laid_zoom),
                                             zoomed_px(bitmap.height, g.page.laid_zoom));
+    // yonder_draw_surface's choice: a box the bitmap's own size is copied.
+    s_canvas_last.smoothed = !b->style->pixelated && ((uint32_t)at.w != bitmap.width || (uint32_t)at.h != bitmap.height);
     bool consumed = gp->n > 0;
     for (int32_t k = 0; k < gp->n; ++k) {
         Glass *gl = gp->now[k];
-        os64_gui_rect_t cut = on_glass(gl, clip);
+        os64_gui_rect_t cut = glass_cut(gl, clip);
         os64_gui_rect_t content = {c.x + gl->dx, c.y + gl->dy, c.w, c.h};
         if (!os64_rect_intersect(cut, content, &cut)) continue;
         os64_gui_rect_t box = {at.x + gl->dx, at.y + gl->dy, at.w, at.h};
-        consumed &= yonder_draw_surface(gl->surf->pixels, gl->surf->pitch_px, cut, box,
-                                        !b->style->pixelated, &source);
+        // What the draw walks: the cut within the bitmap as fitted, which
+        // object-fit may leave smaller than the box.
+        os64_gui_rect_t walked;
+        bool walks = os64_rect_intersect(cut, box, &walked);
+        if (walks)
+            plane_note_over(gl, walked);
+        if (walks && s_canvas_last.targets++ == 0)
+            s_canvas_last.drawn = walked;
+        consumed &= yonder_canvas_keep_draw(g.canvas_keeps, g.paint_cache, b->node, bitmap.revision,
+                                            gl->surf->pixels, gl->surf->pitch_px, cut, box,
+                                            !b->style->pixelated, &source);
     }
-    if (consumed) yonder_scripts_canvas_painted(g.page.scripts, b->node);
+    // A layer pass's draw is thrown away: the canvas's damage is the render's to take.
+    if (consumed && s_layer.video == NULL) yonder_scripts_canvas_painted(g.page.scripts, b->node);
 }
 
 static void pane_control(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip)
@@ -17399,11 +22855,22 @@ static void pane_through_close(void *ctx, uint8_t alpha, bool keep)
     if (t == NULL)
         return;
     yonder_sheets_t s = {t->surf[0].pixels, t->surf[1].pixels, t->bounds.w, t->bounds.h};
+    s_warp_laid = (os64_gui_rect_t){0, 0, 0, 0};
+    s_warp_targets = 0;
     for (int32_t k = 0; k < gp->n; k++) {
         const Glass *on = gp->now[k];
         double lay[6];
         yonder_warp_rebase(t->m, t->bounds.x, t->bounds.y, on->dx, on->dy, lay);
-        os64_gui_rect_t cut = on_glass(on, t->clip);
+        os64_gui_rect_t cut = glass_cut(on, t->clip);
+        // What the warp walks: where the sheets land (their corners'
+        // whole pixels, as yonder_warp bounds itself) within the cut.
+        os64_gui_rect_t lands;
+        bool laid = os64_rect_intersect(flow_affine_rect(lay, (os64_gui_rect_t){0, 0, t->bounds.w, t->bounds.h}),
+                                        cut, &lands);
+        if (laid)
+            plane_note_over(on, lands);
+        if (laid && s_warp_targets++ == 0)
+            s_warp_laid = lands;
         double back[6];
         if (cut.w > 0 && cut.h > 0 && flow_affine_invert(lay, back))
             (void)yonder_warp(on->surf->pixels, on->surf->pitch_px, cut, &s, lay, back, alpha);
@@ -17439,7 +22906,7 @@ static bool pane_layer_open(void *ctx, os64_gui_rect_t bounds)
 // for the filter's work, laid unfiltered; either counted once
 // (yonder_paint_layers_refused).
 static void pane_layer_close(void *ctx, const flow_filter_t *filter, int32_t n, uint32_t current,
-                             uint8_t alpha, flow_blend_t mode, const uint8_t *cover)
+                             uint8_t alpha, flow_blend_t mode, const uint8_t *cover, flow_point_t grid)
 {
     GlassPane *gp = ctx;
     GlassThrough *t = pane_sheets_close(gp);
@@ -17453,7 +22920,7 @@ static void pane_layer_close(void *ctx, const flow_filter_t *filter, int32_t n, 
     if (n > 0) {
         void *work = glass_take(yonder_filter_work_bytes(w, h, filter, n));
         if (work != NULL) {
-            yonder_filter_run(layer, w, h, filter, n, current, work);
+            yonder_filter_run(layer, w, h, filter, n, current, grid, work);
             glass_give(work);
         } else {
             plain = true;
@@ -17469,6 +22936,9 @@ static void pane_layer_close(void *ctx, const flow_filter_t *filter, int32_t n, 
         yonder_paint_layers_refused++;
     for (int32_t k = 0; k < gp->n; k++) {
         const Glass *on = gp->now[k];
+        // The layer's boxes drew on its sheets, which note nothing: laying
+        // it is its drawing, wherever it lands.
+        plane_note_over(on, glass_cut(on, t->bounds));
         yonder_layer_lay(on->surf->pixels, on->surf->pitch_px, on->clip, layer, w, h,
                          t->bounds.x + on->dx, t->bounds.y + on->dy, alpha, mode);
     }
@@ -17492,12 +22962,18 @@ static void pane_layer_take(void *ctx, uint8_t *out, bool luminance)
 // A backdrop (FILTER.md § 7) on the window: `rect` and its list's reach
 // round it read from the window — mirrored, as a filter's layer is cut —
 // no farther than the page view, filtered as an opaque layer, and laid
-// back inside `rect` at `cover`. Refused on a group's sheets, where what
+// back inside `rect` at `cover`, a large blur's squares counted from the
+// border box's corner (`grid` places rect's). The layer is NOT grown by
+// what a reduced blur reads past the reach (yonder_filter_reads_more), as
+// a filter's is: a change past the reach does not repaint the backdrop
+// (FILTER.md § 7, Damage), so the backdrop must not read it; past the
+// layer it reads nothing, as every blur does. Refused on a group's sheets, where what
 // is behind is not the page; with no memory; and for a layer past
 // FILTER_SHEET_SIDE or FILTER_SHEET_PIXELS, or lying past half of what a
 // coordinate can say, or with no page view to read.
 static bool pane_backdrop_filter(void *ctx, os64_gui_rect_t rect, const uint8_t *cover,
-                                 const flow_filter_t *filter, int32_t n, uint32_t current)
+                                 const flow_filter_t *filter, int32_t n, uint32_t current,
+                                 flow_point_t grid)
 {
     GlassPane *gp = ctx;
     if (gp->n != 1 || gp->depth > 0 || gp->clip != NULL)
@@ -17521,7 +22997,8 @@ static bool pane_backdrop_filter(void *ctx, os64_gui_rect_t rect, const uint8_t 
                  yonder_backdrop_take(on->surf->pixels, on->surf->pitch_px, whole, (int32_t)x0,
                                       (int32_t)y0, (int32_t)w, (int32_t)h, layer);
     if (drawn) {
-        yonder_filter_run(layer, (int32_t)w, (int32_t)h, filter, n, current, work);
+        flow_point_t at = {(int32_t)(grid.x - (int64_t)d[FLOW_RIGHT]), (int32_t)(grid.y - (int64_t)d[FLOW_BOTTOM])};
+        yonder_filter_run(layer, (int32_t)w, (int32_t)h, filter, n, current, at, work);
         yonder_backdrop_put(on->surf->pixels, on->surf->pitch_px, on->clip, layer, (int32_t)w,
                             (int32_t)h, (int32_t)x0, (int32_t)y0, box, cover);
     }
@@ -17661,7 +23138,13 @@ static bool timed_through_open(void *ctx, os64_gui_rect_t bounds, const double m
                                int keep)
 {
     cost_begin(PS_WARPS);
+    uint64_t began = cycles();
     bool open = pane_through_open(ctx, bounds, m, clip, keep);
+    if (open && s_nwarps_open < EFFECTS_DEPTH)
+        s_warps_open[s_nwarps_open] = (__typeof__(s_warps_open[0])){bounds.w, bounds.h,
+                                                                     cycles_since(began)};
+    if (open)
+        s_nwarps_open++;
     cost_end(PS_WARPS);
     return open;
 }
@@ -17669,40 +23152,167 @@ static bool timed_through_open(void *ctx, os64_gui_rect_t bounds, const double m
 static void timed_through_close(void *ctx, uint8_t alpha, bool keep)
 {
     cost_begin(PS_WARPS);
+    uint64_t began = cycles();
     pane_through_close(ctx, alpha, keep);
+    uint64_t spent = cycles_since(began);
+    if (s_nwarps_open > 0 && --s_nwarps_open < EFFECTS_DEPTH) {
+        char what[80];
+        os64_snprintf(what, sizeof(what), "warp %dx%d%s laid on %dx%d on %d", (int)s_warps_open[s_nwarps_open].w,
+                      (int)s_warps_open[s_nwarps_open].h, keep ? " kept" : "", (int)s_warp_laid.w,
+                      (int)s_warp_laid.h, (int)s_warp_targets);
+        effect_counted(what, spent + s_warps_open[s_nwarps_open].cycles);
+    }
     cost_end(PS_WARPS);
 }
 
 static bool timed_layer_open(void *ctx, os64_gui_rect_t bounds)
 {
     cost_begin(PS_FILTERS);
+    uint64_t began = cycles();
     bool open = pane_layer_open(ctx, bounds);
+    if (open && s_nlayers_open < EFFECTS_DEPTH)
+        s_layers_open[s_nlayers_open] = (__typeof__(s_layers_open[0])){bounds.w, bounds.h,
+                                                                        cycles_since(began)};
+    if (open)
+        s_nlayers_open++;
     cost_end(PS_FILTERS);
     return open;
 }
 
+// The layer open innermost, closed after `spent` more: counted as `kind` with
+// `said`, at the size it was opened.
+static void effect_layer_closed(const char *kind, const char *said, uint64_t spent)
+{
+    if (s_nlayers_open == 0 || --s_nlayers_open >= EFFECTS_DEPTH)
+        return;
+    char what[64];
+    os64_snprintf(what, sizeof(what), "%s %s %dx%d", kind, said, (int)s_layers_open[s_nlayers_open].w,
+                  (int)s_layers_open[s_nlayers_open].h);
+    effect_counted(what, spent + s_layers_open[s_nlayers_open].cycles);
+}
+
 static void timed_layer_close(void *ctx, const flow_filter_t *filter, int32_t n, uint32_t current,
-                              uint8_t alpha, flow_blend_t mode, const uint8_t *cover)
+                              uint8_t alpha, flow_blend_t mode, const uint8_t *cover, flow_point_t grid)
 {
     cost_begin(PS_FILTERS);
-    pane_layer_close(ctx, filter, n, current, alpha, mode, cover);
+    uint64_t began = cycles();
+    pane_layer_close(ctx, filter, n, current, alpha, mode, cover, grid);
+    uint64_t spent = cycles_since(began);
+    char said[40];
+    if (n > 0)
+        effect_filters(said, sizeof(said), filter, n);
+    else
+        os64_snprintf(said, sizeof(said), "alpha %d blend %d%s", (int)alpha, (int)mode, cover ? " masked" : "");
+    effect_layer_closed(n > 0 ? "filter" : "layer", said, spent);
     cost_end(PS_FILTERS);
 }
 
 static void timed_layer_take(void *ctx, uint8_t *out, bool luminance)
 {
     cost_begin(PS_FILTERS);
+    uint64_t began = cycles();
     pane_layer_take(ctx, out, luminance);
+    effect_layer_closed("mask", luminance ? "luminance" : "alpha", cycles_since(began));
     cost_end(PS_FILTERS);
 }
 
 static bool timed_backdrop_filter(void *ctx, os64_gui_rect_t rect, const uint8_t *cover,
-                                  const flow_filter_t *filter, int32_t n, uint32_t current)
+                                  const flow_filter_t *filter, int32_t n, uint32_t current,
+                                  flow_point_t grid)
 {
     cost_begin(PS_FILTERS);
-    bool drawn = pane_backdrop_filter(ctx, rect, cover, filter, n, current);
+    uint64_t began = cycles();
+    bool drawn = pane_backdrop_filter(ctx, rect, cover, filter, n, current, grid);
+    char said[40], what[64];
+    effect_filters(said, sizeof(said), filter, n);
+    os64_snprintf(what, sizeof(what), "backdrop %s %dx%d", said, (int)rect.w, (int)rect.h);
+    effect_counted(what, cycles_since(began));
     cost_end(PS_FILTERS);
     return drawn;
+}
+
+// The verbs no paint stage times, into the paint effects by kind: what is
+// left of the view's rest past them is the painter's and the walk's own.
+static void timed_fill(void *ctx, os64_gui_rect_t r, uint32_t colour)
+{
+    uint64_t began = cycles();
+    pane_fill(ctx, r, colour);
+    effect_counted("fills", cycles_since(began));
+}
+
+static void timed_canvas(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip)
+{
+    uint64_t began = cycles();
+    if (b == s_paint_check_box)
+        s_paint_check_groups = yonder_paint_groups_open;
+    pane_canvas(ctx, b, c, clip);
+    bool video = b->node != NULL && b->node->kind == OS64_HTML_ELEMENT && b->node->tag == OS64_HTML_TAG_VIDEO;
+    if (!video && s_ndrawn_canvases < MARKED_CANVASES)
+        s_drawn_canvases[s_ndrawn_canvases++] = b->node;
+    else if (!video)
+        s_drawn_canvases_lost = true;
+    uint64_t spent = cycles_since(began);
+    char what[112];
+    if (video) {
+        os64_snprintf(what, sizeof(what), "video %dx%d", (int)c.w, (int)c.h);
+        effect_counted(what, spent);
+    } else {
+        // In two rows: asking the script side for the bitmap, whose cost
+        // the cut cannot follow, and the draw, which walks only the cut.
+        // Which canvas, by its element (cut short), so two drawn over one
+        // box are two rows.
+        uint64_t got = s_canvas_last.got_cycles < spent ? s_canvas_last.got_cycles : spent;
+        char name[32] = "canvas";
+        if (b->node != NULL)
+            element_named(name, sizeof(name), "", b->node);
+        os64_snprintf(what, sizeof(what), "%s %dx%d of %ux%u %s drawn %dx%d on %d", name, (int)c.w, (int)c.h,
+                      (unsigned)s_canvas_last.bitmap_w, (unsigned)s_canvas_last.bitmap_h,
+                      s_canvas_last.smoothed ? "smoothed" : "copied", (int)s_canvas_last.drawn.w,
+                      (int)s_canvas_last.drawn.h, (int)s_canvas_last.targets);
+        effect_counted(what, spent - got);
+        os64_snprintf(what, sizeof(what), "canvas bitmap %ux%u asked for", (unsigned)s_canvas_last.bitmap_w,
+                      (unsigned)s_canvas_last.bitmap_h);
+        effect_counted(what, got);
+    }
+    if (video)
+        s_effects_past_video = true;
+}
+
+static void timed_control(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip)
+{
+    uint64_t began = cycles();
+    pane_control(ctx, b, c, clip);
+    effect_counted("form controls", cycles_since(began));
+}
+
+static void timed_stand_in(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip, uint32_t ink,
+                           uint32_t paper)
+{
+    uint64_t began = cycles();
+    pane_stand_in(ctx, b, c, clip, ink, paper);
+    effect_counted("stand-ins", cycles_since(began));
+}
+
+static bool timed_clip_open(void *ctx, os64_gui_rect_t bounds)
+{
+    uint64_t began = cycles();
+    bool open = pane_clip_open(ctx, bounds);
+    effect_counted("text clips", cycles_since(began));
+    return open;
+}
+
+static void timed_clip_fill(void *ctx)
+{
+    uint64_t began = cycles();
+    pane_clip_fill(ctx);
+    effect_counted("text clips", cycles_since(began));
+}
+
+static void timed_clip_close(void *ctx)
+{
+    uint64_t began = cycles();
+    pane_clip_close(ctx);
+    effect_counted("text clips", cycles_since(began));
 }
 
 static void timed_mask(void *ctx, os64_gui_rect_t rect, const uint8_t *alpha, uint32_t colour)
@@ -17719,6 +23329,653 @@ static void timed_pixels(void *ctx, os64_gui_rect_t rect, const uint32_t *argb)
     cost_end(PS_LAID);
 }
 
+// THE PAINT BENEATH THE PICTURE (VIDEO.md § 5, V.7.1). The cover `v` gives
+// a paint: in document coordinates, the pixels its plain copy writes of
+// the frame in hand — the fitted picture met with its content box and its
+// clip, as pane_video cuts them — when that frame is converted at the
+// fitted size, the walk opens no group around its draw (cover_groups),
+// the page draws videos at all (modern), the box is drawn, no line's
+// ellipsis cuts it, its poster is not shown (poster_showing), and covers
+// are on (`--cover=off`). False otherwise.
+//
+// The groups the walk opens round `b`'s draw: flow_paint_path's, less those
+// round the full-screen element, which the top layer's walk does not lay
+// (paint.c's top_open). A path past what is kept here counts as more than
+// none.
+#define COVER_PATH_MAX 32
+static int32_t cover_groups(const flow_box_t *b)
+{
+    const flow_box_t *path[COVER_PATH_MAX];
+    int32_t n = flow_paint_path(g.page.tree, b, path, COVER_PATH_MAX);
+    const flow_box_t *top = s_fs.active && s_fs.top != NULL ? flow_box_for(g.page.tree, s_fs.top) : NULL;
+    if (n <= 0 || top == NULL || n > COVER_PATH_MAX)
+        return n;
+    int32_t laid = 0;
+    for (int32_t i = 0; i < n; i++) {
+        bool inside = false;
+        for (const flow_box_t *a = path[i]; a != NULL && !inside; a = a->parent)
+            inside = a == top;
+        laid += inside;
+    }
+    return laid;
+}
+
+static bool video_cover_rect(const Video *v, const flow_box_t *b, os64_gui_rect_t *out)
+{
+    if (!s_covers || !g.page.modern || g.page.tree == NULL || b == NULL || !b->replaced || b->unpainted ||
+        b->style->visibility != FLOW_VISIBLE || v->width == 0 || v->height == 0 ||
+        poster_showing(v, b->node) != NULL || cover_groups(b) != 0)
+        return false;
+    flow_cut_memo_t cuts;
+    flow_cut_memo_open(&cuts, g.page.tree);
+    bool cut = false;
+    for (const flow_box_t *a = b->parent; a != NULL && !cut; a = a->parent)
+        cut = a->kind == FLOW_BOX_LINE && flow_cut_memo_get(&cuts, a).on;
+    flow_cut_memo_close(&cuts);
+    if (cut)
+        return false;
+    flow_point_t scroll = scroll_now();
+    os64_gui_rect_t content = yonder_content_rect(b);
+    flow_point_t off = flow_box_doc_offset(b, scroll);
+    content.x += off.x;
+    content.y += off.y;
+    os64_gui_rect_t at;
+    if (!video_fitted(v, b, content, &at) || !os64_rect_intersect(at, content, out))
+        return false;
+    return !b->clipped || os64_rect_intersect(*out, flow_box_doc_clip(b, scroll), out);
+}
+
+// The box after `b` in a walk of `root`'s boxes, children first.
+static const flow_box_t *box_after_in(const flow_box_t *b, const flow_box_t *root)
+{
+    if (b->first != NULL)
+        return b->first;
+    for (; b != NULL && b != root; b = b->parent)
+        if (b->next != NULL)
+            return b->next;
+    return NULL;
+}
+
+// Whether a box that reads the window's pixels beneath it — a backdrop
+// filter, or a blend other than normal — may read anywhere in `r`
+// (document coordinates): its box grown by the farthest a filter reaches
+// (three times FLOW_FILTER_BLUR_MAX). Such a reader across the edge of a
+// cover's part reads pixels a paint split there has not painted yet, or
+// has painted once already, and one beside the picture reads frame pixels
+// a frame marking only its cover's part would leave old; so a region one
+// may read is neither split nor narrowed (VIDEO.md § 5, R split).
+static bool backdrop_read_meets(os64_gui_rect_t r)
+{
+    const flow_box_t *root = g.page.tree != NULL ? flow_root(g.page.tree) : NULL;
+    flow_point_t scroll = scroll_now();
+    const int32_t reach = 3 * FLOW_FILTER_BLUR_MAX;
+    for (const flow_box_t *b = root; b != NULL; b = box_after_in(b, root)) {
+        const flow_style_t *s = b->style;
+        if (s == NULL || (s->nbackdrop_filter == 0 && s->mix_blend == FLOW_BLEND_NORMAL) ||
+            s->visibility != FLOW_VISIBLE || b->unpainted)
+            continue;
+        os64_gui_rect_t at = flow_box_doc_rect(b, scroll), met;
+        int64_t x0 = (int64_t)at.x - reach, y0 = (int64_t)at.y - reach;
+        int64_t x1 = (int64_t)at.x + at.w + reach, y1 = (int64_t)at.y + at.h + reach;
+        os64_gui_rect_t grown = {(int32_t)(x0 < INT32_MIN ? INT32_MIN : x0), (int32_t)(y0 < INT32_MIN ? INT32_MIN : y0),
+                                 (int32_t)(x1 - x0 > INT32_MAX ? INT32_MAX : x1 - x0),
+                                 (int32_t)(y1 - y0 > INT32_MAX ? INT32_MAX : y1 - y0)};
+        if (os64_rect_intersect(grown, r, &met))
+            return true;
+    }
+    return false;
+}
+
+// The cover for a paint of `view` (document coordinates): the video whose
+// cover meets it most, its box in `*box` and its cover in `*covered`; NULL
+// for none.
+static const Video *video_cover(os64_gui_rect_t view, const flow_box_t **box, os64_gui_rect_t *covered)
+{
+    const Video *best = NULL;
+    int64_t most = 0;
+    for (int32_t i = 0; i < VIDEOS_MAX; i++) {
+        const Video *v = &s_videos[i];
+        const flow_box_t *b = v->node != NULL && g.page.tree != NULL ? flow_box_for(g.page.tree, v->node) : NULL;
+        os64_gui_rect_t c, met;
+        if (b == NULL || !video_cover_rect(v, b, &c) || !os64_rect_intersect(c, view, &met))
+            continue;
+        if ((int64_t)met.w * met.h > most) {
+            most = (int64_t)met.w * met.h;
+            best = v;
+            *box = b;
+            *covered = c;
+        }
+    }
+    return best;
+}
+
+// After a covered paint: each canvas marked for it that the paint did not
+// draw — culled beneath the cover — is looked up (which applies a pending
+// reset) and acknowledged, no script between. It cannot be seen where the
+// cover is, and a canvas the paint drew is the canvas verb's to acknowledge
+// (VIDEO.md § 5, the side effects).
+static void canvases_acknowledge(void)
+{
+    for (int32_t i = 0; !s_marked_canvases_lost && !s_drawn_canvases_lost && i < s_nmarked_canvases; i++) {
+        bool drawn = false;
+        for (int32_t k = 0; k < s_ndrawn_canvases && !drawn; k++)
+            drawn = s_drawn_canvases[k] == s_marked_canvases[i];
+        if (drawn)
+            continue;
+        canvas_bitmap_t bitmap;
+        if (yonder_scripts_canvas_bitmap(g.page.scripts, s_marked_canvases[i], &bitmap))
+            yonder_scripts_canvas_painted(g.page.scripts, s_marked_canvases[i]);
+    }
+}
+
+// One paint of `part` (document coordinates) of a split view, the window's
+// clip narrowed to it for the paint's length: a filtered layer is grown
+// past its view by the filter's reach and laid through that clip, which
+// must not let it over a part another of the split's paints has drawn
+// (Codex, #698). `cover` as yonder_paint_from's, NULL for the ordinary
+// way; false when the walk never handed the cover over.
+static bool paint_part(Glass *gl, const yonder_verbs_t *v, os64_gui_rect_t part, os64_gui_rect_t whole,
+                       const flow_box_t *cover)
+{
+    planes_part_begin();
+    os64_gui_rect_t was = gl->clip, win = {part.x + gl->dx, part.y + gl->dy, part.w, part.h};
+    if (!os64_rect_intersect(win, was, &gl->clip)) {
+        gl->clip = was;
+        return true;
+    }
+    const yonder_dark_t *dark = s_dark ? &kDark : NULL;
+    bool found = true;
+    if (cover != NULL)
+        found = yonder_paint_from(g.page.tree, part, whole, scroll_now(), PAGE_PAPER, dark, g.paint_cache,
+                                  g.paint_scratch, v, cover);
+    else
+        yonder_paint(g.page.tree, part, whole, scroll_now(), PAGE_PAPER, dark, g.paint_cache, g.paint_scratch, v);
+    gl->clip = was;
+    return found;
+}
+
+// `not covered reading N` in the record (--layout-profile, written at each
+// reading, diag_paint_reading): for each paint a video would have covered
+// that the guards painted the ordinary way, which limit
+// it passed first and the element that passed it, counted, with the latest
+// one's numbers — what of the element was counted and whether inside a
+// matrix (where a group counts its bounds whole), and the bound against
+// the limit (WHOLE_REPAINTS.md W0).
+static void cover_refusal_note(const flow_paint_asks_t *asks, const flow_paint_limits_t *limits, os64_gui_rect_t view)
+{
+    if (!s_layout_profile || layout_profile_diag(&g.page) == NULL)
+        return;
+    static const char *const kOver[] = {"within", "budget", "a sheet through a matrix", "a layer's sheet",
+                                        "a backdrop's sheet", "nested too deep"};
+    _Static_assert(sizeof(kOver) / sizeof(kOver[0]) == FLOW_ASKS_DEEP + 1, "not covered: a name each");
+    char at[96] = "", note[160];
+    if (asks->box != NULL && asks->box->node != NULL)
+        element_named(at, sizeof(at), "", asks->box->node);
+    const char *inside = asks->inside ? " inside a matrix" : "";
+    if (asks->over == FLOW_ASKS_BUDGET)
+        os64_snprintf(note, sizeof(note), "charged %ld for %dx%d%s; the bound %ld of %ld; view %dx%d",
+                      (long)asks->box_charge, (int)asks->rect.w, (int)asks->rect.h, inside, (long)asks->charge,
+                      (long)limits->budget, (int)view.w, (int)view.h);
+    else
+        os64_snprintf(note, sizeof(note), "%dx%d%s; the bound %ld of %ld; view %dx%d", (int)asks->rect.w,
+                      (int)asks->rect.h, inside, (long)asks->charge, (long)limits->budget, (int)view.w,
+                      (int)view.h);
+    counted_at(&s_not_covered, (unsigned)asks->over <= FLOW_ASKS_DEEP ? kOver[asks->over] : "?", at, note);
+}
+
+// `view` (document coordinates) painted: through the cover a video gives it
+// when there is one — the covered part from the video up, the rest of
+// `view`, at most four rectangles, the ordinary way — or the ordinary way
+// whole, which is also how a `view` the cover does not fill is painted when
+// a backdrop reader may read it (backdrop_read_meets). The layers drawn
+// plain, the most of any of its paints.
+static uint32_t view_paint_parts(Glass *gl, const yonder_verbs_t *v, os64_gui_rect_t view, os64_gui_rect_t whole)
+{
+    flow_point_t scroll = scroll_now();
+    const yonder_dark_t *dark = s_dark ? &kDark : NULL;
+    const flow_box_t *box = NULL;
+    os64_gui_rect_t covered, inner;
+    bool split = false;
+    if (video_cover(view, &box, &covered) == NULL || !os64_rect_intersect(covered, view, &inner) ||
+        ((split = inner.x != view.x || inner.y != view.y || inner.w != view.w || inner.h != view.h) &&
+         backdrop_read_meets(view))) {
+        if (split)
+            s_cost.covered_refused++;
+        yonder_paint(g.page.tree, view, whole, scroll, PAGE_PAPER, dark, g.paint_cache, g.paint_scratch, v);
+        return yonder_paint_layers_refused;
+    }
+    // Every paint of `view`, covered or a piece, must decide each layer and
+    // each sheet as the ordinary paint of it would: one whose layers might
+    // run out of the budget (YONDER_FILTER_AREA_VIEWS of the whole view), or
+    // that might ask for a sheet past its limit (a laid group's SHEET_SIDE
+    // and SHEET_PIXELS, a layer's FILTER_SHEET_*), is painted the ordinary
+    // way, both asked in one walk (flow_paint_asks; Codex, #698), and the
+    // record says why (cover_refusal_note).
+    const flow_paint_limits_t limits = {(int64_t)YONDER_FILTER_AREA_VIEWS * whole.w * whole.h, SHEET_SIDE,
+                                        SHEET_PIXELS, FILTER_SHEET_SIDE, FILTER_SHEET_PIXELS};
+    flow_paint_asks_t asks;
+    if (!flow_paint_asks(g.page.tree, view, scroll, &limits, &asks)) {
+        s_cost.covered_budget++;
+        cover_refusal_note(&asks, &limits, view);
+        yonder_paint(g.page.tree, view, whole, scroll, PAGE_PAPER, dark, g.paint_cache, g.paint_scratch, v);
+        return yonder_paint_layers_refused;
+    }
+    uint32_t refused = 0;
+    bool wanted = s_paint_check != 0 && ++s_paint_checked % s_paint_check == 0, check = wanted;
+    // Under the check, the window's pixels of the covered part as they
+    // were, then as the covered paint leaves them.
+    os64_gui_rect_t win = {inner.x + gl->dx, inner.y + gl->dy, inner.w, inner.h};
+    size_t n = (size_t)inner.w * (size_t)inner.h;
+    uint32_t *before = check ? os64_malloc(n * sizeof(uint32_t)) : NULL;
+    uint32_t *after = check ? os64_malloc(n * sizeof(uint32_t)) : NULL;
+    check = check && before != NULL && after != NULL && win.x >= 0 && win.y >= 0 &&
+            (uint32_t)(win.x + win.w) <= gl->surf->width && (uint32_t)(win.y + win.h) <= gl->surf->height;
+    if (check)
+        for (int32_t y = 0; y < win.h; y++)
+            os64_memcpy(before + (size_t)y * inner.w, gl->surf->pixels + (size_t)(win.y + y) * gl->surf->pitch_px + win.x,
+                        (size_t)inner.w * sizeof(uint32_t));
+    bool found = paint_part(gl, v, inner, whole, box);
+    refused = yonder_paint_layers_refused;
+    s_cost.covered_paints++;
+    if (!found) {
+        s_cost.covered_again++;
+        (void)paint_part(gl, v, inner, whole, NULL);
+        refused = yonder_paint_layers_refused > refused ? yonder_paint_layers_refused : refused;
+        check = false;
+    }
+    if (check) {
+        for (int32_t y = 0; y < win.h; y++) {
+            uint32_t *row = gl->surf->pixels + (size_t)(win.y + y) * gl->surf->pitch_px + win.x;
+            os64_memcpy(after + (size_t)y * inner.w, row, (size_t)inner.w * sizeof(uint32_t));
+            os64_memcpy(row, before + (size_t)y * inner.w, (size_t)inner.w * sizeof(uint32_t));
+        }
+        s_paint_check_box = box;
+        s_paint_check_groups = -1;
+        (void)paint_part(gl, v, inner, whole, NULL);
+        s_paint_check_box = NULL;
+        int64_t first = -1;
+        for (int32_t y = 0; y < win.h && first < 0; y++) {
+            const uint32_t *row = gl->surf->pixels + (size_t)(win.y + y) * gl->surf->pitch_px + win.x;
+            for (int32_t x = 0; x < win.w && first < 0; x++)
+                if ((row[x] ^ after[(size_t)y * inner.w + x]) & 0x00ffffffu)
+                    first = (int64_t)y * inner.w + x;
+        }
+        s_paint_compared++;
+        if (first >= 0 || s_paint_check_groups != 0) {
+            s_paint_differed++;
+            char named[96] = "", line[256];
+            if (box->node != NULL && box->node->kind == OS64_HTML_ELEMENT)
+                element_named(named, sizeof(named), "", box->node);
+            os64_snprintf(line, sizeof(line),
+                          "a covered paint differs from the ordinary one: %s, R %d,%d %dx%d, first pixel %s%ld,%ld, "
+                          "groups predicted 0, found %d",
+                          named[0] ? named : "a video", (int)inner.x, (int)inner.y, (int)inner.w, (int)inner.h,
+                          first >= 0 ? "" : "none ", first >= 0 ? (long)(inner.x + first % inner.w) : 0L,
+                          first >= 0 ? (long)(inner.y + first / inner.w) : 0L, (int)s_paint_check_groups);
+            yonder_diag_failed_seen(g.page.diag, "paint check", line);
+            os64_debug_log(line);
+        }
+    }
+    // A check due says what it found, or that it could not be made: no
+    // memory for the two copies, the part off the window's surface, or a
+    // walk that never handed the video over.
+    if (wanted) {
+        if (!check)
+            s_paint_uncompared++;
+        char said[128];
+        os64_snprintf(said, sizeof(said), "%lu compared, %lu differed, %lu could not be compared",
+                      (unsigned long)s_paint_compared, (unsigned long)s_paint_differed,
+                      (unsigned long)s_paint_uncompared);
+        yonder_diag_fact(g.page.diag, "paint check", said);
+    }
+    os64_free(before);
+    os64_free(after);
+    // The rest of `view`, the ordinary way: above and below the covered
+    // part across the whole width, then left and right of it in its rows.
+    os64_gui_rect_t rest[4] = {
+        {view.x, view.y, view.w, inner.y - view.y},
+        {view.x, inner.y + inner.h, view.w, view.y + view.h - (inner.y + inner.h)},
+        {view.x, inner.y, inner.x - view.x, inner.h},
+        {inner.x + inner.w, inner.y, view.x + view.w - (inner.x + inner.w), inner.h},
+    };
+    for (int32_t i = 0; i < 4; i++) {
+        if (rest[i].w <= 0 || rest[i].h <= 0)
+            continue;
+        s_cost.covered_pieces++;
+        s_effects_past_video = false;
+        (void)paint_part(gl, v, rest[i], whole, NULL);
+        refused = yonder_paint_layers_refused > refused ? yonder_paint_layers_refused : refused;
+    }
+    canvases_acknowledge();
+    return refused;
+}
+
+// What the shown tree paints at page point (`x`, `y`), for a check that
+// differs: the element of the deepest painted box whose rect holds it (of
+// two as deep, the later in the tree's order), and the nearest other
+// element its box is in, named into `out`.
+static void damage_painted_at(char *out, size_t cap, int32_t x, int32_t y)
+{
+    const flow_box_t *deepest = NULL;
+    int32_t depth = 0, most = -1;
+    flow_point_t scroll = scroll_now();
+    for (const flow_box_t *b = flow_root(g.page.tree); b != NULL;) {
+        os64_gui_rect_t r = flow_box_doc_rect(b, scroll);
+        if (!b->unpainted && box_element(b) != NULL && depth >= most && x >= r.x && y >= r.y &&
+            (int64_t)x < (int64_t)r.x + r.w && (int64_t)y < (int64_t)r.y + r.h) {
+            deepest = b;
+            most = depth;
+        }
+        if (b->first != NULL) {
+            b = b->first;
+            depth++;
+            continue;
+        }
+        while (b != NULL && b->next == NULL) {
+            b = b->parent;
+            depth--;
+        }
+        b = b != NULL ? b->next : NULL;
+    }
+    const os64_html_node_t *e = deepest != NULL ? box_element(deepest) : NULL, *round = NULL;
+    for (const flow_box_t *a = deepest; a != NULL && round == NULL; a = a->parent)
+        if (box_element(a) != e)
+            round = box_element(a);
+    char at[96] = "nothing", in[96] = "";
+    if (e != NULL)
+        element_named(at, sizeof(at), "", e);
+    if (round != NULL)
+        element_named(in, sizeof(in), " in ", round);
+    os64_snprintf(out, cap, "%s%s", at, in);
+}
+
+// What changed the view since the last check (s_damage_since), in words,
+// into `out`; then counted again from nothing.
+static void damage_since_said(char *out, size_t cap)
+{
+    size_t at = (size_t)os64_snprintf(out, cap,
+        "%u rebuilds (%u nothing to paint, %u in parts, %u whole), %u made current with no layout, "
+        "%u ticks (%u marked nothing); parts marked by ticks %u, videos %u, canvases %u, others %u",
+        (unsigned)(s_damage_since.rebuilt_nothing + s_damage_since.rebuilt_parts + s_damage_since.rebuilt_whole),
+        (unsigned)s_damage_since.rebuilt_nothing, (unsigned)s_damage_since.rebuilt_parts,
+        (unsigned)s_damage_since.rebuilt_whole, (unsigned)s_damage_since.advanced, (unsigned)s_damage_since.ticks,
+        (unsigned)s_damage_since.ticks_unmarked, (unsigned)s_damage_since.parts_tick,
+        (unsigned)s_damage_since.parts_video, (unsigned)s_damage_since.parts_canvas,
+        (unsigned)s_damage_since.parts_other);
+    bool any = false;
+    for (int32_t i = 0; i < WHOLE_COUNT && at < cap; i++)
+        if (s_damage_since.whole[i] != 0) {
+            at += (size_t)os64_snprintf(out + at, cap - at, "%s%s %u", any ? ", " : "; the whole view by ",
+                                        kWholeBy[i], (unsigned)s_damage_since.whole[i]);
+            any = true;
+        }
+    if (!any && at < cap)
+        os64_snprintf(out + at, cap - at, "; the whole view by nothing");
+    os64_memset(&s_damage_since, 0, sizeof(s_damage_since));
+}
+
+// The whole view painted again over `win`, which holds the first whole
+// paint, and the two held to each other outside `left_out`: into `out`,
+// whether they agree, or where and by how much they do not.
+static void damage_paint_again(Glass *gl, const yonder_verbs_t *v, os64_gui_rect_t whole, os64_gui_rect_t win,
+                               const os64_gui_rect_t *left_out, int32_t nleft, char *out, size_t cap)
+{
+    uint32_t *first = os64_malloc((size_t)win.w * (size_t)win.h * sizeof(uint32_t));
+    if (first == NULL) {
+        os64_snprintf(out, cap, "not painted again: no memory");
+        return;
+    }
+    for (int32_t y = 0; y < win.h; y++)
+        os64_memcpy(first + (size_t)y * win.w, gl->surf->pixels + (size_t)(win.y + y) * gl->surf->pitch_px + win.x,
+                    (size_t)win.w * sizeof(uint32_t));
+    os64_gui_rect_t was = gl->clip, view = {win.x - gl->dx, win.y - gl->dy, win.w, win.h};
+    gl->clip = win;
+    yonder_paint(g.page.tree, view, whole, scroll_now(), PAGE_PAPER, s_dark ? &kDark : NULL, g.paint_cache,
+                 g.paint_scratch, v);
+    box_bars(gl, view);
+    gl->clip = was;
+    int64_t differ = 0, at = -1;
+    for (int32_t y = 0; y < win.h; y++) {
+        const uint32_t *row = gl->surf->pixels + (size_t)(win.y + y) * gl->surf->pitch_px + win.x;
+        for (int32_t x = 0; x < win.w; x++) {
+            if (((row[x] ^ first[(size_t)y * win.w + x]) & 0x00ffffffu) == 0)
+                continue;
+            int32_t px = win.x + x, py = win.y + y;
+            bool skip = false;
+            for (int32_t k = 0; k < nleft && !skip; k++)
+                skip = px >= left_out[k].x && py >= left_out[k].y && px < left_out[k].x + left_out[k].w &&
+                       py < left_out[k].y + left_out[k].h;
+            if (skip)
+                continue;
+            if (at < 0)
+                at = (int64_t)y * win.w + x;
+            differ++;
+        }
+    }
+    if (differ == 0) {
+        os64_snprintf(out, cap, "painted again, the whole view paints the same");
+    } else {
+        uint32_t then = first[at] & 0x00ffffffu;
+        uint32_t now = gl->surf->pixels[(size_t)(win.y + at / win.w) * gl->surf->pitch_px + win.x +
+                                        (size_t)(at % win.w)] & 0x00ffffffu;
+        os64_snprintf(out, cap, "painted again, the whole view differs from itself at %ld pixels, first %ld,%ld "
+                      "(#%06x, then #%06x)", (long)differ, (long)(win.x - gl->dx + at % win.w),
+                      (long)(win.y - gl->dy + at / win.w), (unsigned)then, (unsigned)now);
+    }
+    os64_free(first);
+}
+
+// `--damage-check`'s comparison, after the paints of the view widget at
+// `bounds` (the window) for every part of a render, through `gl`: the whole
+// view painted the ordinary way over it, compared with what the window held
+// before, the videos' boxes and the page's widgets left out; the whole paint
+// stays, being right.
+static void damage_check(Glass *gl, const yonder_verbs_t *v, os64_gui_rect_t bounds, os64_gui_rect_t whole)
+{
+    // What the comparison leaves out, in the window: the videos' boxes,
+    // and the page's widgets (form controls and players), which the
+    // toolkit paints over the view after it, so that what the window held
+    // there is theirs and not the page's. Past the room some would not be
+    // left out, and the whole paint would go over them for good: the
+    // comparison is not made, and nothing is painted.
+    enum { LEFT_OUT = 64 };
+    os64_gui_rect_t left_out[LEFT_OUT];
+    int32_t nleft = 0;
+    for (int32_t i = 0; i < VIDEOS_MAX && nleft < LEFT_OUT; i++) {
+        const flow_box_t *b = s_videos[i].node != NULL ? flow_box_for(g.page.tree, s_videos[i].node) : NULL;
+        if (b == NULL)
+            continue;
+        os64_gui_rect_t r = flow_box_doc_rect(b, scroll_now());
+        left_out[nleft++] = (os64_gui_rect_t){r.x + gl->dx, r.y + gl->dy, r.w, r.h};
+    }
+    for (int32_t i = 0; i < g.nfw && nleft < LEFT_OUT; i++)
+        if (!g.fw[i]->w->hidden)
+            left_out[nleft++] = g.fw[i]->w->bounds;
+    for (int32_t i = 0; i < g.nplayers && nleft < LEFT_OUT; i++)
+        if (!g.players[i]->p.w.hidden)
+            left_out[nleft++] = g.players[i]->p.w.bounds;
+    os64_gui_rect_t win;
+    const os64_gui_rect_t surf = {0, 0, (int32_t)gl->surf->width, (int32_t)gl->surf->height};
+    uint32_t *before = NULL;
+    bool check = nleft < LEFT_OUT && os64_rect_intersect(bounds, surf, &win);
+    if (check)
+        before = os64_malloc((size_t)win.w * (size_t)win.h * sizeof(uint32_t));
+    check = check && before != NULL;
+    s_damage_compared += check;
+    s_damage_uncompared += !check;
+    if (check) {
+        for (int32_t y = 0; y < win.h; y++)
+            os64_memcpy(before + (size_t)y * win.w, gl->surf->pixels + (size_t)(win.y + y) * gl->surf->pitch_px + win.x,
+                        (size_t)win.w * sizeof(uint32_t));
+        os64_gui_rect_t was = gl->clip, view = {win.x - gl->dx, win.y - gl->dy, win.w, win.h};
+        gl->clip = win;
+        const yonder_dark_t *dark = s_dark ? &kDark : NULL;
+        yonder_paint(g.page.tree, view, whole, scroll_now(), PAGE_PAPER, dark, g.paint_cache, g.paint_scratch, v);
+        box_bars(gl, view);
+        gl->clip = was;
+        int64_t first = -1, differ = 0;
+        os64_gui_rect_t reach = {0, 0, 0, 0};
+        for (int32_t y = 0; y < win.h; y++) {
+            const uint32_t *row = gl->surf->pixels + (size_t)(win.y + y) * gl->surf->pitch_px + win.x;
+            for (int32_t x = 0; x < win.w; x++) {
+                if (((row[x] ^ before[(size_t)y * win.w + x]) & 0x00ffffffu) == 0)
+                    continue;
+                int32_t px = win.x + x, py = win.y + y;
+                bool out = false;
+                for (int32_t k = 0; k < nleft && !out; k++)
+                    out = px >= left_out[k].x && py >= left_out[k].y && px < left_out[k].x + left_out[k].w &&
+                          py < left_out[k].y + left_out[k].h;
+                if (out)
+                    continue;
+                os64_gui_rect_t dot = {px - gl->dx, py - gl->dy, 1, 1};
+                reach = differ == 0 ? dot : os64_rect_union(reach, dot);
+                if (first < 0)
+                    first = (int64_t)y * win.w + x;
+                differ++;
+            }
+        }
+        // On a difference, the whole view is painted a second time and held
+        // to the first: a whole paint that disagrees with itself is the
+        // painter's, whatever the parts did.
+        char again[160] = "";
+        if (differ > 0)
+            damage_paint_again(gl, v, whole, win, left_out, nleft, again, sizeof(again));
+        // What the window held where it was left out is put back: the
+        // widgets are not painted again this frame outside its marks.
+        for (int32_t k = 0; k < nleft; k++) {
+            os64_gui_rect_t r;
+            if (!os64_rect_intersect(left_out[k], win, &r))
+                continue;
+            for (int32_t y = r.y; y < r.y + r.h; y++)
+                os64_memcpy(gl->surf->pixels + (size_t)y * gl->surf->pitch_px + r.x,
+                            before + (size_t)(y - win.y) * win.w + (r.x - win.x), (size_t)r.w * sizeof(uint32_t));
+        }
+        // A difference says where, what the page paints at its first pixel
+        // and the colour the window held there against the page's, and
+        // what changed the view since the last check.
+        if (differ > 0) {
+            s_damage_differed++;
+            int32_t fx = win.x - gl->dx + (int32_t)(first % win.w), fy = win.y - gl->dy + (int32_t)(first / win.w);
+            uint32_t held = before[first] & 0x00ffffffu;
+            uint32_t paints = gl->surf->pixels[(size_t)(win.y + first / win.w) * gl->surf->pitch_px + win.x +
+                                               (size_t)(first % win.w)] & 0x00ffffffu;
+            char painted[200], since[512], line[1536];
+            damage_painted_at(painted, sizeof(painted), fx, fy);
+            damage_since_said(since, sizeof(since));
+            os64_snprintf(line, sizeof(line),
+                          "the whole view differs from the parts after %s: %ld pixels in %d,%d %dx%d, first %ld,%ld "
+                          "(held #%06x, the page paints #%06x, at %s); %s; since the last check: %s",
+                          s_damage_after, (long)differ, (int)reach.x, (int)reach.y, (int)reach.w, (int)reach.h,
+                          (long)fx, (long)fy, (unsigned)held, (unsigned)paints, painted, again, since);
+            yonder_diag_failed_seen(g.page.diag, "damage check", line);
+            // The kernel's log keeps 256 bytes of a line (log.h's
+            // MAX_LOG_MESSAGE_SIZE), so this one goes to it in pieces.
+            size_t length = os64_strlen(line), pieces = (length + 199) / 200;
+            for (size_t k = 0; k < pieces; k++) {
+                char piece[240];
+                os64_snprintf(piece, sizeof(piece), "damage check %lu/%lu: %.200s", (unsigned long)(k + 1),
+                              (unsigned long)pieces, line + k * 200);
+                os64_debug_log(piece);
+            }
+        }
+    }
+    // Each check counts what changed the view from the last.
+    os64_memset(&s_damage_since, 0, sizeof(s_damage_since));
+    os64_free(before);
+    char said[128];
+    os64_snprintf(said, sizeof(said), "%lu compared, %lu differed, %lu could not be compared",
+                  (unsigned long)s_damage_compared, (unsigned long)s_damage_differed,
+                  (unsigned long)s_damage_uncompared);
+    yonder_diag_summary_fact(g.page.diag, "damage check", said);
+}
+
+// The view's verbs, timed, painting through `pane`.
+static yonder_verbs_t view_verbs(GlassPane *pane)
+{
+    return (yonder_verbs_t){pane,        timed_fill,    timed_text,       timed_image,
+                            timed_control, timed_backdrop, timed_group_open, timed_group_close,
+                            timed_mask,   timed_pixels,  timed_stand_in,  pane_keep, timed_through_open,
+                            timed_through_close, timed_clip_open, timed_clip_fill, timed_clip_close,
+                            g.page.modern ? timed_canvas : NULL,
+                            timed_layer_open, timed_layer_close, timed_backdrop_filter,
+                            timed_layer_take};
+}
+
+// `--damage-check`'s turn, once a render has painted every part it was
+// marked with: the view is painted once for each part (paints_part), so a
+// check after the first would find the parts not yet painted. Its own pane,
+// whose canvas label it lets go.
+static void view_damage_check(os64_ui_widget_t *w, os64_draw_ctx_t *ctx)
+{
+    if (!s_damage_due)
+        return;
+    s_damage_due = false;
+    // With nothing to paint the view from, the check is one that could not
+    // be compared, and the next counts what changed from here.
+    if (g.page.tree == NULL || g.paint_cache == NULL || g.paint_scratch == NULL) {
+        s_damage_uncompared++;
+        os64_memset(&s_damage_since, 0, sizeof(s_damage_since));
+        return;
+    }
+    GlassGroups groups = {.depth = 0};
+    Glass gl = {&ctx->surf, w->bounds.x - g.sx, w->bounds.y - g.sy, w->bounds, &groups, w->bounds};
+    GlassPane pane = {{&gl, NULL}, 1, {NULL}, 0, NULL, {NULL, 0, 0}, false, {0}, 0};
+    yonder_verbs_t v = view_verbs(&pane);
+    os64_gui_rect_t whole = {w->bounds.x - gl.dx, w->bounds.y - gl.dy, w->bounds.w, w->bounds.h};
+    damage_check(&gl, &v, w->bounds, whole);
+    if (pane.canvas_label.run != NULL)
+        os64_text_run_release(pane.canvas_label.run);
+    yonder_scratch_paint_end(g.paint_scratch);
+}
+
+// The verbs a layer pass paints with: the panes' own, not view_verbs' timed
+// ones, so a pass counts nothing of a paint's (its effects, its canvases
+// drawn, its videos' costs); what it costs is counted apart (plane_layer_make).
+static yonder_verbs_t layer_verbs(GlassPane *pane)
+{
+    return (yonder_verbs_t){pane,        pane_fill,    pane_text,       pane_image,
+                            pane_control, pane_backdrop, pane_group_open, pane_group_close,
+                            pane_mask,   pane_pixels,  pane_stand_in,  pane_keep, pane_through_open,
+                            pane_through_close, pane_clip_open, pane_clip_fill, pane_clip_close,
+                            g.page.modern ? pane_canvas : NULL,
+                            pane_layer_open, pane_layer_close, pane_backdrop_filter,
+                            pane_layer_take};
+}
+
+// `part` (window coordinates, inside `v`'s clip) filled with `paper` and
+// painted from `v`'s box up as the render painted it, but for the picture:
+// the walk from the box, the scroll boxes' bars, and the widgets painted
+// after the view. False when the walk never handed the box over.
+static bool plane_layer_paint(const Video *v, os64_gui_rect_t part, uint32_t paper)
+{
+    const flow_box_t *b = g.page.tree != NULL ? flow_box_for(g.page.tree, v->node) : NULL;
+    if (b == NULL)
+        return false;
+    os64_gui_surface_t *surf = &g.ui.ctx->surf;
+    os64_draw_fill_rect(surf, part, paper);
+    GlassGroups groups = {.depth = 0};
+    Glass gl = {surf, g.view.bounds.x - g.sx, g.view.bounds.y - g.sy, {0, 0, 0, 0}, &groups, g.view.bounds};
+    GlassPane pane = {{&gl, NULL}, 1, {NULL}, 0, NULL, {NULL, 0, 0}, false, {0}, 0};
+    yonder_verbs_t verbs = layer_verbs(&pane);
+    os64_gui_rect_t view = {part.x - gl.dx, part.y - gl.dy, part.w, part.h};
+    os64_gui_rect_t whole = {g.view.bounds.x - gl.dx, g.view.bounds.y - gl.dy, g.view.bounds.w, g.view.bounds.h};
+    s_layer = (__typeof__(s_layer)){v, part, false};
+    bool found = yonder_paint_from(g.page.tree, view, whole, scroll_now(), PAGE_PAPER, s_dark ? &kDark : NULL,
+                                   g.paint_cache, g.paint_scratch, &verbs, b);
+    bool reached = s_layer.reached;
+    s_layer = (__typeof__(s_layer)){0};
+    if (found && reached) {
+        // Over everything the walk paints: the scroll boxes' bars, as
+        // view_paint draws them, and then the widgets libui paints after
+        // the view, each cut to the part.
+        box_bars(&gl, view);
+        os64_ui_paint_after(&g.ui, &g.view, part);
+    }
+    if (pane.canvas_label.run != NULL)
+        os64_text_run_release(pane.canvas_label.run);
+    return found && reached;
+}
+
 static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_theme_t *t)
 {
     (void)t;
@@ -17732,12 +23989,7 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
         return;
     }
     GlassPane pane = {{&gl, NULL}, 1, {NULL}, 0, NULL, {NULL, 0, 0}, false, {0}, 0};
-    yonder_verbs_t v = {&pane,        pane_fill,     timed_text,       timed_image,
-                        pane_control, timed_backdrop, timed_group_open, timed_group_close,
-                        timed_mask,   timed_pixels,  pane_stand_in,   pane_keep, timed_through_open,
-                        timed_through_close, pane_clip_open, pane_clip_fill, pane_clip_close, g.page.modern ? pane_canvas : NULL,
-                        timed_layer_open, timed_layer_close, timed_backdrop_filter,
-                        timed_layer_take};
+    yonder_verbs_t v = view_verbs(&pane);
     os64_gui_rect_t view = {part.x - gl.dx, part.y - gl.dy, part.w, part.h};
     cost_begin(PS_VIEW);
     yonder_paint_stage = cost_painter;
@@ -17750,20 +24002,26 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
             mem.total = 0;
         g.paint_cache = yonder_paint_cache_new(yonder_paint_cache_budget(sw, sh, mem.total));
     }
+    if (g.canvas_keeps == NULL)
+        g.canvas_keeps = yonder_canvas_keeps_new();
     if (g.paint_scratch == NULL)
         g.paint_scratch = yonder_scratch_new();
     os64_gui_rect_t whole = {w->bounds.x - gl.dx, w->bounds.y - gl.dy, w->bounds.w, w->bounds.h};
-    yonder_paint(g.page.tree, view, whole, scroll_now(), PAGE_PAPER, s_dark ? &kDark : NULL,
-                 g.paint_cache, g.paint_scratch, &v);
+    s_effects_past_video = false;
+    planes_part_begin();
+    s_ndrawn_canvases = 0;
+    s_drawn_canvases_lost = false;
+    uint32_t refused = view_paint_parts(&gl, &v, view, whole);
+    s_nmarked_canvases = 0;
+    s_marked_canvases_lost = false;
     // Filtered and blended groups, and backdrops, painted plain (FILTER.md
     // § 6, MIX_BLEND.md § 4), the most any one paint did.
-    if (yonder_paint_layers_refused > 0 && g.page.diag != NULL)
-        yonder_diag_missing_seen(g.page.diag, "css-value", "layer: drawn plain",
-                                 yonder_paint_layers_refused);
-    if (pane.canvas_label.run != NULL)
-        os64_text_run_release(pane.canvas_label.run);
+    if (refused > 0 && g.page.diag != NULL)
+        yonder_diag_missing_seen(g.page.diag, "css-value", "layer: drawn plain", refused);
     yonder_paint_stage = NULL;
     box_bars(&gl, view);
+    if (pane.canvas_label.run != NULL)
+        os64_text_run_release(pane.canvas_label.run);
     yonder_scratch_paint_end(g.paint_scratch);
     cost_end(PS_VIEW);
 }
@@ -17772,7 +24030,7 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
 // decoder for them is private to libos64, so the view reads the few it
 // needs itself.
 typedef enum { KEY_NONE, KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_HOME, KEY_END,
-               KEY_PGUP, KEY_PGDN, KEY_SPACE, KEY_POSITIONING, KEY_RECORD } Key;
+               KEY_PGUP, KEY_PGDN, KEY_SPACE, KEY_POSITIONING } Key;
 
 static Key view_key(const os64_gui_event_t *ev)
 {
@@ -17807,17 +24065,33 @@ static Key view_key(const os64_gui_event_t *ev)
         g.seq = 1;
         return KEY_NONE;
     }
-    return a == ' ' ? KEY_SPACE : a == 'p' ? KEY_POSITIONING : a == 'd' ? KEY_RECORD : KEY_NONE;
+    return a == ' ' ? KEY_SPACE : a == 'p' ? KEY_POSITIONING : KEY_NONE;
 }
 
-// `d` writes the shown page's record now ("when asked"), keeping the paint
-// counts since the last `d` as a numbered reading with where the page was
-// scrolled (diag_paint_reading), and starts them again — so each part of a
-// page can be measured on its own: scroll there, `d`, wait, `d`, and the
-// next part. With no page files to write, or no record (one is made for
-// every page, short of memory), it says which. When the file is not written
-// the reading stays in the record and the counts go on, so the next `d`
-// writes both, its own reading counted from the same start.
+// Ctrl+Shift+D, the reading chord: yonder's own, taken before any key
+// reaches the page or a control, so no script and no focused field can keep
+// it; never dispatched to the page, and the only key that takes a reading
+// (a bare `d` is the page's like any other key). Exactly Ctrl and Shift:
+// Ctrl+Alt with a letter is the window manager's and never reaches a
+// program (compositor.c). Ctrl turns the letter into its control code
+// (keyboard translation); the letter itself is taken too.
+static bool reading_chord(const os64_gui_event_t *ev)
+{
+    char a = ev->key.ascii;
+    uint8_t held = ev->key.modifiers & (OS64_GUI_MOD_CTRL | OS64_GUI_MOD_SHIFT | OS64_GUI_MOD_ALT);
+    return ev->type == OS64_GUI_EVENT_KEY_DOWN && held == (OS64_GUI_MOD_CTRL | OS64_GUI_MOD_SHIFT) &&
+           (a == ('D' & 0x1F) || a == 'd' || a == 'D');
+}
+
+// The reading chord writes the shown page's record now ("when asked"),
+// keeping the paint counts since the last reading as a numbered reading with
+// where the page was scrolled (diag_paint_reading), and starts them again —
+// so each part of a page can be measured on its own: scroll there, the
+// chord, wait, the chord, and the next part. With no page files to write,
+// or no record (one is made for every page, short of memory), it says
+// which. When the file is not written the reading stays in the record and
+// the counts go on, so the next reading writes both, its own counted from
+// the same start.
 static void diag_asked(void)
 {
     if (s_diag.dir[0] == '\0') {
@@ -17830,6 +24104,7 @@ static void diag_asked(void)
     }
     diag_observe(&g.page, "when asked");
     diag_paint_reading(&g.page, ++s_cost_readings);
+    reading_key_fact(&g.page);
     if (!diag_write(g.page.diag)) {
         char said[OS64_PATH_MAX + 96];
         os64_snprintf(said, sizeof(said), "Paint reading %u kept, but the page file could not be written in %s; "
@@ -17852,7 +24127,9 @@ static void diag_asked(void)
 static void toggle_positioning(void)
 {
     s_env.static_only = !s_env.static_only;
+    yonder_lt_why_t why_was = lt_why_begin(YONDER_LT_WHY_WINDOW);
     relayout(true);
+    lt_why_end(why_was);
     status_rest(s_env.static_only
                     ? "Positioning off: the page in document order, floats too. p turns it on."
                     : "Positioning on.");
@@ -18005,7 +24282,9 @@ static void dark_use(bool dark)
         return;
     s_dark = dark;
     coming_rejudge();
+    yonder_lt_why_t why_was = lt_why_begin(YONDER_LT_WHY_WINDOW);
     (void)relayout(true);
+    lt_why_end(why_was);
     mark_whole(WHOLE_WINDOW, true);
 }
 
@@ -18022,7 +24301,9 @@ static void motion_use(bool run, bool reduce)
     s_animations = run;
     s_reduce_motion = reduce;
     coming_rejudge();
+    yonder_lt_why_t why_was = lt_why_begin(YONDER_LT_WHY_WINDOW);
     (void)relayout(true);
+    lt_why_end(why_was);
     mark_whole(WHOLE_WINDOW, true);
 }
 
@@ -18043,6 +24324,7 @@ static bool address_event(const os64_gui_event_t *ev)
     if (ev->type != OS64_GUI_EVENT_KEY_DOWN || !(ev->key.modifiers & OS64_GUI_MOD_CTRL) ||
         (ev->key.modifiers & OS64_GUI_MOD_ALT) || ev->key.ascii != ('L' & 0x1F))
         return false;
+    fs_leave(true);     // the field is in a hidden row (C.7)
     os64_ui_set_focus(&g.ui, &g.field.w);
     os64_ui_textfield_select_all(&g.ui, &g.field);
     return true;
@@ -18155,7 +24437,7 @@ static void picture_button_at(int32_t x, int32_t y)
     os64_gui_rect_t v = g.view.bounds;
     if (g.page.tree == NULL || x < v.x || y < v.y || x >= v.x + v.w || y >= v.y + v.h)
         return;
-    const flow_box_t *b = flow_hit(g.page.tree, x - v.x + g.sx, y - v.y + g.sy, scroll_now());
+    const flow_box_t *b = page_hit(x - v.x + g.sx, y - v.y + g.sy, scroll_now());
     const os64_page_control_t *c =
         b != NULL ? os64_page_control(page_model(&g.page),
                                      os64_page_control_for(page_model(&g.page), b->node)) : NULL;
@@ -18173,7 +24455,7 @@ static bool wheel_box(int32_t x, int32_t y, int32_t dx, int32_t dy)
     flow_tree_t *t = g.page.tree;
     if (t == NULL || x < v.x || y < v.y || x >= v.x + v.w || y >= v.y + v.h)
         return false;
-    const flow_box_t *b = flow_hit(t, x - v.x + g.sx, y - v.y + g.sy, scroll_now());
+    const flow_box_t *b = page_hit(x - v.x + g.sx, y - v.y + g.sy, scroll_now());
     int32_t i = b == NULL ? -1 : b->scroller >= 0 ? b->scroller : flow_box_scroller(b);
     for (; i >= 0; i = flow_box_scroller(flow_scroller(t, i))) {
         const flow_style_t *s = flow_scroller(t, i)->style;
@@ -18209,7 +24491,10 @@ static bool view_event(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_event_
         if (ev->mouse.dy == 0 && ev->mouse.dx == 0)
             return false;
         int32_t dx = ev->mouse.dx * 3 * line_step(), dy = ev->mouse.dy * 3 * line_step();
-        if (!wheel_box(ev->mouse.x, ev->mouse.y, dx, dy))
+        // In full screen the wheel reaches scrollers inside the element and
+        // never the document beneath it (the design state's B.5), unless
+        // the element is the root, which is the document.
+        if (!wheel_box(ev->mouse.x, ev->mouse.y, dx, dy) && !fs_layer())
             scroll_to(g.sx + dx, g.sy + dy);
         return true;
     }
@@ -18254,6 +24539,11 @@ static bool view_event(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_event_
         return true;
     }
     case OS64_GUI_EVENT_KEY_DOWN:
+        // The document's scroll keys go nowhere in full screen: what is shown
+        // is the element, which the document's scroll does not move (the
+        // root's full screen shows the document, which they scroll).
+        if (fs_layer())
+            return view_key(ev) != KEY_NONE || g.seq != 0;
         switch (view_key(ev)) {
         case KEY_UP: scroll_to(g.sx, g.sy - line_step()); return true;
         case KEY_DOWN: scroll_to(g.sx, g.sy + line_step()); return true;
@@ -18265,7 +24555,6 @@ static bool view_event(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_event_
         case KEY_HOME: scroll_to(0, 0); return true;
         case KEY_END: scroll_to(g.sx, page_height()); return true;
         case KEY_POSITIONING: toggle_positioning(); return true;
-        case KEY_RECORD: diag_asked(); return true;
         default: return g.seq != 0;
         }
     default:
@@ -18384,6 +24673,7 @@ static bool download_taken(void *ctx, const char *name)
 static void download_ask(const char *url, const char *referrer, const char *disposition,
                          os64_dom_blob_t *blob)
 {
+    fs_leave(true);     // yonder asks the person (C.7)
     if (s_ask.url != NULL) {
         if (s_save.window > 0) {
             yonder_scripts_pointer_cancel(g.page.scripts);
@@ -19703,10 +25993,246 @@ static void layout_place(os64_ui_widget_t *w, os64_gui_rect_t r, bool staged)
         w->bounds = r;
 }
 
+// ── Full screen (the Fullscreen API's host: VIDEO.md § 9, the design
+// state's C.1 and C.7) ─────────────────────────────────────────────────────
+//
+// A page's element asks to go full screen or to come back (dom/fullscreen.h).
+// The ask is noted and answered at the loop's next turn (fs_turn), never
+// inside the script's call. yonder puts its window over the screen for the
+// element, unless the person already put it there with the window manager's
+// Ctrl+Alt+F: `ours` says which, so leaving the element's full screen
+// leaves the window manager's only when the element put it there. While an
+// element is full screen (`active`) the rows are hidden, from the keyboard
+// too (layout_window, fs_rows_keys) and, unless it is the root, the page
+// paints the element alone
+// (yonder_paint_set_top).
+static const os64_gui_rect_t kNoRect = {0, 0, 0, 0};
+
+static void fs_enter_asked(void *opaque, const os64_html_node_t *element)
+{
+    (void)element;
+    s_fs.serial = (uint64_t)(uintptr_t)opaque;
+    s_fs.enter_owed = true;
+    os64_gui_event_ring(g.win, BELL_FULLSCREEN);
+}
+
+static void fs_leave_asked(void *opaque)
+{
+    s_fs.serial = (uint64_t)(uintptr_t)opaque;
+    s_fs.leave_owed = true;
+    os64_gui_event_ring(g.win, BELL_FULLSCREEN);
+}
+
+static bool fs_consume(void *opaque)
+{
+    yonder_scripts_t *host = scripts_for((uint64_t)(uintptr_t)opaque);
+    return host != NULL && yonder_scripts_activation_consume(host, yonder_now_us());
+}
+
+static bool window_full_screen(void)
+{
+    os64_gui_window_state_t st;
+    return os64_gui_window_get_state(g.win, &st) == 0 && (st.flags & OS64_GUI_WINDOW_FULL_SCREEN) != 0;
+}
+
+// Names the element full screen, holding it (libhtml's hold) so that the
+// paint and the pointer may name it until yonder lets go, whatever becomes
+// of libdom's record: a retired host's drain lets go of its wrapper, which
+// may be the last thing keeping a removed element. NULL lets go. The root
+// element names no top layer, since the standard gives it none of the
+// user-agent rules: the page is shown, hit and scrolled whole, as other
+// browsers do.
+static void fs_name(const os64_html_node_t *element)
+{
+    if (element == s_fs.element)
+        return;
+    if (s_fs.element != NULL)
+        os64_html_release(s_fs.held, s_fs.element);
+    s_fs.element = element;
+    s_fs.held = element != NULL ? page_doc(&g.page) : NULL;
+    if (element != NULL)
+        os64_html_hold(s_fs.held, element);
+    bool root = element != NULL && element->parent != NULL && element->parent->kind == OS64_HTML_DOCUMENT;
+    s_fs.top = root ? NULL : element;
+    yonder_paint_set_top(s_fs.top);
+}
+
+static bool fs_layer(void)
+{
+    return s_fs.active && s_fs.top != NULL;
+}
+
+// The rows go or come back, and the page is laid out for its new view.
+static void fs_rows(void)
+{
+    layout();
+    g.relayout_due = true;
+    mark_whole(WHOLE_WINDOW, true);
+}
+
+static void fs_relayout(void)
+{
+    fs_name(s_fs.active ? yonder_scripts_fullscreen_element(g.page.scripts) : NULL);
+    fs_rows();
+}
+
+static void fs_leave(bool notify)
+{
+    if (!s_fs.active)
+        return;
+    s_fs.active = false;
+    if (s_fs.ours)
+        (void)os64_gui_window_set_full_screen(g.win, false);
+    s_fs.ours = false;
+    fs_relayout();
+    if (notify)
+        yonder_scripts_fullscreen_exit(g.page.scripts);
+}
+
+// The page on screen is going (a navigation, or yonder quitting): the
+// element is let go while its document is still here, and the window
+// comes back. Its scripts may be gone already, so nobody is told, and the
+// rows come back at the next turn, over whatever page is on screen then.
+static void fs_page_going(Page *p)
+{
+    if (p != &g.page)
+        return;
+    fs_name(NULL);
+    if (s_fs.active) {
+        if (s_fs.ours)
+            (void)os64_gui_window_set_full_screen(g.win, false);
+        s_fs.relayout_owed = true;
+    }
+    s_fs.active = s_fs.ours = false;
+}
+
+// The answers owed: an enter asked of the page on screen goes over the
+// screen (or is refused), a leave comes back; an ask from a page no longer
+// on screen is refused or dropped.
+static void fs_turn(void)
+{
+    if (s_fs.relayout_owed) {
+        s_fs.relayout_owed = false;
+        fs_rows();
+    }
+    // The page's scripts were retired under it (a runaway, its memory, the
+    // settings): their drain ended the element's full screen in libdom, so
+    // the window comes back and nobody is told.
+    if (s_fs.active && yonder_scripts_fullscreen_element(g.page.scripts) == NULL)
+        fs_leave(false);
+    yonder_scripts_t *host = s_fs.enter_owed || s_fs.leave_owed ? scripts_for(s_fs.serial) : NULL;
+    bool here = host != NULL && host == g.page.scripts;
+    if (s_fs.enter_owed) {
+        s_fs.enter_owed = false;
+        bool ok = false;
+        // A question in the bar is answered first: full screen would hide it.
+        if (g.bar.up) {
+            ok = false;
+        } else if (here && window_full_screen()) {
+            ok = true;              // the person's chord already put it there
+        } else if (here && os64_gui_window_set_full_screen(g.win, true) == 0) {
+            ok = true;
+            s_fs.ours = true;
+        }
+        yonder_scripts_fullscreen_settled(host, ok);
+        if (ok) {
+            s_fs.active = true;
+            fs_relayout();
+        }
+    }
+    if (s_fs.leave_owed) {
+        s_fs.leave_owed = false;
+        if (here && s_fs.active)
+            fs_leave(true);
+        else
+            yonder_scripts_fullscreen_exit(host);
+    }
+}
+
+// The window manager says the window entered or left full screen. Left
+// while an element is full screen means the person took it out (Ctrl+Alt+F):
+// the element's full screen ends with it.
+static void fs_window_changed(void)
+{
+    if (s_fs.active && !window_full_screen()) {
+        s_fs.ours = false;
+        fs_leave(true);
+    }
+}
+
+static const flow_box_t *page_hit(int32_t x, int32_t y, flow_point_t scroll)
+{
+    if (g.page.tree == NULL)
+        return NULL;
+    if (!fs_layer())
+        return flow_hit(g.page.tree, x, y, scroll);
+    const flow_box_t *top = flow_box_for(g.page.tree, s_fs.top);
+    return top != NULL ? flow_hit_within(g.page.tree, x, y, scroll, top) : NULL;
+}
+
+static bool page_covered_at(const flow_box_t *b, int32_t x, int32_t y, flow_point_t scroll)
+{
+    if (!fs_layer())
+        return flow_box_covered_at(g.page.tree, b, x, y, scroll);
+    const flow_box_t *top = flow_box_for(g.page.tree, s_fs.top);
+    return top == NULL || flow_box_covered_within(g.page.tree, b, x, y, scroll, top);
+}
+
+static bool page_covered(const flow_box_t *b, flow_point_t scroll)
+{
+    os64_gui_rect_t r = flow_box_doc_rect(b, scroll);
+    return page_covered_at(b, (int32_t)((int64_t)r.x + r.w / 2), (int32_t)((int64_t)r.y + r.h / 2), scroll);
+}
+
+// The rows the full-screen layout hides.
+static os64_ui_widget_t *const kFsRows[] = {&g.back, &g.forward, &g.reload, &g.stop, &g.downloads, &g.field.w,
+                                            &g.vbar.w, &g.hbar.w, &g.qpanel, &g.qno, &g.qyes, &g.qlabel, &g.badge,
+                                            &g.status};
+_Static_assert(sizeof(kFsRows) / sizeof(kFsRows[0]) == FS_ROWS, "FS_ROWS counts kFsRows");
+
+// The full-screen layout: the view is the window, and every row is hidden.
+static void layout_full_screen(os64_gui_rect_t area)
+{
+    for (size_t i = 0; i < FS_ROWS; i++)
+        kFsRows[i]->bounds = kNoRect;
+    g.view.bounds = (os64_gui_rect_t){0, 0, area.w, area.h};
+}
+
+// The hidden rows leave keyboard traversal too, or Tab would reach a row
+// nobody sees and the keys after it would act there: an empty rectangle
+// takes a widget from the pointer and the paint, not from Tab
+// (os64_ui_focus_next reads `focusable`). A row holding the focus gives it
+// to the view. Each row's own `focusable` is kept and given back when the
+// rows return; `hidden` is not used, since the scroll bars and the
+// question bar keep their own.
+static void fs_rows_keys(bool out)
+{
+    if (out == s_fs.rows_out)
+        return;
+    s_fs.rows_out = out;
+    for (size_t i = 0; i < FS_ROWS; i++) {
+        os64_ui_widget_t *w = kFsRows[i];
+        if (out) {
+            s_fs.row_focusable[i] = w->focusable;
+            if (g.ui.focus == w)
+                os64_ui_set_focus(&g.ui, &g.view);
+            w->focusable = false;
+        } else {
+            w->focusable = s_fs.row_focusable[i];
+        }
+    }
+}
+
 static os64_font_status_t layout_window(bool staged)
 {
     const os64_ui_theme_t *t = &g.ui.theme;
     os64_gui_rect_t area = os64_ui_widget_planned_bounds(&g.root);
+    if (!staged)
+        fs_rows_keys(s_fs.active);
+    if (s_fs.active && !staged) {
+        layout_full_screen(area);
+        return OS64_FONT_OK;
+    }
     int32_t pad = t->pad, gap = t->gap, bh = os64_ui_control_min_height(&g.ui), sw = t->scroll_w;
     int32_t x = pad;
     if (!staged)
@@ -20107,6 +26633,7 @@ static void window_event(void *user, const os64_gui_event_t *event)
     if (!g.running || g.ui.quit)
         return;
     const os64_gui_event_t ev = *event;
+
     // The display's frame: its work runs in this turn (frame_answered).
     if (ev.type == OS64_GUI_EVENT_FRAME) {
         frame_answered(&ev);
@@ -20122,6 +26649,26 @@ static void window_event(void *user, const os64_gui_event_t *event)
         s_pointer_cancel_owed = true;
         pointer_cancel_run();
         (void)os64_gui_window_focus(s_save.window);
+        return;
+    }
+    // The reading chord (s_reading_keys), written on the record as it
+    // comes, so any write carries the count: yonder's alone, taken here
+    // before any page or control sees a key.
+    if (reading_chord(&ev)) {
+        s_reading_keys++;
+        reading_key_fact(&g.page);
+        diag_asked();
+        return;
+    }
+    // Full screen: the window manager's word on it (fs_window_changed), and
+    // Escape, which leaves an element's full screen before the page or a
+    // control hears it, as other browsers take it.
+    if (ev.type == OS64_GUI_EVENT_WINDOW_FULL_SCREEN) {
+        fs_window_changed();
+        return;
+    }
+    if (s_fs.active && ev.type == OS64_GUI_EVENT_KEY_DOWN && os64_ui_key_is_esc(&ev)) {
+        fs_leave(true);
         return;
     }
     if (ev.type == OS64_GUI_EVENT_INPUT_LOST)
@@ -20144,6 +26691,8 @@ static void window_event(void *user, const os64_gui_event_t *event)
     else if (ev.type == OS64_GUI_EVENT_WINDOW_COVERED ||
              ev.type == OS64_GUI_EVENT_WINDOW_UNCOVERED)
         window_seen();
+    if (ev.type == OS64_GUI_EVENT_SETTINGS)
+        fs_leave(true);     // a window of its own, which may reload the page (C.7)
     if (ev.type == OS64_GUI_EVENT_SETTINGS)
         yonder_settings_open(g.win, &g.dispatcher, g.way.agent, settings_use, g.cache,
                              g.scripts_on, (uint32_t)(g.script_ms / 1000), g.zoom_default,
@@ -20186,17 +26735,70 @@ int main(int argc, char **argv)
     // The window is named after the page (title_follow). A FILE given on
     // the command line is read before the window exists, so the window is
     // born with that page's name rather than taking it a moment later.
-    // The switches come before the address, in any order.
-    int address_arg = 1;
-    for (; address_arg < argc && argv[address_arg][0] == '-' && argv[address_arg][1] == '-'; address_arg++) {
-        if (os64_streq(argv[address_arg], "--script-audit"))
+    // The switches and the address go in any order: a word beginning `--`
+    // is a switch (one yonder does not know is said and passed over), and
+    // the first that does not is the address (another is said and passed
+    // over). An address holds no space, so it is always one word.
+    int address_arg = 0;
+    for (int arg = 1; arg < argc; arg++) {
+        if (argv[arg][0] != '-' || argv[arg][1] != '-') {
+            if (address_arg == 0)
+                address_arg = arg;
+            else
+                os64_printf("yonder: one address at a time; %s is passed over\n", argv[arg]);
+        }
+        else if (os64_streq(argv[arg], "--script-audit"))
             s_script_audit = true;
-        else if (os64_streq(argv[address_arg], "--layout-profile"))
+        else if (os64_streq(argv[arg], "--layout-profile"))
             s_layout_profile = true;
-        else if (os64_streq(argv[address_arg], "--exit-when-loaded"))
+        else if (os64_streq(argv[arg], "--restyle-in-place=off"))
+            s_restyle_in_place = false;
+        else if (os64_streq(argv[arg], "--kept-reads=off"))
+            s_kept_reads = false;
+        else if (os64_streq(argv[arg], "--geometry-check"))
+            s_geometry_check = 10;
+        else if (os64_strlen(argv[arg]) > 17 && os64_memcmp(argv[arg], "--geometry-check=", 17) == 0) {
+            int64_t every = os64_atoi(argv[arg] + 17);
+            s_geometry_check = every < 1 ? 1 : every > 100000 ? 100000 : (uint32_t)every;
+        }
+        else if (os64_streq(argv[arg], "--cascade-check"))
+            s_cascade_check = 10;
+        else if (os64_strlen(argv[arg]) > 16 && os64_memcmp(argv[arg], "--cascade-check=", 16) == 0) {
+            int64_t every = os64_atoi(argv[arg] + 16);
+            s_cascade_check = every < 1 ? 1 : every > 100000 ? 100000 : (uint32_t)every;
+        }
+        else if (os64_streq(argv[arg], "--cover=off"))
+            s_covers = false;
+        else if (os64_streq(argv[arg], "--plane=off"))
+            s_planes_off_asked = true;
+        else if (os64_streq(argv[arg], "--plane-check"))
+            s_plane_check = 1;
+        else if (os64_strlen(argv[arg]) > 14 && os64_memcmp(argv[arg], "--plane-check=", 14) == 0) {
+            int64_t every = os64_atoi(argv[arg] + 14);
+            s_plane_check = every < 1 ? 1 : every > 100000 ? 100000 : (uint32_t)every;
+        }
+        else if (os64_streq(argv[arg], "--paint-check"))
+            s_paint_check = 10;
+        else if (os64_strlen(argv[arg]) > 14 && os64_memcmp(argv[arg], "--paint-check=", 14) == 0) {
+            int64_t every = os64_atoi(argv[arg] + 14);
+            s_paint_check = every < 1 ? 1 : every > 100000 ? 100000 : (uint32_t)every;
+        }
+        else if (os64_streq(argv[arg], "--damage-check"))
+            s_damage_check = 1;
+        else if (os64_strlen(argv[arg]) > 15 && os64_memcmp(argv[arg], "--damage-check=", 15) == 0) {
+            int64_t every = os64_atoi(argv[arg] + 15);
+            s_damage_check = every < 1 ? 1 : every > 100000 ? 100000 : (uint32_t)every;
+        }
+        else if (os64_streq(argv[arg], "--video-rate"))
+            s_video_rate_s = 5;
+        else if (os64_strlen(argv[arg]) > 13 && os64_memcmp(argv[arg], "--video-rate=", 13) == 0) {
+            int64_t every = os64_atoi(argv[arg] + 13);
+            s_video_rate_s = every < 1 ? 1 : every > 3600 ? 3600 : (uint32_t)every;
+        }
+        else if (os64_streq(argv[arg], "--exit-when-loaded"))
             s_exit_when_loaded = true;
         else
-            break;
+            os64_printf("yonder: no switch %s; it is passed over\n", argv[arg]);
     }
     s_exit_started = s_exit_quiet_from = yonder_now_ms();
     g.scripts_on = yonder_settings_saved_scripts();
@@ -20205,6 +26807,7 @@ int main(int argc, char **argv)
     s_reduce_motion = yonder_settings_saved_reduce_motion();
     s_shadow_dom = yonder_settings_saved_shadow_dom();
     s_ranges = yonder_settings_saved_ranges();
+    s_planes = !s_planes_off_asked && yonder_settings_saved_planes();
     s_ledger = yonder_settings_saved_ledger();
     s_started_cycles = os64_js_ledger_now();
     s_started_us = os64_micros();
@@ -20222,7 +26825,7 @@ int main(int argc, char **argv)
     s_storage = yonder_storage_new(profile);    // NULL keeps each page's storage for its own life
     s_preflight = way_preflight_new();          // NULL sends every preflight
     yonder_settings_on_clear_storage(storage_clear);
-    const char *first = argc > address_arg ? argv[address_arg] : NULL;
+    const char *first = address_arg != 0 ? argv[address_arg] : NULL;
     char title[OS64_GUI_TITLE_MAX] = "yonder";
     if (first != NULL && first[0] == '/') {
         uint8_t *bytes = NULL;
@@ -20339,7 +26942,7 @@ int main(int argc, char **argv)
     interface_font_finish();
     downloads_follow();
 
-    g.pool = os64_work_pool_create(POOL_WORKERS, POOL_BUDGET - PICTURE_RESERVE, g.win, BELL_WORK);
+    g.pool = os64_work_pool_create_named(POOL_WORKERS, POOL_BUDGET - PICTURE_RESERVE, g.win, BELL_WORK, "worker");
     // The media elements' sessions make their requests as every other
     // request is made (media.h); their threads start with the first.
     const yonder_media_env_t media_env = {g.way.jar, s_preflight, g.cache, media_bell};
@@ -20413,6 +27016,8 @@ int main(int argc, char **argv)
         // drain after a window of yonder's was destroyed.
         if (!looking && !g.batch.held && os64_ui_dispatcher_can_create(&g.dispatcher)) {
             int64_t ready = 0;
+            lt_step(YONDER_LT_WAIT);
+            tr_call(YONDER_TR_WAIT);
             uint64_t asleep = cycles();
             woke = os64_gui_event_wait_any(&ready);
             uint64_t slept = cycles_since(asleep);
@@ -20424,6 +27029,8 @@ int main(int argc, char **argv)
         }
         g.batch.consumed = 0;
         g.batch.drained = false;
+        lt_step(YONDER_LT_INPUT);
+        tr_call(YONDER_TR_DISPATCH);
         int64_t events = os64_ui_dispatcher_turn(&g.dispatcher, false);
         if (events < 0) {
             woke = events;
@@ -20437,55 +27044,102 @@ int main(int argc, char **argv)
             continue;
         }
         if (g.relayout_due) {
+            lt_step(YONDER_LT_RELAYOUT);
+            tr_call(YONDER_TR_RELAYOUT);
             g.relayout_due = false;
             frame_follow();
+            yonder_lt_why_t why_was = lt_why_begin(YONDER_LT_WHY_WINDOW);
             relayout(false);
+            lt_why_end(why_was);
         }
         if (!g.running || g.ui.quit)
             break;
+        lt_step(YONDER_LT_STREAM);
+        tr_call(YONDER_TR_STREAM);
         bool stream_more = stream_turn();
+        lt_step(YONDER_LT_COMING);
+        tr_call(YONDER_TR_COMING);
         bool coming_more = coming_turn();
+        lt_step(YONDER_LT_SCRIPTS);
+        tr_call(YONDER_TR_OWED);    // script_turn names its own calls after
         bool scripts_ready = script_turn();
+        lt_step(YONDER_LT_MEDIA);
+        tr_call(YONDER_TR_BODIES);
         bodies_turn();
+        tr_call(YONDER_TR_PLAYERS_ASKED);
         players_ask_run();
+        tr_call(YONDER_TR_MEDIA);
         bool media_more = media_turn();
+        tr_call(YONDER_TR_VIDEOS);
         videos_turn();
         posters_turn();
+        tr_call(YONDER_TR_KEYS);
         keys_turn();
+        fs_turn();
+        tr_call(YONDER_TR_PLAYERS_SHOWN);
         players_show();
+        lt_step(YONDER_LT_MOTION);
+        tr_call(YONDER_TR_MOTION_TICK);
         motion_tick();
+        tr_call(YONDER_TR_VIDEOS_TICK);
         videos_tick();
+        lt_step(YONDER_LT_UPKEEP);
+        tr_call(YONDER_TR_STORAGE);
         storage_turn();
+        tr_call(YONDER_TR_COOKIES);
         cookies_turn();
+        tr_call(YONDER_TR_CENSUS);
         census_turn();
+        tr_call(YONDER_TR_CHILDREN);
         children_turn();
+        tr_call(YONDER_TR_DOWNLOADS);
         downloads_turn();
+        tr_call(YONDER_TR_HOLD);
         step_hold_turn();
+        tr_call(YONDER_TR_PICTURES);
         pictures_settle();
+        tr_call(YONDER_TR_TITLE);
         title_follow();
+        lt_step(YONDER_LT_OBSERVERS);
+        tr_call(YONDER_TR_RESIZES);
         bool observed = resizes_turn();
+        tr_call(YONDER_TR_BEFORE_PAINT);
         before_paint();
+        tr_call(YONDER_TR_INTERSECTIONS);
         observed = intersections_turn() || observed;
+        lt_step(YONDER_LT_PAINT);
+        tr_call(YONDER_TR_PAINT);
         glass_paint();
         bool painted_frame = frame_unpainted() || g.raf_painting;
+        tr_call(YONDER_TR_MOTION_PAINTED);
         motion_painted();
-        if (motion_pause_said())
+        if (motion_pause_said()) {
+            tr_call(YONDER_TR_PAINT);
             glass_paint();
+        }
+        lt_step(YONDER_LT_CLOSE);
+        tr_call(YONDER_TR_BELLS);
         if (stream_more)
             (void)os64_gui_event_ring(g.win, BELL_STREAM);
         if (s_bodies_asked)
             (void)os64_gui_event_ring(g.win, BELL_BODY);
         if (coming_more || observed || media_more || script_followup(scripts_ready, painted_frame))
             (void)os64_gui_event_ring(g.win, BELL_SCRIPTS);
+        tr_checked_turn();
+        tr_call(YONDER_TR_EXIT);
         exit_follow();
         // The turn's frame, if it had one, is painted and closes. A task
         // may have set or cleared a timer, and a frame for an animation has
         // its whole cost now: the ticker hears of both, and frame work
         // still due asks for the next frame.
+        tr_call(YONDER_TR_FRAME_CLOSE);
         frame_close();
+        tr_call(YONDER_TR_SCHEDULE);
         pictures_schedule();
         looking = g.bar.up && !g.bar.armed;
     }
+    if (s_lt.on)
+        yonder_lt_step_end(&s_lt, os64_micros());
 
     left_said(woke);
     if (os64_window_placement_save_state(&g.ui.placement, g.win) != 0)
@@ -20527,6 +27181,8 @@ int main(int argc, char **argv)
     // After the departure write (page_clear), which reads its counts.
     yonder_paint_cache_free(g.paint_cache);
     g.paint_cache = NULL;
+    yonder_canvas_keeps_free(g.canvas_keeps);
+    g.canvas_keeps = NULL;
     yonder_scratch_free(g.paint_scratch);
     g.paint_scratch = NULL;
     yonder_keeps_free(g.keeps);

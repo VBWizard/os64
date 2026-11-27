@@ -111,6 +111,17 @@ div:has(p)
 body:has(a[href])
 h1:has(+ p)
 h2:has(~ p)
+:has(> p)
+div:has(> p span)
+div:has(> div a)
+div:has(> p ~ span)
+div:has(> p + p)
+div:has(> div ~ div a)
+h1:has(+ p span)
+h1:has(+ p ~ div)
+h2:has(~ p > a)
+h2:has(~ div a)
+h2:has(~ p + div)
 :has(img)
 :lang(en)
 :lang(en, fr)
@@ -174,7 +185,13 @@ body div div div div div a
 LINKS = ('HTML § Pseudo-classes: :link and :any-link match a and area elements '
          'with an href; cssselect2 still counts link elements, as HTML once did')
 ADJUDICATED = {
-    '[type="TEXT"]': 'HTML § Case-sensitivity of selectors: type is on the legacy list of '
+    'div:has(> div a)': 'Selectors 4 § 4.5: a div with a div child holding an a; cssselect2 '
+                        '0.10.1 answers another set for a relative selector with a compound '
+                        'after the one its `>` places, and a walk of html5lib\'s own tree finds '
+                        'what libgarb does',
+    'div:has(> div ~ div a)': 'the same: cssselect2 0.10.1 misanswers a relative selector with '
+                              'more than one compound after its `>`',
+    '[type="TEXT"]':'HTML § Case-sensitivity of selectors: type is on the legacy list of '
                      'attributes whose values match without regard to ASCII case on an HTML '
                      'element; cssselect2 compares them exactly',
     ':nth-child(2 of .x)': 'Selectors 4 § 17: nth-child(An+B of S) weighs a pseudo-class plus '

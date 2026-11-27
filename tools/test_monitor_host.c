@@ -21,6 +21,10 @@ static os64_ticks_t clock_now;
 static bool fail_proc, fail_directory_read, fail_clock, fail_memory, fail_core;
 static bool malformed_core, duplicate_core, missing_core, fail_core_read, fail_core_close;
 static bool reverse_order;
+// Thread names by fixture index; a read of thread fail_thread_read writes a
+// name and fails, as a reader cut off part way might.
+static char thread_names[4][OS64_THREAD_NAME_MAX];
+static int fail_thread_read;
 static unsigned allocations, fail_allocation, live_allocations, open_handles;
 
 void *os64_malloc(size_t size)
@@ -90,6 +94,19 @@ int32_t os64_proc_read_thread_split(uint64_t pid,uint64_t tid,
         .system_us=out->runtime_us-out->runtime_us/2,.valid=true};
     return rc;
 }
+// An unnamed thread's read leaves `name` as it found it, so a monitor that
+// does not clear its slot before reading shows the slot's previous name.
+int32_t os64_proc_read_thread_named(uint64_t pid,uint64_t tid,os64_thread_info_t *out,
+                                    os64_proc_cpu_split_t *split,char *name,size_t cap)
+{
+    for(size_t i=0;i<nthreads;i++) if(threads[i].pid==pid && threads[i].tid==tid) {
+        if((int)i==fail_thread_read) { snprintf(name,cap,"stale"); return -1; }
+        int32_t rc=os64_proc_read_thread_split(pid,tid,out,split);
+        if(thread_names[i][0]) snprintf(name,cap,"%s",thread_names[i]);
+        return rc;
+    }
+    return -1;
+}
 int64_t os64_open(const char *path,const char *mode)
 {
     (void)mode; unsigned id; char tail;
@@ -133,6 +150,7 @@ static void setup(void)
     fail_proc=fail_directory_read=fail_clock=fail_memory=fail_core=false;
     malformed_core=duplicate_core=missing_core=fail_core_read=fail_core_close=reverse_order=false;
     allocations=fail_allocation=0;
+    memset(thread_names,0,sizeof(thread_names));fail_thread_read=-1;
 }
 static void advance(void)
 {
@@ -251,7 +269,7 @@ static void allocation_failures(void)
 {
     setup();assert(!os64_monitor_create(0,1,1));assert(!os64_monitor_create(1,1,0));
     assert(!os64_monitor_create(SIZE_MAX,1,1));assert(!live_allocations);
-    for(unsigned i=1;i<=14;i++) {
+    for(unsigned i=1;i<=19;i++) {
         allocations=0;fail_allocation=i;assert(!os64_monitor_create(4,4,4));assert(!live_allocations);
     }
     fail_allocation=0;os64_monitor_destroy(NULL);
@@ -292,6 +310,39 @@ static void task_events(void)
     assert(!os64_monitor_task_events(NULL,1,&e) && !os64_monitor_task_events(m,1,NULL));
     os64_monitor_destroy(m);
 }
+// A thread's name rides its sample: read back by identity, absent for an
+// unnamed or vanished thread, never inherited by a reused slot or left by a
+// failed read, and the label falls back to the task's name.
+static void thread_names_in_samples(void)
+{
+    setup();os64_monitor_t *m=os64_monitor_create(4,4,4);assert(m);
+    assert(!os64_monitor_thread_name(m,1,2) && !os64_monitor_thread_name(NULL,1,2));
+    strcpy(thread_names[1],"decode");
+    sample(m,true);
+    assert(!os64_monitor_thread_name(m,1,1));
+    assert(!strcmp(os64_monitor_thread_name(m,1,2),"decode"));
+    assert(!strcmp(os64_monitor_thread_label(m,1,1,"worker"),"worker"));
+    assert(!strcmp(os64_monitor_thread_label(m,1,2,"worker"),"decode"));
+    assert(!os64_monitor_thread_name(m,1,99) && !strcmp(os64_monitor_thread_label(m,1,99,"worker"),"worker"));
+    assert(!os64_monitor_thread_name(m,2,2));
+    // Two samples on, the same buffer is filled again: thread 2 is gone and
+    // an unnamed thread 3 takes its slot.
+    advance();sample(m,true);
+    threads[1]=(os64_thread_info_t){.pid=1,.tid=3,.runtime_us=1};thread_names[1][0]=0;
+    advance();sample(m,true);
+    assert(!os64_monitor_thread_name(m,1,2) && !os64_monitor_thread_name(m,1,3));
+    // A read that fails after writing a name: thread 3 lands in that slot.
+    fail_thread_read=0;advance();sample(m,true);
+    assert(!os64_monitor_thread_name(m,1,1) && !os64_monitor_thread_name(m,1,3));
+    fail_thread_read=-1;strcpy(thread_names[1],"show");advance();sample(m,true);
+    assert(!strcmp(os64_monitor_thread_name(m,1,3),"show"));
+    // No thread rows sampled, then a failed sample: no names at all.
+    advance();sample(m,false);assert(!os64_monitor_thread_name(m,1,3));
+    advance();sample(m,true);assert(os64_monitor_thread_name(m,1,3));
+    fail_proc=true;const os64_monitor_snapshot_t *s;assert(os64_monitor_sample(m,true,&s)<0);
+    assert(!os64_monitor_thread_name(m,1,3) && !strcmp(os64_monitor_thread_label(m,1,3,"worker"),"worker"));
+    os64_monitor_destroy(m);
+}
 static void system_only(void)
 {
     setup();os64_monitor_t *m=os64_monitor_create(1,0,4);assert(m);
@@ -312,6 +363,6 @@ static void system_only(void)
 }
 int main(void)
 {
-    system_only();independent_consumers();gaps_and_resets();optional_sources();rounding_and_clocks();allocation_failures();task_events();
-    assert(!live_allocations && !open_handles);puts("monitor: independent consumers, lifecycle, clocks, parsing, bounds and 1000 rounding intervals PASS");
+    system_only();independent_consumers();gaps_and_resets();optional_sources();rounding_and_clocks();allocation_failures();task_events();thread_names_in_samples();
+    assert(!live_allocations && !open_handles);puts("monitor: independent consumers, lifecycle, clocks, parsing, bounds, thread names and 1000 rounding intervals PASS");
 }

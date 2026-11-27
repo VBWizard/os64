@@ -414,6 +414,7 @@ HNode *d_node_new(HDoc *d, os64_html_node_kind_t kind, int64_t *why)
     return n;
 }
 void d_fatal(const char *sentence) { fatal(sentence); }
+void os64_html_set_binding(const HNode *node, uint8_t bits) { ((HNode *)node)->binding = bits; }
 void os64_html_hold(const os64_html_document_t *doc, const HNode *node)
 {
     if (!doc || !node || !d_group_contains((const HDoc *)doc, h_meta(node)->allocation_owner))

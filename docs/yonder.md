@@ -123,7 +123,7 @@ Web font settings.
 | Right-click a link or a picture | its menu (below) |
 | Shift+F10 | the same menu, for what is under the pointer, while the page has the keys |
 | `p` | turn positioning off, and on again (below) |
-| `d` | write the page's diagnostics file now (`diagnostics`, below) |
+| Ctrl+Shift+D | write the page's diagnostics file now (`diagnostics`, below), wherever the keys are: no page and no field can keep it |
 
 The page has the keys when yonder opens on an address, after a click on
 it, and after Escape in the address field. With page scripts on, a page
@@ -426,9 +426,13 @@ named on the terminal it was started from, and the shipped faces are used.
 
 ## For measuring
 
-Three switches before the address are for measuring yonder and are of no
-use for browsing: `--script-audit`, `--layout-profile` and
-`--exit-when-loaded`.
+Four switches before the address are for measuring yonder and are of no
+use for browsing: `--script-audit`, `--layout-profile`,
+`--exit-when-loaded`, and `--cascade-check` (or `--cascade-check=N`), which
+checks every Nth update that changed a page's styles (every 10th unless N
+is given) against the styles worked out afresh, and prints any difference, with the
+element, the property and the rule, on the terminal yonder was started
+from; each check costs a whole restyle of the page.
 
 ## What it does not do yet
 

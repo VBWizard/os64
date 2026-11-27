@@ -181,14 +181,24 @@ static inline void os64_gui_frame_for_content(uint32_t content_w, uint32_t conte
 // not saving a maximized or minimized frame as its ordinary position.
 #define OS64_GUI_WINDOW_MAXIMIZED        (1u << 3)
 #define OS64_GUI_WINDOW_MINIMIZED        (1u << 4)
-// Nobody can see this window right now: it is minimized, or it sits entirely
-// behind one window above it, or a text terminal holds the glass. Kernel-
-// tracked, never yours to set. The frame clock reads it to stop an animation
+// Nobody can see this window, as of the compositor's last pass: it is
+// minimized, or it sits entirely behind one window above it, or a text
+// terminal holds the glass. Kernel-tracked, never yours to set. A pass runs
+// when there is something to draw or deliver, and a switch TO a text
+// terminal makes none, so for a moment either side of such a switch the
+// flag can lag it (DEBTS). The frame clock reads it to stop an animation
 // nobody is watching (os64_frame_clock_bind); an app with its own loop reads
 // it after a WINDOW_COVERED/UNCOVERED event. THIS FLAG IS THE TRUTH and the
 // event is only the nudge: a queue is 64 deep and drops the newest when
 // full, so an app that trusted the last event it saw could sleep forever.
 #define OS64_GUI_WINDOW_COVERED          (1u << 7)
+// The window covers the screen: no chrome, the screen's size, and over every
+// other window while it or a popup it owns has focus (os64_gui_window_set_
+// full_screen). A LAYER over the state beneath: MAXIMIZED stays set when the
+// window was maximized before, and the frame reported is the live one (the
+// screen), so a program saving its geometry skips on this flag exactly as it
+// skips on MAXIMIZED.
+#define OS64_GUI_WINDOW_FULL_SCREEN      (1u << 10)
 
 // Where a window IS and what state it is in — the readback half of create.
 //
@@ -329,6 +339,13 @@ typedef struct os64_gui_surface
 // or without anything copied, so successive answers are a period apart.
 // `frame.period_ns` is the refresh period (measured, or the free clock's).
 #define OS64_GUI_EVENT_FRAME 19
+// The window entered or left full screen, by its program's call or by the
+// person's Ctrl+Alt+F. No payload: read OS64_GUI_WINDOW_FULL_SCREEN with
+// get_state. Coalesced outside the input ring, so a full queue cannot lose
+// it. A size change arrives as WINDOW_RESIZE besides, in the ring. Either
+// way, repaint the whole content and publish it: until the window publishes
+// it shows black (os64_gui_window_set_full_screen).
+#define OS64_GUI_EVENT_WINDOW_FULL_SCREEN 20
 #define OS64_GUI_PLACEMENT_X      (1u << 0)
 #define OS64_GUI_PLACEMENT_Y      (1u << 1)
 #define OS64_GUI_PLACEMENT_WIDTH  (1u << 2)
@@ -568,12 +585,37 @@ static inline int64_t os64_gui_window_focus(int64_t handle)
 static inline int64_t os64_gui_window_set_pinned(int64_t handle,bool pinned)
 { return (int64_t)os64_syscall2(SYSCALL_GUI_WINDOW_SET_PINNED,(uint64_t)handle,pinned?1:0); }
 
+// Put an owned ordinary window over the whole screen, or bring it back.
+//   - Entering is refused for a desktop or popup window (BAD_ARGS); when
+//     neither the window nor a popup it owns has focus, or a text terminal
+//     holds the screen (NOT_FOCUSED); and when the screen is smaller than
+//     the window's minimum or larger than its reservation (SCREEN_FIT).
+//   - Leaving a full-screen window is always allowed, and returns it to
+//     exactly where it was: maximized if it was, else its old frame.
+//   - Either way the window gets OS64_GUI_EVENT_WINDOW_FULL_SCREEN, and
+//     WINDOW_RESIZE when its size changed. Repaint the whole content and
+//     publish it: until the window next publishes pixels the compositor
+//     shows its content black and none of its planes, and what that publish
+//     does not cover stays black, so the glass never shows the old picture
+//     at the new size. (A publish of plane edits with an empty damage
+//     rectangle publishes no pixels.)
+//   - Losing focus to another program does not leave full screen: the
+//     window drops beneath the one that took focus and comes back over
+//     everything when it has focus again. Ctrl+Alt+F does the same as this
+//     call for the focused window, and is the window manager's: no program
+//     sees it.
+// Asking for the state the window is already in succeeds and changes nothing.
+static inline int64_t os64_gui_window_set_full_screen(int64_t handle, bool on)
+{ return (int64_t)os64_syscall2(SYSCALL_GUI_WINDOW_SET_FULL_SCREEN, (uint64_t)handle, on ? 1 : 0); }
+
 // Set minimum drawable dimensions, excluding borders/titlebar. Zero or a
 // value below the WM floor uses that floor (64x32, capped per dimension by a
 // popup's birth capacity). The minimum must fit the
 // window's existing canvas reservation; otherwise BAD_ARGS leaves it unchanged.
 // A successful call grows an undersized window and emits WINDOW_RESIZE if its
-// size changes; lowering a limit does not shrink it. Re-fetch the surface after
+// size changes; lowering a limit does not shrink it. A full-screen window
+// keeps the screen's size: a minimum larger than the screen is BAD_ARGS
+// while it is full screen, and a smaller one is applied when it leaves. Re-fetch the surface after
 // success before drawing. An active WM resize gesture is cancelled when the
 // limits change; the WM consumes its remaining mouse releases. Drag, maximize,
 // and restore honor these content limits even if the resulting frame extends
@@ -592,7 +634,10 @@ static inline int64_t os64_gui_window_set_min_size(int64_t handle,
 // decoration metrics: preserve its top-left where possible, otherwise shift
 // it onto the screen. Sizes are refused rather than silently reduced.
 // Maximized windows update their normal restore frame only; their visible
-// surface stays maximized. No-op requests succeed. Visible changes emit
+// surface stays maximized. A full-screen window updates the frame it goes
+// back to (with the chrome of its state beneath), or its restore frame when
+// it was maximized before; its visible surface stays the screen. No-op
+// requests succeed. Visible changes emit
 // WINDOW_RESIZE, never WINDOW_PLACEMENT; refresh the surface after success.
 // Focus, pin and minimization state are preserved. Valid requests cancel an
 // active resize gesture using the compositor's normal release-draining rules.
@@ -662,6 +707,147 @@ static inline int64_t os64_gui_popup_create(const char *title, int64_t owner,
                      ((uint64_t)owner << OS64_GUI_CREATE_OWNER_SHIFT);
     return (int64_t)os64_syscall6(SYSCALL_GUI_WINDOW_CREATE, (uint64_t)title,
                                   (uint64_t)x, (uint64_t)y, width, height, flags);
+}
+
+// ── Planes (docs/design/pending/VIDEO_PLANE.md § 3) ───────────────────────────
+// A PLANE is a second pair of pixel stores a window owns: a canvas the
+// creating thread draws in and a front copy the compositor reads. It shows
+// where the window's content lets it through: inside the plane's clip the
+// content is see-through, except inside its overlay rectangles, where each
+// content pixel's top byte says how much of the content covers the picture
+// (255 all content, 0 all picture, premultiplied between). A plane has no
+// frame, no z-order and no events; it is named by its window and its NAME.
+//
+//   - plane_create gives the plane stores of the smallest capacity class
+//     holding w x h (640x360, 1280x720, 1920x1080, 2560x1440, 3840x2160);
+//     it has no place yet, so nothing shows. The calling thread is its
+//     CREATOR: only it may ask for the surface, publish or destroy. Refused:
+//     a zero size (BAD_ARGS), past the largest class (ABOVE_CAPACITY), over
+//     the task's budget (OVER_BUDGET), no free slot or no memory
+//     (NO_RESOURCES).
+//   - plane_publish copies w x h of the canvas to the front: the plane's
+//     picture. While the plane has a place the picture cannot change size
+//     (PLANE_PICTURE); a zero size or one past the capacity is BAD_ARGS.
+//   - A place is given, moved or taken away (hide) only by a window publish
+//     carrying edits, so a hole in the content and the plane behind it
+//     reach the glass together. The publish's damage must cover what an
+//     edit changes the reading of: a place shown, hidden or moved, its old
+//     clip and its new; a change to the overlays alone, the new overlays.
+//     After the edits no two of the window's clips may meet, each clip lies
+//     inside the content, each overlay inside its clip, and the overlays'
+//     union stays within the budget. A place that is not empty needs a
+//     picture whose size is its origin's. An edit with an empty clip is a
+//     hide; a list naming one plane twice, or with `_reserved` not zero, is
+//     BAD_ARGS. A publish with no edits is the window's plain publish.
+//   - plane_destroy is refused while the plane has a place. A window with
+//     planes cannot be destroyed. A creating thread that ends takes its
+//     planes out with it (hidden, then destroyed); the task's death takes
+//     every plane.
+//   - plane_frame_wait (the creator) parks until the display's next frame
+//     while the plane is SHOWN (its window not covered, its place not
+//     empty, its clip meeting what of the window is visible on the screen),
+//     a poke, or the patience's end. A plane that is not shown is answered
+//     nothing and the wait goes on. The answer is one wait's: its
+//     request, and anything owed it, end with it, so a frame never reaches
+//     the next wait. A caught signal ends it with INTERRUPTED. Shown
+//     waiters keep the display's frame clock running, as a window's frame
+//     request does.
+//   - plane_poke (any thread of the owner) ends the creator's wait, or its
+//     next one if none is under way. One poke is owed at most.
+#define OS64_GUI_PLANES 4
+#define OS64_GUI_PLANE_OVERLAYS 8
+#define OS64_GUI_PLANE_EDITS_MAX 4
+
+#define OS64_GUI_ERR_NOT_CREATOR    (-12) // a plane call from a thread that did not create it
+#define OS64_GUI_ERR_NO_PLANE       (-13) // no such plane, or a name from before it was destroyed
+#define OS64_GUI_ERR_OVER_BUDGET    (-14) // the task's planes would hold more than the kernel allows
+#define OS64_GUI_ERR_PLANE_DAMAGE   (-15) // a publish's damage does not cover what its edits change
+#define OS64_GUI_ERR_PLANE_OVERLAP  (-16) // clips meet, a clip leaves the content, an overlay its clip, the overlays are over budget, or a rectangle has a negative size or a far edge past INT32_MAX
+#define OS64_GUI_ERR_PLANE_PICTURE  (-17) // a place with no picture of its origin's size, or a resize while placed
+
+typedef struct os64_gui_plane_surface
+{
+    uint32_t *pixels;      // the canvas, one pointer for the plane's life
+    uint32_t pitch_px;     // pixels between the starts of two rows
+    uint32_t cap_w, cap_h; // the most a picture may be
+    uint32_t _reserved;
+} os64_gui_plane_surface_t;
+
+// One edit: a plane's new place, or `hide`. All rectangles are the
+// window's content's: `origin` is where the picture's first pixel lands and
+// its size, `clip` the part of the content the plane shows through, and the
+// overlays (`noverlays` of them) lie inside the clip.
+typedef struct os64_gui_plane_edit
+{
+    uint32_t plane;        // the plane's name
+    uint32_t hide;         // nonzero: the place becomes empty (the rest is ignored)
+    os64_gui_rect_t origin;
+    os64_gui_rect_t clip;
+    uint32_t noverlays;
+    uint32_t _reserved;    // zero
+    os64_gui_rect_t overlay[OS64_GUI_PLANE_OVERLAYS];
+} os64_gui_plane_edit_t;
+
+// What ended a plane's wait, and the plane's committed state then.
+#define OS64_GUI_PLANE_FRAME     1   // the display's frame, while the plane was shown
+#define OS64_GUI_PLANE_POKED     2   // a poke (owed, or arriving during the wait)
+#define OS64_GUI_PLANE_PATIENCE  3   // the patience ran out
+#define OS64_GUI_PLANE_WAIT_FOREVER 0xFFFFFFFFu   // patience that never runs out
+typedef struct os64_gui_plane_frame
+{
+    uint32_t why;            // OS64_GUI_PLANE_FRAME, _POKED or _PATIENCE
+    uint32_t period_ns;      // FRAME: the display's period
+    uint64_t number;         // FRAME: the frame's number (a count of refreshes, as a window's)
+    uint64_t blank_us;       // FRAME: when its blank began, micros()'s clock
+    uint32_t placed;         // the place is not empty
+    uint32_t _reserved;
+    uint64_t place_changes;  // the window publishes that have changed the place
+} os64_gui_plane_frame_t;
+
+// The kernel reads these structs as they are, so their layout is pinned
+// here alone.
+_Static_assert(sizeof(os64_gui_plane_surface_t) == 24, "gui plane surface ABI: 24 bytes");
+_Static_assert(sizeof(os64_gui_plane_edit_t) == 176, "gui plane edit ABI: 176 bytes");
+_Static_assert(__builtin_offsetof(os64_gui_plane_edit_t, overlay) == 48, "gui plane edit ABI: overlays at 48");
+_Static_assert(sizeof(os64_gui_plane_frame_t) == 40, "gui plane frame ABI: 40 bytes");
+
+// Answers the plane's name (> 0), or a negative OS64_GUI_ERR_*.
+static inline int64_t os64_gui_plane_create(int64_t handle, uint32_t width, uint32_t height)
+{
+    return (int64_t)os64_syscall3(SYSCALL_GUI_PLANE_CREATE, (uint64_t)handle, width, height);
+}
+static inline int64_t os64_gui_plane_surface(int64_t handle, uint32_t plane, os64_gui_plane_surface_t *out)
+{
+    return (int64_t)os64_syscall3(SYSCALL_GUI_PLANE_SURFACE, (uint64_t)handle, plane, (uint64_t)out);
+}
+static inline int64_t os64_gui_plane_publish(int64_t handle, uint32_t plane, uint32_t width, uint32_t height)
+{
+    return (int64_t)os64_syscall4(SYSCALL_GUI_PLANE_PUBLISH, (uint64_t)handle, plane, width, height);
+}
+static inline int64_t os64_gui_plane_destroy(int64_t handle, uint32_t plane)
+{
+    return (int64_t)os64_syscall2(SYSCALL_GUI_PLANE_DESTROY, (uint64_t)handle, plane);
+}
+// 0 with *out filled, or a negative OS64_GUI_ERR_* (INTERRUPTED for a
+// caught signal, *out untouched). Patience 0 asks for no frame: it answers
+// a poke owed, or the patience, at once. A wait whose *out cannot be
+// written answers BAD_ARGS after it has ended, a poke it took taken.
+static inline int64_t os64_gui_plane_frame_wait(int64_t handle, uint32_t plane, uint32_t patience_ms,
+                                                os64_gui_plane_frame_t *out)
+{
+    return (int64_t)os64_syscall4(SYSCALL_GUI_PLANE_FRAME_WAIT, (uint64_t)handle, plane, patience_ms, (uint64_t)out);
+}
+static inline int64_t os64_gui_plane_poke(int64_t handle, uint32_t plane)
+{
+    return (int64_t)os64_syscall2(SYSCALL_GUI_PLANE_POKE, (uint64_t)handle, plane);
+}
+// The window's publish with up to OS64_GUI_PLANE_EDITS_MAX edits, accepted
+// whole or refused whole (nothing changes when refused).
+static inline int64_t os64_gui_window_publish_edits(int64_t handle, const os64_gui_rect_t *damage,
+                                                    const os64_gui_plane_edit_t *edits, uint32_t count)
+{
+    return (int64_t)os64_syscall4(SYSCALL_GUI_WINDOW_PUBLISH_EDITS, (uint64_t)handle, (uint64_t)damage,
+                                  (uint64_t)edits, count);
 }
 
 // ── The layout lock, this side ──────────────────────────────────────────────

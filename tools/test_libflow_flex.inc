@@ -760,8 +760,26 @@ static void flex_wrap_round2_cases(void)
                FLEX_IDS("a", "b", "o"), FLEX_WANT({0, 0, 20, 40}, {0, 40, 20, 40}, {0, 0, 200, 100}));
 }
 
+// A rolling counter's column, as the rules a page sets it with: each
+// character a flex item (its `display: inline` blockified) in a 20px flex
+// line that clips, placed by a negative margin-top and nothing else. The
+// item stretches (§ 9.4 step 11): its cross size is the line's less its
+// margins, 20 + N, so its last child lands at the window's top.
+static void flex_stretch_margin_cases(void)
+{
+    flex_rects("flex: a stretched item with a negative margin-top is the line's height less it",
+               "body{padding-top:200px} .h{display:flex;overflow:hidden;height:20px;line-height:20px;font-size:14px}"
+               ".d{display:flex;height:100%} .c{display:inline}</style>"
+               "<div class=h><span class=d>"
+               "<div class=c id=a style=margin-top:-20px><div>1</div><div>2</div></div>"
+               "<div class=c id=b style=margin-top:-140px><div>1</div><div>2</div><div>3</div><div>4</div>"
+               "<div>5</div><div>6</div><div>7</div><div id=last>8</div></div></span></div>",
+               FLEX_IDS("a", "b", "last"), FLEX_WANT({-1, 180, -1, 40}, {-1, 60, -1, 160}, {-1, 200, -1, 20}));
+}
+
 static void flex_cases(void)
 {
+    flex_stretch_margin_cases();
     flex_row_cases();
     flex_cross_cases();
     flex_column_cases();

@@ -75,7 +75,8 @@ typedef struct {
 
 // THE NUMBERS. Six connections to one key is Chrome's per-host figure, and
 // more than that to one server is a burst a server reads as abuse. Sixteen
-// in all is a quarter of a task's handle table (OS64_TASK_HANDLES): every
+// in all is a quarter of the handles every task has without its table
+// growing (OS64_TASK_HANDLES): every
 // connection holds a handle, in use or kept, and the program holds the rest
 // — its standard three, its files, its windows, a bell for each fetch that
 // had to wait — so libfetch's connections may never be what runs a task out
@@ -114,7 +115,7 @@ typedef struct {
 #define FETCH_POOL_LOOK_MS 1000u
 _Static_assert(FETCH_POOL_ONCE_MS < FETCH_POOL_IDLE_MS, "a request sent once asks less of a connection's age");
 _Static_assert(FETCH_POOL_TOTAL <= OS64_TASK_HANDLES / 4,
-               "libfetch's connections may hold at most a quarter of a task's handles");
+               "libfetch's connections may hold at most a quarter of the handles every task has");
 _Static_assert(FETCH_POOL_PER_KEY <= FETCH_POOL_TOTAL, "a key's cap is within the whole's");
 
 // What a connection speaks: what its TLS handshake's ALPN answer said, for

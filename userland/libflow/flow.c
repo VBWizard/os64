@@ -28,6 +28,7 @@
 
 #include "internal.h"
 #include "garb/cascade.h"
+#include "os64/fmt.h"
 
 // The public kinds of the block-level boxes are pass 2's, in pass 2's order.
 _Static_assert(FLOW_BOX_BLOCK == (int)FB_BLOCK && FLOW_BOX_REPLACED == (int)FB_REPLACED &&
@@ -92,6 +93,16 @@ struct flow_tree {
     // too.
     Layer *layers;
     int32_t nlayers;
+    // The stacked boxes an animated element is above (motion_stacked), by
+    // their place in `stacked`, in its order: the only ones motion_due's
+    // walk of the stacked boxes can find anything due through. Made once
+    // with the paint order, since what animates is fixed for a tree's life
+    // (a restyle kept in it declines a change of it, FLOW_RESTYLE_MOTION).
+    // NULL with `due_all` when there was no memory for it: every stacked
+    // box is walked.
+    int32_t *due_stacked;
+    int32_t ndue_stacked;
+    bool due_all;
     // Each scroll container's frame, in tree order: what flow_scroll_set
     // changes, and where a box's `scroller` points.
     flow_frame_t **scrollers;
@@ -113,7 +124,39 @@ struct flow_tree {
     uint64_t tick_ms;
     // flow_tree_serial's number, and the last stamp handed a box's `drawn`.
     uint64_t serial, drawn;
+    // The lists the restyles kept in this tree have copied (restyle.inc),
+    // at most F_RESTYLE_ROOM, and whether that room ran out, after which
+    // none is kept and the next layout makes the tree afresh.
+    FArena restyle;
+    bool restyle_spent;
+    // The boxes a kept restyle moved since the layout (move_box):
+    // node -> FMoved, in the restyle arena, the offset summed over its
+    // moves; their records still say where the layout put them.
+    FMap moved;
+    int32_t nmoved;
+    // The page's extent and each scroll container's range as placement
+    // left them, before the stacked and transformed boxes reached past them
+    // (reach_stacked, which only grows them): what a restyle kept in place
+    // starts from to reach again when a transform moved. NULL ranges with
+    // scrollers: none could be kept, and no transform is restyled in place.
+    int64_t reach_base_w, reach_base_h;
+    flow_point_t *reach_base_ranges;
+    // What is pending since the tree was made current (pending.inc,
+    // flow_pending): a change-log reader of its own that reads from that
+    // version, the version, the verdict so far, and whether a longhand of the
+    // transform family is among those pending. NULL reader: nothing can be
+    // said, and the verdict is RESTYLE.
+    os64_html_reader_t *pending_reader;
+    uint64_t pending_version;
+    uint8_t pending_verdict;
+    bool pending_transforms;
+    // Why the verdict is what it is, and the element whose change made it
+    // so (flow_pending_t's `why` and `at`), kept with it.
+    char pending_why[64], pending_at[80];
 };
+#define F_RESTYLE_ROOM ((size_t)1 << 20)
+// The tree made current at the document's version now (pending.inc).
+static void pending_open(flow_tree_t *tree);
 
 // The serials handed out so far: trees are laid out on more than one
 // thread.
@@ -176,6 +219,16 @@ typedef struct {
     // The line the nearest line clamp round the box being built ends at
     // (f_clamp_line), or NULL: public_box marks it.
     const FLine *clamp_end;
+    // RELOCATING (a box that only moved, move_box): the public
+    // boxes are not made but met again, in the pre-order they were made in,
+    // `relocate_next` the first one met; only their geometry is written,
+    // and no list, map, clip or frame is made. `ox`, `oy`: what every
+    // position is moved by before it is rounded, in 26.6, which is zero for
+    // a layout's own build and grows inside a moved box by what it moved
+    // since the layout (public_box).
+    bool relocate;
+    flow_box_t *relocate_next;
+    int64_t ox, oy;
 } Build;
 
 static int64_t round_px(int64_t v)
@@ -254,6 +307,8 @@ static os64_gui_rect_t join(os64_gui_rect_t a, os64_gui_rect_t b)
 static bool push_list(Build *bd, const flow_box_t ***v, int32_t *n, int32_t *cap,
                       const flow_box_t *box)
 {
+    if (bd->relocate)
+        return true;
     if (*n == *cap) {
         int32_t cap2 = *cap != 0 ? *cap * 2 : 16;
         const flow_box_t **grown = os64_realloc(*v, (size_t)cap2 * sizeof(*grown));
@@ -285,6 +340,21 @@ static flow_box_t *add(Build *bd, flow_box_t *parent, flow_box_t **last, flow_bo
 {
     if (bd->failed)
         return NULL;
+    if (bd->relocate) {
+        // The box met again where it was made: one of another kind there is
+        // a tree that is not the one these records built, and no move.
+        flow_box_t *b = bd->relocate_next != NULL ? bd->relocate_next
+                      : parent == NULL ? NULL
+                      : (flow_box_t *)(*last != NULL ? (*last)->next : parent->first);
+        bd->relocate_next = NULL;
+        if (b == NULL || b->kind != kind) {
+            bd->failed = true;
+            return NULL;
+        }
+        if (parent != NULL)
+            *last = b;
+        return b;
+    }
     flow_box_t *b = f_arena_alloc(&bd->t->arena, sizeof(*b));
     if (b == NULL) {
         bd->failed = true;
@@ -375,6 +445,15 @@ static void set_clip(flow_box_t *b, Clip c)
     b->clipped = c.x || c.y || (b->frame != NULL && b->frame->clipped);
     if (b->clipped)
         b->clip = clip_rect(c);
+}
+
+// A box's clip as a build writes it: a box met again in a move keeps its
+// own, since nothing in a moved box clips (move_blocked) and its
+// containing blocks, which clip it from outside, did not move.
+static void build_clip(const Build *bd, flow_box_t *b, Clip c)
+{
+    if (!bd->relocate)
+        set_clip(b, c);
 }
 
 static void meet_axis(int32_t *at, int32_t *len, int32_t other_at, int32_t other_len)
@@ -470,6 +549,8 @@ static Clip inner_clip(const FBox *src, Clip c)
 
 static bool map_put(Build *bd, FMap *map, const void *key, void *val)
 {
+    if (bd->relocate)
+        return true;
     if (!f_map_put(map, key, val))
         bd->failed = true;
     return !bd->failed;
@@ -839,6 +920,17 @@ static bool own_transform(const FBox *src, const flow_box_t *b)
 // no memory.
 static bool frame_box(Build *bd, const FBox *src, flow_box_t *b, Clip clip)
 {
+    // A moved box keeps its frames; its own transform's border box moves
+    // with it, and the matrix is worked again from there.
+    if (bd->relocate) {
+        flow_frame_t *f = (flow_frame_t *)b->frame;
+        if (own_transform(src, b) && f != NULL && f->box == b && f->kind == F_FRAME_TRANSFORM) {
+            f->box_x = bd->ox + src->x;
+            f->box_y = bd->oy + src->y;
+            transform_fill(f, src->style);
+        }
+        return true;
+    }
     if (src->out_of_flow) {
         const FPos *cb = src->pos != NULL ? src->pos->cb : NULL;
         b->frame = cb != NULL ? f_map_get(&bd->frames, cb) : NULL;
@@ -850,7 +942,7 @@ static bool frame_box(Build *bd, const FBox *src, flow_box_t *b, Clip clip)
         clip = kNoClip;
     }
     if (own_transform(src, b)) {
-        b->frame = transform_new(bd, src->style, src->x, src->y, src->w, src->h, b, clip);
+        b->frame = transform_new(bd, src->style, bd->ox + src->x, bd->oy + src->y, src->w, src->h, b, clip);
         if (b->frame == NULL)
             return false;
     }
@@ -1653,15 +1745,15 @@ static void public_frag(Build *bd, const FFrag *fr, flow_box_t *parent, flow_box
             return;
     }
     if (moved) {
-        b->frame = transform_new(bd, fr->style, fr->x, fr->y, fr->w, fr->h, b, clip);
+        b->frame = transform_new(bd, fr->style, bd->ox + fr->x, bd->oy + fr->y, fr->w, fr->h, b, clip);
         if (b->frame == NULL)
             return;
         clip = kNoClip;         // its frame's, where it stays as the atom moves
     }
-    set_clip(b, clip);
-    b->rect = rect_of(fr->x, fr->y, fr->w, fr->h);
+    build_clip(bd, b, clip);
+    b->rect = rect_of(bd->ox + fr->x, bd->oy + fr->y, fr->w, fr->h);
     b->overflow = b->rect;
-    b->baseline = edge32(round_px(fr->baseline));
+    b->baseline = edge32(round_px(bd->oy + fr->baseline));
     b->link = fr->link;
     b->decoration = fr->decoration;
     b->underline_color = fr->decoration_colors.underline;
@@ -1731,7 +1823,7 @@ static flow_box_t *public_box_body(Build *bd, const FBox *src, flow_box_t *paren
     if (b->stacked &&
         !push_list(bd, &bd->t->stacked, &bd->t->nstacked, &bd->t->cap_stacked, b))
         return b;
-    b->rect = rect_of(src->x, src->y, src->w, src->h);
+    b->rect = rect_of(bd->ox + src->x, bd->oy + src->y, src->w, src->h);
     b->overflow = b->rect;
     b->link = src->link;
     b->unfinished = src->unfinished;
@@ -1739,11 +1831,11 @@ static flow_box_t *public_box_body(Build *bd, const FBox *src, flow_box_t *paren
         return b;
     if (is_sticky(src) || own_transform(src, b))
         clip = kNoClip;         // its frame's, where it stays as the box moves
-    b->content = rect_of(src->x + src->border[FLOW_LEFT] + src->padding[FLOW_LEFT],
-        src->y + src->border[FLOW_TOP] + src->padding[FLOW_TOP],
+    b->content = rect_of(bd->ox + src->x + src->border[FLOW_LEFT] + src->padding[FLOW_LEFT],
+        bd->oy + src->y + src->border[FLOW_TOP] + src->padding[FLOW_TOP],
         src->w - src->border[FLOW_LEFT] - src->border[FLOW_RIGHT] - src->padding[FLOW_LEFT] - src->padding[FLOW_RIGHT],
         src->h - src->border[FLOW_TOP] - src->border[FLOW_BOTTOM] - src->padding[FLOW_TOP] - src->padding[FLOW_BOTTOM]);
-    set_clip(b, legacy_clip(src,clip));
+    build_clip(bd, b, legacy_clip(src,clip));
     Clip in = inner_clip(src, clip);
     flow_frame_t *scroll = NULL;
     if (f_box_scrolls(src)) {
@@ -1762,19 +1854,22 @@ static flow_box_t *public_box_body(Build *bd, const FBox *src, flow_box_t *paren
         flow_box_t *line = add(bd, b, &kids, FLOW_BOX_LINE, NULL, src->style);
         if (line == NULL)
             break;
-        set_clip(line, in);
-        line->rect = rect_of(ln->x, ln->y, ln->w, ln->h);
+        build_clip(bd, line, in);
+        line->rect = rect_of(bd->ox + ln->x, bd->oy + ln->y, ln->w, ln->h);
         line->overflow = line->rect;
-        line->baseline = edge32(round_px(ln->baseline));
+        line->baseline = edge32(round_px(bd->oy + ln->baseline));
         line->unfinished = ln->unfinished;
-        line->line_clamp_end = ln == bd->clamp_end;
+        // A clamp's line is its flow's, which a moved box's may belong to
+        // (a relative block's lines are its parent's flow): kept as made.
+        if (!bd->relocate)
+            line->line_clamp_end = ln == bd->clamp_end;
         flow_box_t *pieces = NULL;
         for (const FSpan *sp = ln->spans; sp != NULL && !bd->failed; sp = sp->next) {
             flow_box_t *span = add(bd, line, &pieces, FLOW_BOX_SPAN, sp->inl->node, sp->inl->style);
             if (span == NULL)
                 break;
-            set_clip(span, in);
-            span->rect = rect_of(sp->x0, sp->top, sp->x1 - sp->x0, sp->bottom - sp->top);
+            build_clip(bd, span, in);
+            span->rect = rect_of(bd->ox + sp->x0, bd->oy + sp->top, sp->x1 - sp->x0, sp->bottom - sp->top);
             span->overflow = span->rect;
             span->baseline = line->baseline;
             span->link = sp->inl->link;
@@ -1838,7 +1933,17 @@ static flow_box_t *public_box(Build *bd, const FBox *src, flow_box_t *parent, fl
     const FLine *outer = bd->clamp_end;
     if (f_clamps_lines(src->style))
         bd->clamp_end = f_clamp_line(src, NULL);
+    // A box a kept restyle moved since the layout (move_box) is
+    // where its records put it plus what it moved, and so is all in it.
+    int64_t ox = bd->ox, oy = bd->oy;
+    const FMoved *moved = bd->t->nmoved > 0 && src->positioned ? f_map_get(&bd->t->moved, src->node) : NULL;
+    if (moved != NULL) {
+        bd->ox += moved->dx;
+        bd->oy += moved->dy;
+    }
     flow_box_t *b = public_box_body(bd, src, parent, last, clip);
+    bd->ox = ox;
+    bd->oy = oy;
     bd->clamp_end = outer;
     return b;
 }
@@ -1852,13 +1957,18 @@ void flow_free(flow_tree_t *tree)
     f_boxes_free(tree->boxes);
     f_style_free(tree->styles);
     f_map_free(&tree->first);
+    f_map_free(&tree->moved);
     f_arena_free(&tree->arena);
     f_arena_free(&tree->tick_lists[0]);
     f_arena_free(&tree->tick_lists[1]);
+    f_arena_free(&tree->restyle);
+    os64_free(tree->reach_base_ranges);
+    os64_html_reader_free(tree->pending_reader);
     os64_free(tree->images);
     os64_free(tree->controls);
     os64_free(tree->positioned);
     os64_free(tree->stacked);
+    os64_free(tree->due_stacked);
     os64_free(tree->layers);
     os64_free(tree->scrollers);
     os64_page_free((os64_page_t *)tree->model);
@@ -2011,6 +2121,40 @@ static void emit_context(Stack *st, int32_t c)
     layer(st, box, PART_OUTLINES);
     if (is_group(box))
         layer(st, box, PART_CLOSE);
+}
+
+// Whether an element above stacked box `b` animates: the elements
+// stacked_from visits, from the same first one, are the only ones it can
+// hand motion_due anything through.
+static bool stacked_under_motion(const flow_tree_t *t, const flow_box_t *b)
+{
+    if (b->node == NULL)
+        return false;
+    const os64_html_node_t *up = b->pseudo != GARB_PSEUDO_NONE ? b->node : f_flat_parent(tree_doc(t), b->node);
+    for (const os64_html_node_t *a = up; a != NULL; a = f_flat_parent(tree_doc(t), a)) {
+        const FStyled *st = a->kind == OS64_HTML_ELEMENT ? f_style_of(t->styles, a) : NULL;
+        if (st != NULL && st->motion != NULL)
+            return true;
+    }
+    return false;
+}
+
+// The tree's `due_stacked`, made after its paint order (stack_build).
+static void motion_stacked(flow_tree_t *t)
+{
+    t->due_stacked = NULL;
+    t->ndue_stacked = 0;
+    t->due_all = false;
+    if (t->styles == NULL || t->styles->nanimated == 0 || t->nstacked == 0)
+        return;
+    t->due_stacked = os64_malloc((size_t)t->nstacked * sizeof(*t->due_stacked));
+    if (t->due_stacked == NULL) {
+        t->due_all = true;
+        return;
+    }
+    for (int32_t i = 0; i < t->nstacked; i++)
+        if (stacked_under_motion(t, t->stacked[i]))
+            t->due_stacked[t->ndue_stacked++] = i;
 }
 
 // The paint order, once per tree. False on no memory.
@@ -2185,6 +2329,63 @@ flow_tree_t *flow_layout_profiled(const os64_html_document_t *doc, const os64_pa
 {
     return flow_layout_restyled(doc, model, width, env, NULL, profile, clock, clock_ctx);
 }
+// The next box after `b` in tree order.
+static const flow_box_t *box_after(const flow_box_t *b)
+{
+    if (b->first != NULL) return b->first;
+    while (b != NULL && b->next == NULL) b = b->parent;
+    return b != NULL ? b->next : NULL;
+}
+// Each pseudo-element's first box in `tree`, by its node (box_styled_node):
+// a pseudo-element's node is made anew by every layout, so across two trees
+// it is matched by its originating element and which it is. False on no
+// memory.
+static bool pseudo_firsts(const flow_tree_t *tree, FMap *out)
+{
+    for (const flow_box_t *b = tree->root; b != NULL; b = box_after(b)) {
+        const os64_html_node_t *gen = b->pseudo != GARB_PSEUDO_NONE ? box_styled_node(tree->styles, b) : NULL;
+        if (gen != NULL && f_map_get(out, gen) == NULL && !f_map_put(out, gen, (void *)b))
+            return false;
+    }
+    return true;
+}
+// The nodes and pseudo-elements of `of` whose first box has no box in
+// `other`, or (`rects`) another border box than its first box there.
+static int64_t nodes_unmatched(const flow_tree_t *of, const FMap *of_pseudo, const flow_tree_t *other,
+                               const FMap *other_pseudo, bool rects)
+{
+    int64_t n = 0;
+    for (const flow_box_t *b = of->root; b != NULL; b = box_after(b)) {
+        if (b->node == NULL)
+            continue;
+        const flow_box_t *was;
+        if (b->pseudo == GARB_PSEUDO_NONE) {
+            if (flow_box_for(of, b->node) != b) continue;
+            was = flow_box_for(other, b->node);
+        } else {
+            const os64_html_node_t *gen = box_styled_node(of->styles, b);
+            if (gen == NULL || f_map_get(of_pseudo, gen) != b) continue;
+            const os64_html_node_t *there = box_styled_node(other->styles, b);
+            was = there != NULL ? f_map_get(other_pseudo, there) : NULL;
+        }
+        if (was == NULL || (rects && (was->rect.x != b->rect.x || was->rect.y != b->rect.y ||
+                                      was->rect.w != b->rect.w || was->rect.h != b->rect.h)))
+            n++;
+    }
+    return n;
+}
+// The nodes and pseudo-elements whose boxes moved, came or went
+// (flow_profile_t.nodes_moved); -1 on no memory.
+static int64_t nodes_moved(const flow_tree_t *tree, const flow_tree_t *previous)
+{
+    FMap now = {0}, was = {0};
+    int64_t n = -1;
+    if (pseudo_firsts(tree, &now) && pseudo_firsts(previous, &was))
+        n = nodes_unmatched(tree, &now, previous, &was, true) + nodes_unmatched(previous, &was, tree, &now, false);
+    f_map_free(&now);
+    f_map_free(&was);
+    return n;
+}
 uint64_t flow_styles_reused(const flow_tree_t *tree)
 {
     return tree && tree->styles ? tree->styles->reused : 0;
@@ -2212,6 +2413,25 @@ flow_tree_stats_t flow_tree_stats(const flow_tree_t *tree)
 flow_reuse_stats_t flow_reuse_stats(const flow_tree_t *tree)
 {
     return tree ? tree->reuse_stats : (flow_reuse_stats_t){0};
+}
+const char *flow_role_name(flow_role_t role)
+{
+    static const char *const kNames[FLOW_ROLES] = {
+        [FLOW_ROLE_ITEM] = "item", [FLOW_ROLE_FLEX] = "flex", [FLOW_ROLE_GRID] = "grid",
+        [FLOW_ROLE_POSITIONED] = "positioned", [FLOW_ROLE_OUT_OF_FLOW] = "absolute",
+        [FLOW_ROLE_TRANSFORMED] = "transformed", [FLOW_ROLE_FLOAT] = "float", [FLOW_ROLE_ATOMIC] = "atomic",
+        [FLOW_ROLE_CONTAINER] = "containing block", [FLOW_ROLE_INLINE] = "positioned inline",
+        [FLOW_ROLE_ALT_TEXT] = "alt text", [FLOW_ROLE_KIND] = "not a block",
+    };
+    return role < FLOW_ROLES ? kNames[role] : "?";
+}
+const char *flow_intrinsic_refusal_name(flow_intrinsic_refusal_t why)
+{
+    static const char *const kNames[FLOW_INTRINSIC_NREFUSALS] = {
+        [FLOW_INTRINSIC_HEIGHT] = "another height", [FLOW_INTRINSIC_ORDER] = "measured before it",
+        [FLOW_INTRINSIC_KNOWN] = "other widths here", [FLOW_INTRINSIC_TABLE] = "a table",
+    };
+    return why < FLOW_INTRINSIC_NREFUSALS ? kNames[why] : "?";
 }
 flow_tree_t *flow_layout_incremental(const os64_html_document_t *doc, const os64_page_t *model,
                                     int32_t width, const flow_env_t *env,
@@ -2241,6 +2461,7 @@ flow_tree_t *flow_layout_incremental(const os64_html_document_t *doc, const os64
     // fragment, so the budgeted arenas already bound them: no cap of their
     // own, which would turn a page the budget cut short into no page.
     tree->arena.cap = SIZE_MAX;
+    tree->restyle.cap = F_RESTYLE_ROOM;
     tree->now_ms = env->now_ms;
     tree->tick_ms = env->now_ms;
     tree->live = -1;
@@ -2250,7 +2471,8 @@ flow_tree_t *flow_layout_incremental(const os64_html_document_t *doc, const os64
         if (profile) profile_elapsed(&timing, began, &profile->layout_us);
         began = profile_clock(&timing);
     }
-    tree->styles = f_style_build_reusing(doc, model, env, previous ? previous->styles : NULL);
+    tree->styles = f_style_build_reusing(doc, model, env, previous ? previous->styles : NULL,
+                                         profile != NULL && clock != NULL);
     if (profile) {
         profile_elapsed(&timing, began, &profile->style_us);
         profile->elements = tree->styles ? tree->styles->map.count : 0;
@@ -2268,7 +2490,9 @@ flow_tree_t *flow_layout_incremental(const os64_html_document_t *doc, const os64
         FReuseMatch *match = NULL;
         if (inputs) {
             tree->reuse = reuse_snapshot_new(tree, width, env, inputs);
-            match = reuse_match_new(tree, previous, env);
+            // The role counter is the profile's: it counts only when a
+            // profiled layout gave a clock.
+            match = reuse_match_new(tree, previous, env, profile ? clock : NULL, clock_ctx);
         }
         tree->layout = f_layout_reusing(tree->boxes, doc, model, env, width, match,
                                          inputs ? &tree->reuse_stats : NULL);
@@ -2302,6 +2526,13 @@ flow_tree_t *flow_layout_incremental(const os64_html_document_t *doc, const os64
             flow_free(tree);
             return NULL;
         }
+        motion_stacked(tree);
+        tree->reach_base_w = tree->layout->width;
+        tree->reach_base_h = tree->layout->height;
+        tree->reach_base_ranges = tree->nscrollers > 0
+            ? os64_malloc((size_t)tree->nscrollers * sizeof(*tree->reach_base_ranges)) : NULL;
+        for (int32_t i = 0; tree->reach_base_ranges != NULL && i < tree->nscrollers; i++)
+            tree->reach_base_ranges[i] = tree->scrollers[i]->range;
         reach_stacked(tree);
         sticky_reach_scrolled(tree);
         ink_reach(tree->root);
@@ -2315,7 +2546,15 @@ flow_tree_t *flow_layout_incremental(const os64_html_document_t *doc, const os64
     if (inputs) {
         began = profile_clock(&timing);
         reuse_snapshot_finish(tree);
+        if (!tree->incomplete)
+            pending_open(tree);
         if (profile) profile_elapsed(&timing, began, &profile->layout_us);
+    }
+    if (profile) {
+        bool compared = tree->styles->compared;
+        profile->styles_paint = compared ? tree->styles->changed_paint : 0;
+        profile->styles_layout = compared ? tree->styles->changed_layout : tree->styles->map.count;
+        profile->nodes_moved = clock != NULL && compared ? nodes_moved(tree, previous) : -1;
     }
     return tree;
 }
@@ -2570,9 +2809,13 @@ static uint64_t motion_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_p
     // A text shadow is handed down too, so a box is judged by the reach of
     // the element it would take one from; one that cannot be seen even at
     // the farthest reach of any is passed by.
+    // Only through a stacked box an animated element is above can that
+    // element be made due (due_stacked); a page of many positioned boxes
+    // and one animation walks the few, at each of the loop's turns.
     DueAt d = {tree, NULL, view, scroll, false, ticks, now, next};
-    for (int32_t i = 0; i < tree->nstacked && d.next > now; i++) {
-        d.b = tree->stacked[i];
+    int32_t walked = tree->due_all ? tree->nstacked : tree->ndue_stacked;
+    for (int32_t k = 0; k < walked && d.next > now; k++) {
+        d.b = tree->stacked[tree->due_all ? k : tree->due_stacked[k]];
         if (d.b->node == NULL || !box_seen(d.b, view, scroll, most_reach))
             continue;
         d.seen = box_seen(d.b, view, scroll, 0);
@@ -2659,9 +2902,88 @@ int32_t flow_motion_entries(const flow_tree_t *tree, os64_gui_rect_t view, flow_
     return styles->nanimated;
 }
 
+bool flow_motion_describe(const flow_tree_t *tree, const flow_env_t *env, int32_t entry, int32_t anim,
+                          flow_motion_anim_t *out)
+{
+    *out = (flow_motion_anim_t){.prop = -1};
+    if (tree == NULL || tree->styles == NULL || entry < 0 || entry >= tree->styles->nanimated || anim < 0)
+        return false;
+    const os64_html_node_t *n = tree->styles->animated[entry];
+    const FStyled *st = f_style_of(tree->styles, n);
+    if (st == NULL || st->motion == NULL || anim >= st->motion->nanims)
+        return false;
+    const FMotion *m = st->motion;
+    const FAnimation *a = &m->anims[anim];
+    out->script = a->script != NULL;
+    out->timing = a->timing;
+    out->held = f_motion_held(a);
+    out->local_ms = a->script == NULL ? NAN
+                    : a->script->held ? a->script->hold_ms
+                                      : ((double)tree->now_ms - a->script->start_ms) * a->script->rate;
+    out->name = a->timing.name;
+    out->nframes = a->nframes;
+    for (int32_t p = 0; p < GARB_NPROPS; p++)
+        if (f_props_has(&a->props, (garb_prop_t)p) && out->nprops++ == 0)
+            out->prop = p;
+    // Only an element that ticks keeps its own clock; one that changes
+    // only at layouts is at the layout's time, with no edge of its own.
+    out->at = m->ticks ? m->at : (double)tree->now_ms;
+    out->edge = m->ticks ? m->edge : INFINITY;
+    out->now_ms = tree->now_ms;
+    out->tick_ms = tree->tick_ms;
+    // A keyframe resolved against the animations' values (`over`), else
+    // against its own: the layout resolves an element's that ticks.
+    for (int32_t end = 0; m->ticks && m->resolved != NULL && env != NULL && out->prop >= 0 && end < 2; end++) {
+        int32_t j = end == 0 ? 0 : a->nframes - 1;
+        const FResolved *r = j >= 0 ? m->resolved[2 * (m->first[anim] + j) + 1] : NULL;
+        if (r == NULL && j >= 0)
+            r = m->resolved[2 * (m->first[anim] + j)];
+        if (r != NULL)
+            (void)f_computed_text_of(tree, env, n, &r->style, out->prop, end == 0 ? out->first : out->last,
+                                     sizeof(out->first));
+    }
+    return true;
+}
+
 uint64_t flow_motion_tick_due(const flow_tree_t *tree, os64_gui_rect_t view, flow_point_t scroll)
 {
     return motion_due(tree, view, scroll, true);
+}
+
+static bool drawn_by(const flow_tree_t *tree, const os64_html_node_t *n, const os64_html_node_t **out);
+
+void flow_census(const flow_tree_t *tree, flow_census_t *out)
+{
+    *out = (flow_census_t){0};
+    if (tree == NULL || tree->styles == NULL)
+        return;
+    const os64_html_document_t *doc = tree_doc(tree);
+    const os64_html_node_t *top = os64_html_document_element(doc);
+    for (const os64_html_node_t *n = top; n != NULL;) {
+        if (n->kind != OS64_HTML_ELEMENT) {
+            n = flat_after(doc, top, n, true);
+            continue;
+        }
+        if (f_map_get(&tree->first, n) != NULL) {
+            out->boxed++;
+            n = flat_after(doc, top, n, true);
+            continue;
+        }
+        const FStyled *st = f_style_of(tree->styles, n);
+        if (st != NULL && st->style.display == FLOW_DISPLAY_NONE) {
+            out->none++;
+            for (const os64_html_node_t *k = os64_html_flat_first_child(doc, n); k != NULL; k = flat_after(doc, n, k, true))
+                out->under_none += k->kind == OS64_HTML_ELEMENT;
+            n = flat_after(doc, top, n, false);
+            continue;
+        }
+        const os64_html_node_t *by;
+        if (drawn_by(tree, n, &by) && by != NULL)
+            out->drawn++;
+        else
+            out->other++;
+        n = flat_after(doc, top, n, true);
+    }
 }
 
 bool flow_incomplete(const flow_tree_t *tree)
@@ -3214,6 +3536,16 @@ static bool outside_clips_hold(const flow_box_t *b, int64_t x, int64_t y, flow_p
 
 static void visit_inline(const Visit *v, const flow_box_t *b);
 
+// Whether what box `b` and everything in it paint meets `view`: its
+// overflow grown by its ink (its shadows, its outline, glyphs and markers
+// drawn past it, and the same of everything in it). A walk that prunes on
+// the overflow alone leaves out a shadow reaching into a view its box does
+// not, which a paint of part of the window then draws without.
+static bool paints_into(const flow_box_t *b, os64_gui_rect_t view)
+{
+    return meets(grown(b->overflow, b->ink), view);
+}
+
 // The walk of a box's content: a scroll container's is in its scroll, so
 // the view is where the content stands, `*in` filled; any other box's is
 // the box's own, `v`.
@@ -3232,7 +3564,7 @@ static const Visit *content_view(const Visit *v, const flow_box_t *b, Visit *in)
 // it either.
 static void visit_blocks(const Visit *v, const flow_box_t *b)
 {
-    if (b->unpainted || !meets(b->overflow, v->view))
+    if (b->unpainted || !paints_into(b, v->view))
         return;
     v->visit(v->ctx, b);
     Visit scrolled;
@@ -3261,7 +3593,7 @@ static void visit_whole(const Visit *v, const flow_box_t *b)
 // not the formatting context's.
 static void visit_floats(const Visit *v, const flow_box_t *b)
 {
-    if (!b->holds_float || b->unpainted || !meets(b->overflow, v->view))
+    if (!b->holds_float || b->unpainted || !paints_into(b, v->view))
         return;
     Visit scrolled;
     const Visit *cv = content_view(v, b, &scrolled);
@@ -3288,23 +3620,23 @@ static void visit_piece(const Visit *v, const flow_box_t *f)
 // stacked atom, which is a layer of its own — and the markers.
 static void visit_inline(const Visit *outer, const flow_box_t *b)
 {
-    if (b->unpainted || !meets(b->overflow, outer->view))
+    if (b->unpainted || !paints_into(b, outer->view))
         return;
     Visit scrolled;
     const Visit *v = content_view(outer, b, &scrolled);
     for (const flow_box_t *c = b->first; c != NULL; c = c->next) {
         if (c->kind == FLOW_BOX_LINE) {
-            if (!meets(c->overflow, v->view))
+            if (!paints_into(c, v->view))
                 continue;
             for (const flow_box_t *f = c->first; f != NULL; f = f->next)
-                if (!f->stacked && !f->unpainted && meets(f->overflow, v->view))
+                if (!f->stacked && !f->unpainted && paints_into(f, v->view))
                     visit_piece(v, f);
             // A line that may end in its block's ellipsis, after its
             // pieces, for the painter to draw the ellipsis over them.
             if (b->ellipsis != NULL)
                 v->visit(v->ctx, c);
         } else if (c->kind == FLOW_BOX_MARKER) {
-            if (!c->unpainted && meets(c->overflow, v->view))
+            if (!c->unpainted && paints_into(c, v->view))
                 v->visit(v->ctx, c);
         } else if (in_tree(c) && c->floated == FLOW_FLOAT_NONE) {
             visit_inline(v, c);
@@ -3365,6 +3697,16 @@ os64_gui_rect_t flow_affine_rect_back(const double m[6], os64_gui_rect_t r)
     return affine_back(m, r);
 }
 
+static os64_gui_rect_t grown(os64_gui_rect_t r, const int32_t d[4]);
+
+os64_gui_rect_t flow_through_sheet(os64_gui_rect_t bounds, const double m[6], os64_gui_rect_t view)
+{
+    os64_gui_rect_t back = affine_back(m, view), shows = meet(bounds, back);
+    if (shows.w <= 0 || shows.h <= 0)
+        return (os64_gui_rect_t){0, 0, 0, 0};
+    return meet(bounds, grown(back, (const int32_t[4]){1, 1, 1, 1}));
+}
+
 // `r` grown by `d` on each side, in CSS's side order, held as held_rect
 // holds one.
 static os64_gui_rect_t grown(os64_gui_rect_t r, const int32_t d[4])
@@ -3393,17 +3735,49 @@ static bool layer_reach(const Layer *l, flow_point_t scroll, os64_gui_rect_t *at
     return at->w > 0 && at->h > 0;      // clipped away: nothing of it to hold
 }
 
+// How far past the pixels matrix `m` carries a rect to the face's warp
+// reaches when it lays a group drawn through `m`, across (`d[FLOW_LEFT]`,
+// `d[FLOW_RIGHT]`) and down (`d[FLOW_TOP]`, `d[FLOW_BOTTOM]`): it samples
+// between the sheet's pixels (yonder's warp.c, bilinear), so a changed
+// sheet pixel moves every pixel whose sample point lies within a pixel of
+// it, and a pixel's square carried through `m` reaches half its row's
+// absolute sum each way — both source axes feed one destination axis under
+// a shear — a pixel at least, unless the matrix carries pixels onto pixels:
+// whole-pixel moves, with any turn by a quarter or flip, which sample no
+// pixel between two. False for those, `d` all 0.
+static bool warp_reads(const double m[6], int32_t d[4])
+{
+    d[0] = d[1] = d[2] = d[3] = 0;
+    bool unit = true;
+    for (int k = 0; k < 4; k++)
+        unit = unit && (m[k] == 0 || m[k] == 1 || m[k] == -1);
+    if (unit && (m[0] != 0) != (m[2] != 0) && (m[1] != 0) != (m[3] != 0) && (m[0] != 0) != (m[1] != 0) &&
+        m[4] == floor(m[4]) && m[5] == floor(m[5]))
+        return false;
+    double across = ceil((fabs(m[0]) + fabs(m[2])) / 2), down = ceil((fabs(m[1]) + fabs(m[3])) / 2);
+    int32_t x = across < 1 ? 1 : across > INT32_MAX / 8 ? INT32_MAX / 8 : (int32_t)across;
+    int32_t y = down < 1 ? 1 : down > INT32_MAX / 8 ? INT32_MAX / 8 : (int32_t)down;
+    d[FLOW_LEFT] = d[FLOW_RIGHT] = x;
+    d[FLOW_TOP] = d[FLOW_BOTTOM] = y;
+    return true;
+}
+
 // What a group nested in another adds to it: its bounds `r`, taken through
-// its matrix and cut to its clip when it is drawn through; false for
-// nothing.
+// its matrix, with what the warp reads past that (warp_reads), and cut to
+// its clip, when it is drawn through; false for nothing.
 static bool nested_reach(const flow_box_t *box, os64_gui_rect_t r, flow_point_t scroll,
                          os64_gui_rect_t *at)
 {
     double m[6];
     os64_gui_rect_t clip;
     *at = r;
-    if (flow_box_through(box, scroll, m, &clip, NULL))
-        *at = meet(affine_bounds(m, r), clip);
+    if (flow_box_through(box, scroll, m, &clip, NULL)) {
+        os64_gui_rect_t carried = affine_bounds(m, r);
+        int32_t reads[4];
+        if (carried.w > 0 && carried.h > 0 && warp_reads(m, reads))
+            carried = grown(carried, reads);
+        *at = meet(carried, clip);
+    }
     return at->w > 0 && at->h > 0;
 }
 
@@ -3440,14 +3814,25 @@ static os64_gui_rect_t mask_cut(const flow_box_t *box, os64_gui_rect_t r, flow_p
 
 // A view `r` grown by how far from outside it what lands in it can come
 // through a box's filter: flow_filter_reach mirrored, since a shadow cast
-// down shows below a source above `r`.
+// down shows below a source above `r`, and what the painter's blurs read
+// past that.
 static os64_gui_rect_t filter_sources(const flow_box_t *box, os64_gui_rect_t r)
 {
     int32_t d[4];
     flow_filter_reach(box, d);
-    const int32_t in[4] = {d[FLOW_BOTTOM], d[FLOW_LEFT], d[FLOW_TOP], d[FLOW_RIGHT]};
-    if (r.w <= 0 || r.h <= 0 || (in[0] | in[1] | in[2] | in[3]) == 0)
+    if (r.w <= 0 || r.h <= 0 || (d[0] | d[1] | d[2] | d[3]) == 0)
         return r;
+    // And what a blur made on a reduced copy reads past the reach
+    // (FLOW_FILTER_READS_MORE), each blur of the list; a list that reaches
+    // nothing — none, or one holding a URL — reads nothing past it.
+    const flow_style_t *s = box->style;
+    int64_t more = 0;
+    for (int32_t i = 0; f_group_filter(s, f_atom(box)) && i < s->nfilter; i++)
+        if (s->filter[i].fn == FLOW_FILTER_BLUR || s->filter[i].fn == FLOW_FILTER_DROP_SHADOW)
+            more += FLOW_FILTER_READS_MORE;
+    int32_t in[4] = {d[FLOW_BOTTOM], d[FLOW_LEFT], d[FLOW_TOP], d[FLOW_RIGHT]};
+    for (int k = 0; k < 4; k++)
+        in[k] = (int32_t)((int64_t)in[k] + more < INT32_MAX / 4 ? (int64_t)in[k] + more : INT32_MAX / 4);
     return grown(r, in);
 }
 
@@ -3562,13 +3947,315 @@ void flow_visit(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t 
     flow_visit_groups(tree, viewport, scroll, &v);
 }
 
+// The layer that paints `box` (flow_paint_path), of its nearest stacked
+// ancestor, or of itself when it is stacked, or of the root: that box's
+// WHOLE, or, where members of negative z-index split it, its SELF for the
+// box itself (its own background and borders) and its BODY for a box
+// inside it; -1 for none.
+static int32_t paint_part_of(const flow_tree_t *tree, const flow_box_t *box)
+{
+    if (tree == NULL || box == NULL)
+        return -1;
+    const flow_box_t *e = box;
+    while (e != NULL && !e->stacked && e != tree->root)
+        e = e->parent;
+    if (e == NULL)
+        return -1;
+    LayerPart split = e == box ? PART_SELF : PART_BODY;
+    for (int32_t i = 0; i < tree->nlayers; i++)
+        if (tree->layers[i].box == e && (tree->layers[i].part == PART_WHOLE || tree->layers[i].part == split))
+            return i;
+    return -1;
+}
+
+int32_t flow_paint_path(const flow_tree_t *tree, const flow_box_t *box, const flow_box_t **out, int32_t cap)
+{
+    int32_t k = paint_part_of(tree, box);
+    if (k < 0)
+        return -1;
+    // The opens not yet closed when the walk comes to `k`, outermost first:
+    // a close always ends the innermost open.
+    int32_t depth = 0;
+    for (int32_t i = 0; i < k; i++) {
+        if (tree->layers[i].part == PART_OPEN) {
+            if (depth < cap && out != NULL)
+                out[depth] = tree->layers[i].box;
+            depth++;
+        } else if (tree->layers[i].part == PART_CLOSE && depth > 0) {
+            depth--;
+        }
+    }
+    return depth;
+}
+
+// What a group drawn through matrix `m` takes in of the view outside it, in
+// its own pixels: that view taken back through the matrix, grown a pixel
+// each way, as the painter grows the sheet it fills (a bilinear sample at
+// the view's edge mixes the source pixel beyond), joined with the view
+// moved back to where an upright drawing puts the group (`up`) — the face
+// may refuse to lay it through (flow_box_through's `upright`), and the
+// walk is not told which it did.
+static os64_gui_rect_t taken_in(os64_gui_rect_t view, const double m[6], flow_point_t up)
+{
+    os64_gui_rect_t back = affine_back(m, view);
+    if (back.w > 0 && back.h > 0)
+        back = grown(back, (const int32_t[4]){1, 1, 1, 1});
+    os64_gui_rect_t upright = moved(view, -(int64_t)up.x, -(int64_t)up.y);
+    return back.w > 0 && back.h > 0 ? join(back, upright) : upright;
+}
+
+// The view a group's inside is culled against, the view outside it being
+// `view` (flow_visit_groups): none inside none, or for a group the visitor
+// asked for none of; the whole plane inside it, or for a group asked for
+// whole; else what a group drawn through a matrix takes in (taken_in) or
+// the view itself, grown by how far from outside it what its filter draws
+// there can come (filter_sources). The sheet and budget bounds keep the
+// same views (flow_paint_asks).
+static os64_gui_rect_t inside_view(const flow_box_t *b, os64_gui_rect_t view, bool through, const double m[6],
+                                   flow_point_t up, flow_inside_t asked)
+{
+    if (view.w <= 0 || view.h <= 0 || asked == FLOW_INSIDE_NONE)
+        return (os64_gui_rect_t){0, 0, 0, 0};
+    if (view.w == kWholePlane.w || asked == FLOW_INSIDE_ALL)
+        return kWholePlane;
+    return filter_sources(b, through ? taken_in(view, m, up) : view);
+}
+
+static int64_t area_of(os64_gui_rect_t r)
+{
+    return r.w > 0 && r.h > 0 ? (int64_t)r.w * r.h : 0;
+}
+
+// Whether a box is drawn through an ancestor's matrix (own_through), so
+// that what it charges is counted in that ancestor's own pixels.
+static bool under_through(const flow_box_t *b)
+{
+    for (const flow_box_t *p = b != NULL ? b->parent : NULL; p != NULL; p = p->parent)
+        if (own_through(p))
+            return true;
+    return false;
+}
+
+static bool sheet_within(os64_gui_rect_t r, int32_t side, int64_t pixels)
+{
+    return r.w <= 0 || r.h <= 0 || (r.w <= side && r.h <= side && (int64_t)r.w * r.h <= pixels);
+}
+
+// The first limit a paint passes, in paint order, and what passed it
+// (flow_paint_asks); a later pass leaves the first standing.
+static void asks_over(flow_paint_asks_t *out, flow_asks_over_t over, const flow_box_t *b, os64_gui_rect_t rect,
+                      int64_t charge, bool inside)
+{
+    if (out->over != FLOW_ASKS_WITHIN)
+        return;
+    out->over = over;
+    out->box = b;
+    out->rect = rect;
+    out->box_charge = charge;
+    out->inside = inside;
+}
+
+// It follows the views the walk keeps (inside_view), which hold the
+// painter's at every depth — the walk may not cull what the painter draws —
+// and grow with every view the painter grows: a filtered group's layer by
+// what its filter spreads, a group drawn through a matrix by the view taken
+// back through it. Each of those only grows with the viewport, so the
+// viewport's answer bounds a part's. Inside a group drawn through a matrix
+// the painter's view may be the group's whole bounds (a kept drawing is
+// made whole, paint.h), so there a group counts its bounds whole.
+// A group drawn through a matrix asks for a sheet of its bounds met with
+// the view taken back through the matrix, a pixel wider (the upright place
+// the walk also takes in is not asked for), and what shows of it is that;
+// a group that may take a layer (a filter, a mask,
+// a blend other than normal) asks for a layer of its bounds met with the
+// view inside it, and is charged what of that shows, once and once a mask
+// layer; a box with a backdrop filter is charged its part in the view, and
+// asks for that part grown by its list's reach. Groups nested past the
+// stack's depth ask for more than any budget.
+bool flow_paint_asks(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
+                     const flow_paint_limits_t *limits, flow_paint_asks_t *out)
+{
+    const int64_t unbounded = INT64_MAX / 4;
+    *out = (flow_paint_asks_t){.sheets_fit = true};
+    if (tree == NULL || tree->root == NULL || viewport.w <= 0 || viewport.h <= 0)
+        return true;
+    enum { DEEP = 64 };
+    struct {
+        os64_gui_rect_t view, shown;
+        bool inside;
+    } outer[DEEP];
+    os64_gui_rect_t *bounds = all_group_bounds(tree, scroll);
+    os64_gui_rect_t view = viewport, shown = viewport;
+    bool inside = false;
+    int32_t depth = 0;
+    for (int32_t i = 0; i < tree->nlayers && out->charge < unbounded; i++) {
+        const Layer *l = &tree->layers[i];
+        const flow_box_t *b = l->box;
+        if (l->part == PART_CLOSE) {
+            if (depth > 0) {
+                depth--;
+                view = outer[depth].view;
+                shown = outer[depth].shown;
+                inside = outer[depth].inside;
+            }
+            continue;
+        }
+        if (l->part != PART_OPEN) {
+            // A backdrop filter's box makes a context of its own, painted
+            // in its whole part or its self part.
+            if ((l->part != PART_WHOLE && l->part != PART_SELF) || b->style == NULL || b->style->nbackdrop_filter <= 0)
+                continue;
+            os64_gui_rect_t part = inside ? b->rect : meet(flow_box_doc_rect(b, scroll), view);
+            int32_t d[4];
+            flow_filter_list_reach(b->style->backdrop_filter, b->style->nbackdrop_filter, d);
+            out->charge += area_of(part);
+            if (out->charge > limits->budget)
+                asks_over(out, FLOW_ASKS_BUDGET, b, part, area_of(part), inside);
+            if (part.w > 0 && part.h > 0 && !sheet_within(grown(part, d), limits->layer_side, limits->layer_pixels)) {
+                out->sheets_fit = false;
+                asks_over(out, FLOW_ASKS_BACKDROP_SHEET, b, grown(part, d), 0, inside);
+            }
+            continue;
+        }
+        if (depth >= DEEP) {
+            out->charge = unbounded;
+            out->sheets_fit = false;
+            asks_over(out, FLOW_ASKS_DEEP, b, (os64_gui_rect_t){0, 0, 0, 0}, 0, inside);
+            break;
+        }
+        outer[depth].view = view;
+        outer[depth].shown = shown;
+        outer[depth].inside = inside;
+        depth++;
+        int32_t end;
+        os64_gui_rect_t bd = bounds != NULL ? bounds[i] : group_bounds(tree, i, scroll, &end);
+        double m[6];
+        flow_point_t up;
+        bool through = flow_box_through(b, scroll, m, NULL, &up);
+        os64_gui_rect_t from = inside ? kWholePlane : view;
+        os64_gui_rect_t in = inside_view(b, from, through, m, up, FLOW_INSIDE_VIEW);
+        if (through) {
+            // The sheet the painter asks for, by the function it asks with
+            // (flow_through_sheet), of a view that holds the painter's. The
+            // upright place the walk also takes in is for a face that
+            // refuses the sheet, and is no part of it.
+            os64_gui_rect_t sheet = from.w == kWholePlane.w ? bd : flow_through_sheet(bd, m, from);
+            if (!sheet_within(sheet, limits->through_side, limits->through_pixels)) {
+                out->sheets_fit = false;
+                asks_over(out, FLOW_ASKS_THROUGH_SHEET, b, sheet, 0, inside);
+            }
+            shown = sheet;
+        }
+        if (f_group_filter(b->style, f_atom(b)) || flow_masked(b) || b->style->mix_blend != FLOW_BLEND_NORMAL) {
+            os64_gui_rect_t layer = meet(bd, in);
+            if (!sheet_within(layer, limits->layer_side, limits->layer_pixels)) {
+                out->sheets_fit = false;
+                asks_over(out, FLOW_ASKS_LAYER_SHEET, b, layer, 0, inside);
+            }
+            int64_t a = area_of(meet(layer, shown));
+            int64_t layers = flow_masked(b) ? 1 + flow_mask_layers(b->style) : 1;
+            out->charge = a >= (unbounded - out->charge) / layers ? unbounded : out->charge + a * layers;
+            if (out->charge > limits->budget)
+                asks_over(out, FLOW_ASKS_BUDGET, b, meet(layer, shown), a >= unbounded / layers ? unbounded : a * layers,
+                          inside);
+        }
+        if (through || f_group_filter(b->style, f_atom(b)))
+            view = in;
+        inside = inside || through;
+    }
+    // A backdrop filter on a box that makes no context of its own (not
+    // granted one) is charged its whole rect, whatever view it is painted in.
+    for (const flow_box_t *b = tree->root; b != NULL && out->charge < unbounded; b = box_after(b)) {
+        if (b->style == NULL || b->style->nbackdrop_filter <= 0 || makes_context(b))
+            continue;
+        bool under = under_through(b);
+        os64_gui_rect_t part = under ? b->rect : flow_box_doc_rect(b, scroll);
+        int32_t d[4];
+        flow_filter_list_reach(b->style->backdrop_filter, b->style->nbackdrop_filter, d);
+        out->charge += area_of(part);
+        if (out->charge > limits->budget)
+            asks_over(out, FLOW_ASKS_BUDGET, b, part, area_of(part), under);
+        if (part.w > 0 && part.h > 0 && !sheet_within(grown(part, d), limits->layer_side, limits->layer_pixels)) {
+            out->sheets_fit = false;
+            asks_over(out, FLOW_ASKS_BACKDROP_SHEET, b, grown(part, d), 0, under);
+        }
+    }
+    os64_free(bounds);
+    if (out->charge > unbounded)
+        out->charge = unbounded;
+    return out->over == FLOW_ASKS_WITHIN;
+}
+
+int64_t flow_layer_area_bound(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll)
+{
+    const flow_paint_limits_t none = {INT64_MAX, INT32_MAX, INT64_MAX, INT32_MAX, INT64_MAX};
+    flow_paint_asks_t asks;
+    (void)flow_paint_asks(tree, viewport, scroll, &none, &asks);
+    return asks.charge;
+}
+
+bool flow_sheets_fit(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll, int32_t through_side,
+                     int64_t through_pixels, int32_t layer_side, int64_t layer_pixels)
+{
+    const flow_paint_limits_t limits = {INT64_MAX, through_side, through_pixels, layer_side, layer_pixels};
+    flow_paint_asks_t asks;
+    (void)flow_paint_asks(tree, viewport, scroll, &limits, &asks);
+    return asks.sheets_fit;
+}
+
+// The layer index of the close of the group opened at `i`.
+static int32_t close_of(const flow_tree_t *tree, int32_t i)
+{
+    int32_t depth = 0;
+    for (int32_t k = i + 1; k < tree->nlayers; k++) {
+        if (tree->layers[k].part == PART_OPEN)
+            depth++;
+        else if (tree->layers[k].part == PART_CLOSE && depth-- == 0)
+            return k;
+    }
+    return tree->nlayers;
+}
+
+// The part that paints the cover (flow_visit_groups_from's `from`), walked
+// with each box passed through this gate: none handed over until the
+// cover is.
+typedef struct {
+    void (*visit)(void *ctx, const flow_box_t *box);
+    void *ctx;
+    const flow_box_t *from;
+    bool found;
+} FromGate;
+
+static void from_gate(void *ctx, const flow_box_t *box)
+{
+    FromGate *g = ctx;
+    if (!g->found) {
+        if (box != g->from)
+            return;
+        g->found = true;
+    }
+    g->visit(g->ctx, box);
+}
+
 void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
                        const flow_visitor_t *visitor)
 {
+    flow_visit_groups_from(tree, viewport, scroll, visitor, NULL, NULL);
+}
+
+void flow_visit_groups_from(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
+                            const flow_visitor_t *visitor, const flow_box_t *from, bool *found)
+{
+    if (found != NULL)
+        *found = false;
     if (tree == NULL || tree->root == NULL || visitor == NULL || visitor->visit == NULL)
         return;
     void (*visit)(void *, const flow_box_t *) = visitor->visit;
     void *ctx = visitor->ctx;
+    // The cover: the part that paints it, and the gate its own part's boxes
+    // pass through.
+    int32_t from_part = from != NULL ? paint_part_of(tree, from) : -1;
+    FromGate gate = {visit, ctx, from, false};
     os64_gui_rect_t *bounds = visitor->open != NULL ? all_group_bounds(tree, scroll) : NULL;
     // The view in the coordinates each open group drawn through its matrix
     // is painted in: the one outside taken back through the matrix and
@@ -3589,6 +4276,18 @@ void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_p
     int32_t depth = 0;
     for (int32_t i = 0; i < tree->nlayers; i++) {
         const flow_box_t *b = tree->layers[i].box;
+        // Before the cover's part: a group that closes before it is culled
+        // whole, and every part is culled; the open of a group that holds
+        // it comes as ever.
+        if (i < from_part && tree->layers[i].part != PART_CLOSE) {
+            if (tree->layers[i].part != PART_OPEN)
+                continue;
+            int32_t end = close_of(tree, i);
+            if (end < from_part) {
+                i = end;
+                continue;
+            }
+        }
         os64_gui_rect_t view = depth == 0 ? viewport : depth <= F_VIEWS ? views[depth - 1]
                                                                         : kWholePlane;
         if (tree->layers[i].part == PART_OPEN) {
@@ -3606,21 +4305,7 @@ void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_p
                 if (depth < F_VIEWS) {
                     flow_inside_t asked = through && visitor->inside != NULL
                                               ? visitor->inside(ctx, b) : FLOW_INSIDE_VIEW;
-                    os64_gui_rect_t in = view;
-                    if (view.w <= 0 || view.h <= 0 || asked == FLOW_INSIDE_NONE) {
-                        views[depth] = (os64_gui_rect_t){0, 0, 0, 0};
-                    } else if (view.w == kWholePlane.w || asked == FLOW_INSIDE_ALL) {
-                        views[depth] = kWholePlane;
-                    } else {
-                        if (through) {
-                            os64_gui_rect_t back = affine_back(m, view);
-                            if (back.w > 0 && back.h > 0)
-                                back = grown(back, (const int32_t[4]){1, 1, 1, 1});
-                            os64_gui_rect_t upright = moved(view, -(int64_t)up.x, -(int64_t)up.y);
-                            in = back.w > 0 && back.h > 0 ? join(back, upright) : upright;
-                        }
-                        views[depth] = filter_sources(b, in);
-                    }
+                    views[depth] = inside_view(b, view, through, m, up, asked);
                 }
                 depth++;
             }
@@ -3635,19 +4320,23 @@ void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_p
         }
         flow_point_t o = flow_box_doc_offset(b, scroll);
         Visit v = {tree, moved(view, -(int64_t)o.x, -(int64_t)o.y), visit, ctx};
+        if (i == from_part) {
+            v.visit = from_gate;
+            v.ctx = &gate;
+        }
         switch (tree->layers[i].part) {
         case PART_WHOLE:
             if (b->kind != FLOW_BOX_ATOMIC)
                 visit_whole(&v, b);
-            else if (!b->unpainted && meets(b->overflow, v.view))
+            else if (!b->unpainted && paints_into(b, v.view))
                 visit_piece(&v, b);
             break;
         case PART_SELF:
-            if (!b->unpainted && meets(b->overflow, v.view))
-                visit(ctx, b);
+            if (!b->unpainted && paints_into(b, v.view))
+                v.visit(v.ctx, b);
             break;
         case PART_BODY: {
-            if (b->unpainted || !meets(b->overflow, v.view))
+            if (b->unpainted || !paints_into(b, v.view))
                 break;
             Visit scrolled;
             const Visit *cv = content_view(&v, b, &scrolled);
@@ -3669,6 +4358,8 @@ void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_p
         case PART_OPEN: case PART_CLOSE: break;     // heard above
         }
     }
+    if (found != NULL)
+        *found = from != NULL && gate.found;
     os64_free(bounds);
 }
 
@@ -3859,7 +4550,7 @@ static const flow_box_t *hit(HitWalk *t, const flow_box_t *b, int32_t x, int32_t
 // is asked once, of the layer; the scroll containers inside it, as the
 // walk enters each (hit_kids). `painted` is HitWalk's.
 static const flow_box_t *hit_at(const flow_tree_t *tree, int32_t x, int32_t y, flow_point_t scroll,
-                                uint64_t *cuts, const flow_box_t *painted)
+                                uint64_t *cuts, const flow_box_t *painted, const flow_box_t *top)
 {
     if (cuts != NULL)
         *cuts = 0;
@@ -3871,6 +4562,9 @@ static const flow_box_t *hit_at(const flow_tree_t *tree, int32_t x, int32_t y, f
     const flow_box_t *found = NULL;
     for (int32_t i = tree->nlayers; i > 0 && found == NULL; i--) {
         const flow_box_t *b = tree->layers[i - 1].box;
+        // A top layer (flow_hit_within): only its own layers are there.
+        if (top != NULL && !within(b, top))
+            continue;
         if (!outside_clips_hold(b, x, y, scroll))
             continue;
         flow_point_t at;
@@ -3900,12 +4594,18 @@ static const flow_box_t *hit_at(const flow_tree_t *tree, int32_t x, int32_t y, f
 const flow_box_t *flow_hit_counted(const flow_tree_t *tree, int32_t x, int32_t y, flow_point_t scroll,
                                    uint64_t *cuts)
 {
-    return hit_at(tree, x, y, scroll, cuts, NULL);
+    return hit_at(tree, x, y, scroll, cuts, NULL, NULL);
 }
 
 const flow_box_t *flow_hit(const flow_tree_t *tree, int32_t x, int32_t y, flow_point_t scroll)
 {
     return flow_hit_counted(tree, x, y, scroll, NULL);
+}
+
+const flow_box_t *flow_hit_within(const flow_tree_t *tree, int32_t x, int32_t y, flow_point_t scroll,
+                                  const flow_box_t *top)
+{
+    return hit_at(tree, x, y, scroll, NULL, NULL, top);
 }
 
 bool flow_text_processed(const flow_box_t *b, size_t source, uint32_t *processed)
@@ -3941,14 +4641,22 @@ bool flow_text_processed(const flow_box_t *b, size_t source, uint32_t *processed
     return true;
 }
 
-bool flow_box_covered_at(const flow_tree_t *tree, const flow_box_t *box, int32_t x, int32_t y, flow_point_t scroll)
+bool flow_box_covered_within(const flow_tree_t *tree, const flow_box_t *box, int32_t x, int32_t y,
+                             flow_point_t scroll, const flow_box_t *top)
 {
     if (tree == NULL || box == NULL)
         return false;
-    const flow_box_t *h = hit_at(tree, x, y, scroll, NULL, box);
+    if (top != NULL && !within(box, top))
+        return true;
+    const flow_box_t *h = hit_at(tree, x, y, scroll, NULL, box, top);
     while (h != NULL && h != box)
         h = h->parent;
     return h == NULL;
+}
+
+bool flow_box_covered_at(const flow_tree_t *tree, const flow_box_t *box, int32_t x, int32_t y, flow_point_t scroll)
+{
+    return flow_box_covered_within(tree, box, x, y, scroll, NULL);
 }
 
 bool flow_box_covered(const flow_tree_t *tree, const flow_box_t *box, flow_point_t scroll)
@@ -4024,7 +4732,10 @@ const os64_html_node_t *flow_clip_parent(const flow_tree_t *tree, const os64_htm
     if (position != FLOW_POSITION_ABSOLUTE && position != FLOW_POSITION_FIXED)
         return parent;
     // An absolute or fixed box's containing block is its parent's anchor
-    // (FStyled.anchor, fixed_anchor): the nearest element that can be one.
+    // (FStyled.anchor, fixed_anchor): the nearest element that can be one;
+    // the top layer's is the viewport (f_top_layer).
+    if (f_top_layer(node))
+        return NULL;
     const FStyled *of = f_style_of(tree->styles, parent);
     if (of == NULL)
         return NULL;
@@ -4209,7 +4920,9 @@ static const FResolved *tick_resolved(void *ctx, int32_t a, int32_t frame, const
 
 // A box's ink with its shadows as they are now, MERGED into what it was —
 // a box's ink only grows while its tree lives — and handed up as ink_reach
-// hands it.
+// hands it: the ink to the stacked box that holds it, and whether an
+// outline is held past it too, to every ancestor, as ink_up hands that
+// (visit_outlines walks into stacked boxes that are not contexts).
 static void ink_grown(flow_box_t *b)
 {
     int32_t was[4];
@@ -4217,62 +4930,144 @@ static void ink_grown(flow_box_t *b)
     own_ink(b);
     for (int k = 0; k < 4; k++)
         b->ink[k] = b->ink[k] > was[k] ? b->ink[k] : was[k];
-    for (const flow_box_t *c = b; c->parent != NULL && !c->stacked; c = c->parent)
+    const flow_box_t *c = b;
+    for (; c->parent != NULL && !c->stacked; c = c->parent)
         ink_up(c);
+    for (; c->holds_outline && c->parent != NULL && !c->parent->holds_outline; c = c->parent)
+        ((flow_box_t *)c->parent)->holds_outline = true;
 }
 
-// A change to a box a filter draws repaints all that filter spreads it
-// over, so it is marked by the bounds of the outermost filtered group it
-// paints in (filter_grown), with the group's box. `FilterMemo` keeps the
-// last group found and the last marked, so the boxes of one changed
-// subtree look for theirs once and mark it once.
+// WHAT A CHANGE PAINTS, WHERE THE PAGE SHOWS IT: what the changed box
+// paints, at each box from it out to the root, spread by that box's filter
+// when it is a filtered group (flow_filter_reach, which holds a drop
+// shadow's offset, and the farther a blur made on a reduced copy reads,
+// FLOW_FILTER_READS_MORE) and cut to that group's bounds, then taken
+// through that box's matrix, with what the warp reads past it, and cut to
+// its clip, when it is drawn through one (nested_reach) — a filter is
+// spread before its own box's matrix, as group_bounds spreads it — so
+// nested filters, a filter inside a matrix and a matrix inside a filter
+// each spread it in the coordinates that filter is drawn in, and every
+// mark a tick or a layout's parts make takes the same walk. Every
+// function yonder draws is local — the colour functions touch one pixel, a
+// blur or a shadow no farther than its reach — and a list holding a URL is
+// drawn unfiltered (FILTER.md § 2); a function filter_local does not name,
+// one added later, repaints its group's whole bounds until it is. The
+// spread is cut to a group's bounds only where they are known: a group
+// with no OPEN (a tree built short of memory) is spread uncut, or, for a
+// function not named, without bound. `MarkMemo` keeps the OPEN layers and
+// bounds of the last few filtered groups looked up, so the boxes of one
+// changed subtree work each group out once, and the last rect marked, so a
+// rect marked again straight after is not marked twice.
+#define MARK_MEMO 4
+static bool same_rect(os64_gui_rect_t a, os64_gui_rect_t b);
 typedef struct {
-    const flow_box_t *box;      // the last outermost filtered box found
-    int32_t open;               // its OPEN's layer, -1 for none
-    int32_t marked;             // the OPEN's layer last marked, -1 for none
-} FilterMemo;
+    const flow_box_t *box[MARK_MEMO];
+    int32_t open[MARK_MEMO];
+    os64_gui_rect_t whole[MARK_MEMO];   // the group's bounds, when `open` is one
+    int32_t next;
+    bool marked;
+    os64_gui_rect_t last;
+} MarkMemo;
 
-// The OPEN layer of the outermost filtered group `b` paints in, or -1: a
-// filtered box that is a context, and so a group (makes_context, is_group).
-static int32_t filtered_open(const flow_tree_t *t, const flow_box_t *b, FilterMemo *memo)
+// Whether `a` is a filtered group: a filtered box that is a context, and so
+// a group (makes_context, is_group).
+static bool filtered_group(const flow_box_t *a)
 {
-    const flow_box_t *g = NULL;
-    for (const flow_box_t *a = b; a != NULL; a = a->parent)
-        if (f_group_filter(a->style, f_atom(a)) && !a->unpainted && (a->stacked || a->parent == NULL))
-            g = a;
-    if (g == NULL)
-        return -1;
-    if (g != memo->box) {
-        memo->box = g;
-        memo->open = -1;
-        for (int32_t k = 0; k < t->nlayers && memo->open < 0; k++)
-            if (t->layers[k].box == g && t->layers[k].part == PART_OPEN)
-                memo->open = k;
-    }
-    return memo->open;
+    return f_group_filter(a->style, f_atom(a)) && !a->unpainted && (a->stacked || a->parent == NULL);
 }
 
-// Whether `b` is in a filtered group (filtered_open), its bounds handed to
-// `mark` in page coordinates at `scroll` unless they were just now.
-static bool mark_filtered(const flow_tree_t *t, const flow_box_t *b, flow_point_t scroll,
-                          FilterMemo *memo, const os64_gui_rect_t *bounds,
-                          void (*mark)(void *ctx, const flow_box_t *box, os64_gui_rect_t r),
-                          void *ctx)
+// The layer of filtered group `a`'s OPEN, or -1, and with one its bounds
+// in `*whole`: `bounds`' when every group's were worked out, else worked
+// out once for the memo.
+static int32_t open_of(const flow_tree_t *t, const flow_box_t *a, flow_point_t scroll, MarkMemo *memo,
+                       const os64_gui_rect_t *bounds, os64_gui_rect_t *whole)
 {
-    int32_t k = filtered_open(t, b, memo);
-    if (k < 0)
-        return false;
-    if (k != memo->marked) {
-        int32_t end;
-        const flow_box_t *g = t->layers[k].box;
-        os64_gui_rect_t r = space_rect(g->frame, bounds != NULL ? bounds[k]
-                                                                : group_bounds(t, k, scroll, &end),
-                                       scroll);
-        if (r.w > 0 && r.h > 0)
-            mark(ctx, g, r);
-        memo->marked = k;
-    }
+    for (int32_t i = 0; i < MARK_MEMO; i++)
+        if (memo->box[i] == a) {
+            *whole = memo->whole[i];
+            return memo->open[i];
+        }
+    int32_t open = -1, end;
+    for (int32_t k = 0; k < t->nlayers && open < 0; k++)
+        if (t->layers[k].box == a && t->layers[k].part == PART_OPEN)
+            open = k;
+    *whole = open < 0 ? (os64_gui_rect_t){0, 0, 0, 0} : bounds != NULL ? bounds[open] : group_bounds(t, open, scroll, &end);
+    int32_t slot = memo->next;
+    memo->next = (memo->next + 1) % MARK_MEMO;
+    memo->box[slot] = a;
+    memo->open[slot] = open;
+    memo->whole[slot] = *whole;
+    return open;
+}
+
+// Whether every function of `a`'s filter list spreads a pixel no farther
+// than flow_filter_reach says it does; a function not named here is taken
+// as one that may not.
+static bool filter_local(const flow_box_t *a)
+{
+    for (int32_t i = 0; i < a->style->nfilter; i++)
+        switch (a->style->filter[i].fn) {
+        case FLOW_FILTER_URL:
+        case FLOW_FILTER_BLUR:
+        case FLOW_FILTER_BRIGHTNESS:
+        case FLOW_FILTER_CONTRAST:
+        case FLOW_FILTER_GRAYSCALE:
+        case FLOW_FILTER_INVERT:
+        case FLOW_FILTER_OPACITY:
+        case FLOW_FILTER_SEPIA:
+        case FLOW_FILTER_SATURATE:
+        case FLOW_FILTER_HUE_ROTATE:
+        case FLOW_FILTER_DROP_SHADOW:
+            break;
+        default:
+            return false;
+        }
     return true;
+}
+
+// `r` spread by `a`'s filter: its reach, and what its blurs read past it.
+static os64_gui_rect_t filter_spread(const flow_box_t *a, os64_gui_rect_t r)
+{
+    int32_t d[4];
+    flow_filter_reach(a, d);
+    int64_t more = 0;
+    for (int32_t i = 0; i < a->style->nfilter; i++)
+        if (a->style->filter[i].fn == FLOW_FILTER_BLUR || a->style->filter[i].fn == FLOW_FILTER_DROP_SHADOW)
+            more += FLOW_FILTER_READS_MORE;
+    if ((d[0] | d[1] | d[2] | d[3]) == 0)
+        return r;
+    for (int k = 0; k < 4; k++)
+        d[k] = (int32_t)((int64_t)d[k] + more < INT32_MAX / 4 ? (int64_t)d[k] + more : INT32_MAX / 4);
+    return grown(r, d);
+}
+
+// `r`, what `b` paints in the coordinates it is painted in — its own
+// filter already spread into it when `spread` is false, as a group's
+// bounds have it — spread, cut and taken out at each box from `b` as above,
+// handed to `mark` in page coordinates at `scroll` with `b`, unless a clip
+// leaves nothing of it or it is the rect last marked.
+static void mark_reach(const flow_tree_t *t, const flow_box_t *b, os64_gui_rect_t r, bool spread,
+                       flow_point_t scroll, MarkMemo *memo, const os64_gui_rect_t *bounds,
+                       void (*mark)(void *ctx, const flow_box_t *box, os64_gui_rect_t r), void *ctx)
+{
+    for (const flow_box_t *a = b; a != NULL && r.w > 0 && r.h > 0; a = a->parent) {
+        if ((a != b || spread) && filtered_group(a)) {
+            os64_gui_rect_t whole;
+            if (open_of(t, a, scroll, memo, bounds, &whole) >= 0) {
+                r = meet(filter_local(a) ? filter_spread(a, r) : whole, whole);
+            } else {
+                int32_t all[4] = {INT32_MAX / 4, INT32_MAX / 4, INT32_MAX / 4, INT32_MAX / 4};
+                r = filter_local(a) ? filter_spread(a, r) : grown(r, all);
+            }
+        }
+        if (!nested_reach(a, r, scroll, &r))
+            return;
+    }
+    if (r.w <= 0 || r.h <= 0 || (memo->marked && same_rect(r, memo->last)))
+        return;
+    memo->marked = true;
+    memo->last = r;
+    mark(ctx, b, r);
 }
 
 // What each element a tick changes paints, handed to `mark` in page
@@ -4280,7 +5075,8 @@ static bool mark_filtered(const flow_tree_t *t, const flow_box_t *b, flow_point_
 // reaches, below): a group's bounds (group_bounds) taken out
 // through every matrix; any other element's boxes' overflow rects grown by
 // their ink and cut to their clips, as a group holds them (layer_reach);
-// either, in a filtered group, by that group's bounds (mark_filtered).
+// either spread by the filters it is drawn through and taken out through
+// every matrix (mark_reach).
 static void tick_marks(const flow_tree_t *t, flow_point_t scroll,
                        void (*mark)(void *ctx, const flow_box_t *box, os64_gui_rect_t r), void *ctx)
 {
@@ -4288,7 +5084,7 @@ static void tick_marks(const flow_tree_t *t, flow_point_t scroll,
     for (int32_t i = 0; i < t->nticking; i++)
         groups |= t->ticking[i].changed && t->ticking[i].open >= 0;
     os64_gui_rect_t *bounds = groups ? all_group_bounds(t, scroll) : NULL;
-    FilterMemo memo = {NULL, -1, -1};
+    MarkMemo memo = {.marked = false};
     for (int32_t i = 0; i < t->nticking; i++) {
         const FTick *e = &t->ticking[i];
         if (!e->changed)
@@ -4303,24 +5099,15 @@ static void tick_marks(const flow_tree_t *t, flow_point_t scroll,
         if (e->open >= 0) {
             const flow_box_t *g = t->layers[e->open].box;
             int32_t end;
-            if (mark_filtered(t, g, scroll, &memo, bounds, mark, ctx))
-                continue;
-            os64_gui_rect_t r = space_rect(g->frame, bounds != NULL ? bounds[e->open]
-                                                                    : group_bounds(t, e->open, scroll, &end),
-                                           scroll);
-            if (r.w > 0 && r.h > 0)
-                mark(ctx, g, r);
+            os64_gui_rect_t own = bounds != NULL ? bounds[e->open] : group_bounds(t, e->open, scroll, &end);
+            mark_reach(t, g, own, false, scroll, &memo, bounds, mark, ctx);
             continue;
         }
         for (int32_t j = 0; j < e->nboxes; j++) {
             const flow_box_t *b = e->boxes[j];
             os64_gui_rect_t r;
-            if (b->unpainted || mark_filtered(t, b, scroll, &memo, bounds, mark, ctx) ||
-                !layer_reach(&(Layer){b, PART_WHOLE}, scroll, &r))
-                continue;
-            r = space_rect(b->frame, r, scroll);
-            if (r.w > 0 && r.h > 0)
-                mark(ctx, b, r);
+            if (!b->unpainted && layer_reach(&(Layer){b, PART_WHOLE}, scroll, &r))
+                mark_reach(t, b, r, true, scroll, &memo, bounds, mark, ctx);
         }
     }
     os64_free(bounds);
@@ -4421,6 +5208,25 @@ bool flow_motion_tick(flow_tree_t *tree, uint64_t now, flow_point_t scroll,
     return true;
 }
 
+void flow_motion_ticked(const flow_tree_t *tree,
+                        void (*each)(void *ctx, const os64_html_node_t *node, uint8_t pseudo, int32_t prop),
+                        void *ctx)
+{
+    for (int32_t i = 0; tree != NULL && i < tree->nticking; i++) {
+        const FTick *e = &tree->ticking[i];
+        if (!e->changed || e->nboxes == 0)
+            continue;
+        FProps set = {{0}};
+        const FMotion *m = e->st->motion;
+        for (int32_t a = 0; a < m->nanims; a++)
+            for (int32_t w = 0; w < F_PROP_WORDS; w++)
+                set.w[w] |= m->anims[a].props.w[w];
+        for (int32_t p = 0; p < GARB_NPROPS; p++)
+            if (f_props_has(&set, (garb_prop_t)p))
+                each(ctx, e->boxes[0]->node, e->boxes[0]->pseudo, p);
+    }
+}
+
 // ── What a layout for the animations changed (YONDER_PERF.md § perf-4) ──
 
 static bool same_rect(os64_gui_rect_t a, os64_gui_rect_t b)
@@ -4510,8 +5316,9 @@ static flow_parts_why_t boxes_differ(const flow_tree_t *a, const flow_tree_t *b,
 // The parts of one tree: each changed element (`changed`, node -> what of it
 // changed) handed to `mark` — a group's bounds, else the reach of each box
 // that stands for its boxes (pieces_holder, the rule motion_due's view asks),
-// either, in a filtered group, by that group's bounds (mark_filtered) — and
-// each stacked box drawn outside one that takes from it what changed
+// either spread by the filters it is drawn through and taken out through
+// every matrix (mark_reach) — and each stacked box drawn outside one that
+// takes from it what changed
 // (stacked_from, the rule motion_due asks).
 typedef struct {
     const flow_tree_t *t;
@@ -4522,7 +5329,7 @@ typedef struct {
     const flow_box_t *b;        // the stacked box stacked_from walks up from
     int32_t visits;             // elements the walks have visited, against PARTS_WALK_MAX
     const os64_gui_rect_t *bounds;  // all_group_bounds', or NULL
-    FilterMemo filter;
+    MarkMemo memo;
 } Parts;
 
 // What the stacked boxes' walks may visit in one tree before the parts are
@@ -4537,13 +5344,8 @@ static void part_box(Parts *pp, const flow_box_t *b)
 {
     os64_gui_rect_t r;
     b = pieces_holder(b);
-    if (b->unpainted ||
-        mark_filtered(pp->t, b, pp->scroll, &pp->filter, pp->bounds, pp->mark, pp->ctx) ||
-        !layer_reach(&(Layer){b, PART_WHOLE}, pp->scroll, &r))
-        return;
-    r = space_rect(b->frame, r, pp->scroll);
-    if (r.w > 0 && r.h > 0)
-        pp->mark(pp->ctx, b, r);
+    if (!b->unpainted && layer_reach(&(Layer){b, PART_WHOLE}, pp->scroll, &r))
+        mark_reach(pp->t, b, r, true, pp->scroll, &pp->memo, pp->bounds, pp->mark, pp->ctx);
 }
 
 static bool part_from(void *ctx, const os64_html_node_t *a, const FStyled *st, const FProps *ask,
@@ -4579,11 +5381,14 @@ static bool draws_none(const flow_tree_t *tree, const os64_html_node_t *n)
 }
 
 // FLOW_PARTS_MARKED, else why not: the walks past PARTS_WALK_MAX, or no
-// memory.
+// memory. `boxes` (`nboxes` of them, of tree `t`) are marked too, each by
+// its own reach (part_box) whatever its node: what flow_change_parts found
+// moved inside them.
 static flow_parts_why_t parts_in(const flow_tree_t *t, const FMap *changed, flow_point_t scroll,
-                                 void (*mark)(void *ctx, const flow_box_t *box, os64_gui_rect_t r), void *ctx)
+                                 void (*mark)(void *ctx, const flow_box_t *box, os64_gui_rect_t r), void *ctx,
+                                 const flow_box_t *const *boxes, int32_t nboxes)
 {
-    Parts pp = {t, changed, scroll, mark, ctx, NULL, 0, NULL, {NULL, -1, -1}};
+    Parts pp = {t, changed, scroll, mark, ctx, NULL, 0, NULL, {.marked = false}};
     FMap grouped = {0};
     bool ok = true;
     // Every group's bounds in one pass (all_group_bounds) when any changed
@@ -4601,14 +5406,8 @@ static flow_parts_why_t parts_in(const flow_tree_t *t, const FMap *changed, flow
             f_map_get(changed, l->box->node) == NULL || f_map_get(&grouped, l->box->node) != NULL)
             continue;
         int32_t end;
-        if (mark_filtered(t, l->box, scroll, &pp.filter, bounds, mark, ctx)) {
-            ok = f_map_put(&grouped, l->box->node, (void *)l);
-            continue;
-        }
         os64_gui_rect_t in = bounds != NULL ? bounds[k] : group_bounds(t, k, scroll, &end);
-        os64_gui_rect_t r = space_rect(l->box->frame, in, scroll);
-        if (r.w > 0 && r.h > 0)
-            mark(ctx, l->box, r);
+        mark_reach(t, l->box, in, false, scroll, &pp.memo, bounds, mark, ctx);
         ok = f_map_put(&grouped, l->box->node, (void *)l);
     }
     for (const flow_box_t *b = t->root; ok && b != NULL;) {
@@ -4622,6 +5421,8 @@ static flow_parts_why_t parts_in(const flow_tree_t *t, const FMap *changed, flow
             b = b->parent;
         b = b != NULL ? b->next : NULL;
     }
+    for (int32_t i = 0; ok && i < nboxes; i++)
+        part_box(&pp, boxes[i]);
     flow_parts_why_t why = ok ? FLOW_PARTS_MARKED : FLOW_PARTS_MEMORY;
     for (int32_t i = 0; why == FLOW_PARTS_MARKED && i < t->nstacked; i++) {
         pp.b = t->stacked[i];
@@ -4696,11 +5497,529 @@ bool flow_layout_parts(const flow_tree_t *was, const flow_tree_t *now, flow_poin
         any = true;
     }
     if (said->why == FLOW_PARTS_MARKED && any) {
-        said->why = parts_in(was, &changed, scroll, mark, ctx);
+        said->why = parts_in(was, &changed, scroll, mark, ctx, NULL, 0);
         if (said->why == FLOW_PARTS_MARKED)
-            said->why = parts_in(now, &changed, scroll, mark, ctx);
+            said->why = parts_in(now, &changed, scroll, mark, ctx, NULL, 0);
     }
     f_map_free(&changed);
     os64_free(changes);
     return said->why == FLOW_PARTS_MARKED;
 }
+
+// ── What a script's change painted (LAYOUT_NEEDS_N3.md § 3 B) ───────────
+
+// Whether two boxes are the same box placed alike in itself: what
+// same_box asks less the overflow, which follows what is inside the box
+// (a move inside it is the walk's to find among its children), and less
+// the link and control a box stands in, numbers a page renumbers whenever
+// one is added before it: what a link or a control paints is its style's,
+// compared by same_drawn, or the face's widget's.
+static bool same_own(const flow_box_t *a, const flow_box_t *b)
+{
+    return a->kind == b->kind && a->node == b->node && a->pseudo == b->pseudo && same_rect(a->rect, b->rect) &&
+           same_rect(a->content, b->content) && a->baseline == b->baseline && a->begin == b->begin &&
+           a->length == b->length && a->clipped == b->clipped && (!a->clipped || same_rect(a->clip, b->clip)) &&
+           a->positioned == b->positioned && a->floated == b->floated && a->stacked == b->stacked &&
+           a->fixed == b->fixed && a->scroller == b->scroller && a->unpainted == b->unpainted;
+}
+
+// Whether two text runs place the same glyphs from the same fonts at the
+// same places: a face swapped behind one family name for another of the
+// same metrics (an @font-face rule changed to a file already loaded)
+// leaves the style, the bytes and the boxes alike and draws other glyphs.
+// One run is alike itself; a run that cannot be read is not alike.
+static bool runs_alike(const os64_text_run_t *a, const os64_text_run_t *b)
+{
+    if (a == b)
+        return true;
+    os64_text_run_view_t x, y;
+    if (a == NULL || b == NULL || os64_text_run_view(a, &x) != OS64_FONT_OK ||
+        os64_text_run_view(b, &y) != OS64_FONT_OK || x.glyph_count != y.glyph_count)
+        return false;
+    for (size_t i = 0; i < x.glyph_count; i++) {
+        const os64_text_placement_t *p = &x.glyphs[i], *q = &y.glyphs[i];
+        if (p->font_identity != q->font_identity || p->glyph_index != q->glyph_index || p->x != q->x ||
+            p->y != q->y)
+            return false;
+    }
+    return true;
+}
+
+// Whether two boxes placed alike draw alike: their whole styles (every
+// field, as the trees hold them: the old one's as its last tick left them,
+// the new one's sampled now), what a fragment holds of its decorations and
+// the ellipsis it ends in, and a text's or marker's bytes, and the glyphs
+// its run and its ellipsis place, which is where a script's text,
+// generated content, a renumbered counter and a face changed behind its
+// name show.
+static bool same_drawn(const flow_box_t *a, const flow_box_t *b)
+{
+    if ((a->style == NULL) != (b->style == NULL) || (a->style != NULL && !f_style_equal(a->style, b->style)))
+        return false;
+    if (a->decoration != b->decoration || a->underline_color != b->underline_color ||
+        a->line_through_color != b->line_through_color || (a->ellipsis == NULL) != (b->ellipsis == NULL) ||
+        a->line_clamp_end != b->line_clamp_end || (a->ellipsis != NULL && !runs_alike(a->ellipsis, b->ellipsis)))
+        return false;
+    if (a->kind == FLOW_BOX_TEXT || a->kind == FLOW_BOX_MARKER)
+        return (a->length == 0 || (a->text != NULL && b->text != NULL && os64_memcmp(a->text, b->text, a->length) == 0)) &&
+               runs_alike(a->run, b->run);
+    return true;
+}
+
+// The child of `root`, tree `t`'s root box, whose element may own the
+// canvas (the body), or NULL.
+static const flow_box_t *canvas_child(const flow_tree_t *t, const flow_box_t *root)
+{
+    for (const flow_box_t *b = root->first; b != NULL; b = b->next)
+        if (b->node != NULL && b->pseudo == GARB_PSEUDO_NONE && may_own_canvas(t, b->node))
+            return b;
+    return NULL;
+}
+
+// Whether two boxes' children are the same boxes placed alike in
+// themselves, in the same order.
+static bool children_alike(const flow_box_t *x, const flow_box_t *y)
+{
+    const flow_box_t *a = x->first, *b = y->first;
+    for (; a != NULL && b != NULL; a = a->next, b = b->next)
+        if (!same_own(a, b))
+            return false;
+    return a == NULL && b == NULL;
+}
+
+// The box after `d` in a pre-order walk of the boxes inside `p`, NULL past
+// the last.
+static const flow_box_t *box_after_in(const flow_box_t *p, const flow_box_t *d)
+{
+    if (d->first != NULL)
+        return d->first;
+    while (d != p && d->next == NULL)
+        d = d->parent;
+    return d == p ? NULL : d->next;
+}
+
+// What the walks of one comparison may visit before it is refused, as
+// PARTS_WALK_MAX bounds the stacked boxes' walks: past it a whole-view
+// repaint is the cheaper answer.
+#define CHANGE_WALK_MAX (1 << 20)
+
+// Whether what is inside `p` is held by its reach (layer_reach: its
+// overflow grown by its ink, in its own frame): every box inside it in its
+// frame, in flow, with no layer of its own. A positioned or stacked box,
+// or one a scroll or a transform moves, may paint outside it.
+static bool moved_within(const flow_box_t *p, int32_t *visits)
+{
+    for (const flow_box_t *d = p->first; d != NULL; d = box_after_in(p, d)) {
+        if (++*visits > CHANGE_WALK_MAX || d->frame != p->frame || d->positioned || d->fixed || d->stacked)
+            return false;
+    }
+    return true;
+}
+
+// Whether svg element `n`, or one it is in, is what another svg may draw
+// through a reference (`<use href>`, `url(#id)`): a definition, a symbol,
+// a paint server, a clip, a mask, a marker or a filter. libsvg finds a
+// reference's target anywhere in the document, other svg roots included.
+static bool svg_referable(const os64_html_document_t *doc, const os64_html_node_t *n)
+{
+    static const char *const kReferable[] = {"defs",    "symbol",   "linearGradient", "radialGradient", "pattern",
+                                             "clipPath", "mask",    "marker",         "filter"};
+    for (const os64_html_node_t *a = n; a != NULL && a->ns == OS64_HTML_NS_SVG; a = f_flat_parent(doc, a))
+        for (size_t i = 0; a->name != NULL && i < sizeof(kReferable) / sizeof(kReferable[0]); i++)
+            if (os64_streq(a->name, kReferable[i]))
+                return true;
+    return false;
+}
+
+// The box that draws element `n` in `tree` when it has none of its own: a
+// replaced box it is inside (an inline svg's root, a select's widget),
+// which draws what is in it from the document and the styles, into `*out`
+// (true). Any other box draws nothing of a boxless element (`display:
+// none` under it, or `display: contents`, whose children have boxes of
+// their own): NULL, true. False when what draws it cannot be bounded: an
+// svg element another svg may draw through a reference, or one in an svg
+// that draws nothing itself (a sprite sheet's).
+static bool drawn_by(const flow_tree_t *tree, const os64_html_node_t *n, const os64_html_node_t **out)
+{
+    const os64_html_document_t *doc = tree_doc(tree);
+    *out = NULL;
+    if (n->ns == OS64_HTML_NS_SVG && svg_referable(doc, n))
+        return false;
+    for (const os64_html_node_t *a = f_flat_parent(doc, n); a != NULL; a = f_flat_parent(doc, a)) {
+        const flow_box_t *b = f_map_get(&tree->first, a);
+        if (b == NULL)
+            continue;
+        if (b->kind == FLOW_BOX_REPLACED || (b->kind == FLOW_BOX_ATOMIC && b->first == NULL))
+            *out = a;
+        break;
+    }
+    return *out != NULL || n->ns != OS64_HTML_NS_SVG;
+}
+
+typedef struct {
+    FMap changed;
+    const FProps *all;
+    const os64_html_node_t **nodes;
+    int32_t nnodes, cap_nodes;
+    const flow_box_t **was_boxes, **now_boxes;
+    int32_t nmoved, cap_moved;
+    const flow_tree_t *now;
+    flow_parts_said_t *said;
+} Change;
+
+// Element `n` changed what it paints: its boxes are marked in both trees,
+// unless the canvas may take its background (the whole view, CANVAS).
+static bool change_node(Change *c, const os64_html_node_t *n)
+{
+    if (n == NULL) {
+        c->said->why = FLOW_PARTS_NO_BOX;
+        return false;
+    }
+    if (f_map_get(&c->changed, n) != NULL)
+        return true;
+    if (may_own_canvas(c->now, n)) {
+        c->said->why = FLOW_PARTS_CANVAS;
+        c->said->node = n;
+        return false;
+    }
+    if (c->nnodes == c->cap_nodes) {
+        int32_t cap = c->cap_nodes ? c->cap_nodes * 2 : 32;
+        const os64_html_node_t **grown = os64_realloc(c->nodes, (size_t)cap * sizeof(*grown));
+        if (grown == NULL) {
+            c->said->why = FLOW_PARTS_MEMORY;
+            return false;
+        }
+        c->nodes = grown;
+        c->cap_nodes = cap;
+    }
+    if (!f_map_put(&c->changed, n, (void *)c->all)) {
+        c->said->why = FLOW_PARTS_MEMORY;
+        return false;
+    }
+    c->nodes[c->nnodes++] = n;
+    return true;
+}
+
+// The pair `x` (the old tree's) and `y` (the new one's) hold a move: each
+// is marked by its own reach.
+static bool change_moved(Change *c, const flow_box_t *x, const flow_box_t *y)
+{
+    if (c->nmoved == c->cap_moved) {
+        int32_t cap = c->cap_moved ? c->cap_moved * 2 : 16;
+        const flow_box_t **a = os64_realloc(c->was_boxes, (size_t)cap * sizeof(*a));
+        if (a != NULL)
+            c->was_boxes = a;
+        const flow_box_t **b = a != NULL ? os64_realloc(c->now_boxes, (size_t)cap * sizeof(*b)) : NULL;
+        if (b == NULL) {
+            c->said->why = FLOW_PARTS_MEMORY;
+            return false;
+        }
+        c->now_boxes = b;
+        c->cap_moved = cap;
+    }
+    c->was_boxes[c->nmoved] = x;
+    c->now_boxes[c->nmoved++] = y;
+    return true;
+}
+
+// Element `n`, which a script's change reached, marked where it is drawn:
+// by its own boxes in either tree, else by the replaced box either tree
+// draws it in (drawn_by), else nowhere; NO_BOX when what draws it cannot
+// be bounded.
+static bool change_drawn(Change *c, const flow_tree_t *was, const os64_html_node_t *n)
+{
+    if (f_map_get(&was->first, n) != NULL || f_map_get(&c->now->first, n) != NULL)
+        return change_node(c, n);
+    const os64_html_node_t *a, *b;
+    if (!drawn_by(was, n, &a) || !drawn_by(c->now, n, &b)) {
+        c->said->why = FLOW_PARTS_NO_BOX;
+        c->said->node = n;
+        return false;
+    }
+    return (a == NULL || change_node(c, a)) && (b == NULL || change_node(c, b));
+}
+
+bool flow_change_parts(const flow_tree_t *was, const flow_tree_t *now, flow_point_t scroll,
+                       const os64_html_node_t *const *touched, int32_t ntouched,
+                       void (*mark)(void *ctx, const flow_box_t *box, os64_gui_rect_t r), void *ctx,
+                       flow_parts_said_t *said)
+{
+    flow_parts_said_t none;
+    if (said == NULL)
+        said = &none;
+    *said = (flow_parts_said_t){FLOW_PARTS_MARKED, NULL, -1};
+    if (was == NULL || now == NULL || was->styles == NULL || now->styles == NULL || was->incomplete ||
+        now->incomplete || was->doc != now->doc || was->root == NULL || now->root == NULL) {
+        said->why = FLOW_PARTS_INCOMPLETE;
+        return false;
+    }
+    // The same layers, the same scrollers scrolled alike, the page as far
+    // and each scroller's range alike: none of these is held by a box.
+    if (was->nstacked != now->nstacked || was->nlayers != now->nlayers) {
+        said->why = FLOW_PARTS_LAYERS;
+        return false;
+    }
+    for (int32_t k = 0; k < was->nlayers; k++)
+        if (was->layers[k].part != now->layers[k].part || was->layers[k].box->node != now->layers[k].box->node) {
+            said->why = FLOW_PARTS_LAYERS;
+            said->node = now->layers[k].box->node;
+            return false;
+        }
+    if (was->nscrollers != now->nscrollers || was->layout->width != now->layout->width ||
+        was->layout->height != now->layout->height) {
+        said->why = FLOW_PARTS_MOVED;
+        return false;
+    }
+    for (int32_t k = 0; k < was->nscrollers; k++) {
+        flow_point_t pa = flow_scroll_at(was, k), pb = flow_scroll_at(now, k);
+        const flow_frame_t *fa = was->scrollers[k], *fb = now->scrollers[k];
+        if (pa.x != pb.x || pa.y != pb.y || fa->range.x != fb->range.x || fa->range.y != fb->range.y) {
+            said->why = pa.x != pb.x || pa.y != pb.y ? FLOW_PARTS_SCROLLED : FLOW_PARTS_MOVED;
+            said->node = box_named(flow_scroller(now, k));
+            return false;
+        }
+    }
+    FProps all;
+    os64_memset(&all, 0xff, sizeof(all));
+    Change c = {.all = &all, .now = now, .said = said};
+    int32_t visits = 0;
+    const flow_box_t *x = was->root, *y = now->root;
+    if (!same_own(x, y)) {
+        said->why = FLOW_PARTS_MOVED;
+        said->node = box_named(y);
+    }
+    // The two trees walked together, each pair placed alike in itself:
+    // one that draws otherwise is its element's change; one whose children
+    // differ is marked by its reach, old and new, and not gone into.
+    while (said->why == FLOW_PARTS_MARKED && x != NULL) {
+        if (++visits > CHANGE_WALK_MAX) {
+            said->why = FLOW_PARTS_LONG;
+            break;
+        }
+        if (!same_drawn(x, y) && !change_node(&c, box_named(y)))
+            break;
+        bool down = x->first != NULL || y->first != NULL;
+        if (down && !children_alike(x, y)) {
+            if (!moved_within(x, &visits) || !moved_within(y, &visits)) {
+                said->why = visits > CHANGE_WALK_MAX ? FLOW_PARTS_LONG : FLOW_PARTS_MOVED;
+                said->node = box_named(y);
+                break;
+            }
+            // A move inside the root is not gone into, which would leave
+            // the body's style uncompared, whose background the canvas
+            // may take across the whole view.
+            const flow_box_t *bx = x == was->root ? canvas_child(was, x) : NULL;
+            const flow_box_t *by = x == was->root ? canvas_child(now, y) : NULL;
+            if ((bx == NULL) != (by == NULL) || (bx != NULL && !same_drawn(bx, by))) {
+                said->why = FLOW_PARTS_CANVAS;
+                said->node = box_named(by != NULL ? by : y);
+                break;
+            }
+            if (!change_moved(&c, x, y))
+                break;
+            down = false;
+        }
+        if (down) {
+            x = x->first;
+            y = y->first;
+            continue;
+        }
+        while (x != NULL && x->next == NULL) {
+            x = x->parent;
+            y = y->parent;
+        }
+        if (x != NULL) {
+            x = x->next;
+            y = y->next;
+        }
+    }
+    // An element both trees styled that has no box in either is compared
+    // by its style too: a replaced box may draw it from the styles (an
+    // inline svg's shapes).
+    const os64_html_document_t *doc = now->doc;
+    const os64_html_node_t *top = os64_html_document_element(doc);
+    for (const os64_html_node_t *n = top; said->why == FLOW_PARTS_MARKED && n != NULL;
+         n = flat_after(doc, top, n, true)) {
+        if (++visits > CHANGE_WALK_MAX) {
+            said->why = FLOW_PARTS_LONG;
+            break;
+        }
+        if (n->kind != OS64_HTML_ELEMENT || f_map_get(&was->first, n) != NULL || f_map_get(&now->first, n) != NULL)
+            continue;
+        const FStyled *a = f_style_of(was->styles, n), *b = f_style_of(now->styles, n);
+        if ((a == NULL) == (b == NULL) && (a == NULL || f_style_equal(&a->style, &b->style)))
+            continue;
+        if (!change_drawn(&c, was, n))
+            break;
+    }
+    // What the script changed that no style says: the caller's elements,
+    // marked where they are drawn.
+    for (int32_t i = 0; said->why == FLOW_PARTS_MARKED && i < ntouched; i++)
+        if (touched[i] != NULL && !change_drawn(&c, was, touched[i]))
+            break;
+    if (said->why == FLOW_PARTS_MARKED && (c.nnodes > 0 || c.nmoved > 0)) {
+        said->why = parts_in(was, &c.changed, scroll, mark, ctx, c.was_boxes, c.nmoved);
+        if (said->why == FLOW_PARTS_MARKED)
+            said->why = parts_in(now, &c.changed, scroll, mark, ctx, c.now_boxes, c.nmoved);
+    }
+    f_map_free(&c.changed);
+    os64_free(c.nodes);
+    os64_free(c.was_boxes);
+    os64_free(c.now_boxes);
+    return said->why == FLOW_PARTS_MARKED;
+}
+
+// ── A box that only moves (restyle.inc's keep_move) ──────────────────────
+
+// The record of `node`'s positioned block-level box under `b`, met in the
+// pre-order the public tree was made in, an inline-block's content
+// included; NULL when there is none.
+static const FBox *box_record_in(const FBox *b, const os64_html_node_t *node)
+{
+    if (b == NULL || !b->placed)
+        return NULL;
+    if (b->node == node && b->positioned)
+        return b;
+    for (const FLine *ln = b->lines; ln != NULL; ln = ln->next)
+        for (const FFrag *fr = ln->frags; fr != NULL; fr = fr->next) {
+            const FBox *in = fr->kind == FF_ATOMIC && fr->item != NULL ? box_record_in(fr->item->content, node) : NULL;
+            if (in != NULL)
+                return in;
+        }
+    for (const FBox *c = b->first; c != NULL; c = c->next) {
+        const FBox *in = box_record_in(c, node);
+        if (in != NULL)
+            return in;
+    }
+    return NULL;
+}
+
+static const FBox *box_record(const flow_tree_t *t, const os64_html_node_t *node)
+{
+    return t != NULL && t->boxes != NULL ? box_record_in(t->boxes->root, node) : NULL;
+}
+
+// Why the public boxes made of `b` cannot be moved by being made again at
+// an offset (public_box's relocation), NULL when they can: in the moved
+// box, or anywhere in it, something whose place or clip is worked against
+// what does not move with it, or which a relocation does not make again.
+// A clip (its rectangle is the box's own, and a legacy `clip` rectangle
+// too), a scroll container's frame, a sticky box's, a fixed box (its
+// containing block is outside), and a transform's frame below the moved
+// box (`root` is the moved box, whose own transform moves with it).
+static const char *move_blocked(const FBox *b, bool root)
+{
+    if (!b->placed)
+        return NULL;
+    if (f_box_scrolls(b))
+        return root ? "a scroll container" : "a scroll container inside";
+    if (f_box_clips(b, true) || f_box_clips(b, false) || b->style->legacy_clip_set)
+        return root ? "a clip" : "a clip inside";
+    if (is_sticky(b))
+        return "a sticky box inside";
+    if (!root && b->out_of_flow && b->style->position == FLOW_POSITION_FIXED)
+        return "a fixed box inside";
+    if (!root && b->transformed)
+        return "a transform inside";
+    for (const FLine *ln = b->lines; ln != NULL; ln = ln->next)
+        for (const FFrag *fr = ln->frags; fr != NULL; fr = fr->next) {
+            if (fr->kind != FF_ATOMIC || fr->item == NULL)
+                continue;
+            if (f_transforms(fr->style))
+                return "a transform inside";
+            const char *in = fr->item->content != NULL ? move_blocked(fr->item->content, false) : NULL;
+            if (in != NULL)
+                return in;
+        }
+    for (const FBox *c = b->first; c != NULL; c = c->next) {
+        const char *in = move_blocked(c, false);
+        if (in != NULL)
+            return in;
+    }
+    return NULL;
+}
+
+// WHAT A CHANGE OF REACH MOVES (BRIEF_LAYOUT_NEEDS N4, and the scrollbars'
+// own slice after it): whether what is painted moved when the page's extent
+// or a scroll container's reach was worked again, `was` holding each
+// scroller's range and scroll before (two points each). The page's extent
+// changing alone moves no pixel of the page: what it moves is the page's
+// scrollbars, which are the host's, set from the extent after every layout
+// (flow_width, flow_height), and a view scrolled past an extent that shrank
+// is the host's to hold, which moves everything. A scroll container's range
+// or scroll that changed moves what is in it: its scroll is held within the
+// range, and a sticky box is held to the range.
+static bool reach_moved_painted(const flow_tree_t *t, const flow_point_t *was)
+{
+    for (int32_t i = 0; i < t->nscrollers; i++) {
+        const flow_frame_t *f = t->scrollers[i];
+        if (was == NULL || f->range.x != was[2 * i].x || f->range.y != was[2 * i].y ||
+            f->at.x != was[2 * i + 1].x || f->at.y != was[2 * i + 1].y)
+            return true;
+    }
+    return false;
+}
+
+static const FMoved *tree_moved_of(void *ctx, const os64_html_node_t *node)
+{
+    return f_map_get(&((flow_tree_t *)ctx)->moved, node);
+}
+
+// A positioned block-level box moved by (dx, dy), in 26.6, since a kept
+// restyle wrote its insets (restyle.inc's keep_move): its offset since the
+// layout summed on the tree, and what was made of it made again from its
+// records, which stay where the layout left them, at that offset plus what
+// the moved boxes round it moved (public_box's relocation); its ink reached
+// again; every box in it stamped `stamp`, since everything it draws is
+// somewhere else. False when
+// the room or the records ran out, which leaves part of it moved: the
+// caller declines, and the layout that follows makes the tree afresh.
+static bool move_box(flow_tree_t *t, const os64_html_node_t *node, int64_t dx, int64_t dy, uint64_t stamp)
+{
+    const FBox *src = box_record(t, node);
+    flow_box_t *box = (flow_box_t *)flow_box_for(t, node);
+    if (src == NULL || box == NULL)
+        return false;
+    FMoved *m = f_map_get(&t->moved, node);
+    if (m == NULL) {
+        m = f_arena_alloc(&t->restyle, sizeof(*m));
+        if (m == NULL || !f_map_put(&t->moved, node, m))
+            return false;
+        m->dx = m->dy = 0;
+        t->nmoved++;
+    }
+    m->dx += dx;
+    m->dy += dy;
+    // Its records still say where the layout put it, and its style now says
+    // where it is, so a layout that grafts from this tree must place it
+    // afresh: changed in the snapshot, its ancestors dirty from the next
+    // read. The change log names it only when a script wrote it itself, and
+    // not when a class on an ancestor or a sibling moved it.
+    if (t->reuse != NULL)
+        reuse_mark(t->reuse, node);
+    int64_t ox = 0, oy = 0;
+    for (const flow_box_t *p = box->parent; p != NULL; p = p->parent) {
+        const FMoved *pm = p->positioned && p->node != NULL && flow_box_for(t, p->node) == p
+                               ? f_map_get(&t->moved, p->node) : NULL;
+        if (pm != NULL) {
+            ox += pm->dx;
+            oy += pm->dy;
+        }
+    }
+    Build bd = {.t = t, .relocate = true, .relocate_next = box, .ox = ox, .oy = oy};
+    flow_box_t *last = NULL;
+    public_box(&bd, src, (flow_box_t *)box->parent, &last, kNoClip);
+    if (bd.failed)
+        return false;
+    // What the boxes in it draw past their own boxes is cut where a clip
+    // outside it cuts it, and that clip did not move: their ink is reached
+    // again from their own. The moved box is stacked, so it hands none up.
+    ink_reach(box);
+    for (const flow_box_t *b = box; b != NULL; b = box_after_in(box, b))
+        drawn_changed(b, true, stamp);
+    return true;
+}
+
+#include "restyle.inc"
+
+#include "pending.inc"

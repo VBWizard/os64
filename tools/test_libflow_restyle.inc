@@ -98,6 +98,43 @@ static void restyle_round(Sheeted *p, flow_tree_t **old)
     flow_free(whole);garb_cascade_free(c);
     os64_page_free(p->page);p->page=model;*old=next;
 }
+// THE RECOMPUTE, at computed-style level (L4 part 2): a seeded walk of
+// writes that change custom property maps, redeclare names below, and
+// change inherited properties on parents whose children the cascade no
+// longer marks. Each round compares the restyled layout's computed styles
+// with a fresh cascade's (restyle_round).
+static void restyle_recompute_walk(void)
+{
+    static const char *const kStyles[]={"--x:3px","--c:blue","color:green","font-size:20px","--x:var(--y)",
+                                        "--y:5px","","--c:inherit","--x:3px;color:red","letter-spacing:2px"};
+    static const char *const kClasses[]={"","r","k","r k"};
+    for (uint32_t seed = 1; seed <= 4; seed++) {
+        Sheeted p;
+        sheeted_open(&p,"<!doctype html><style>.r{--x:2px} .k{--c:purple}"
+            "p{margin-left:var(--x,1px);color:var(--c,black)} span{padding-left:var(--y,0px)}"
+            "</style><div id=e0><div id=e1 class=r><p id=e2>a<span id=e3>b</span></p>"
+            "<div id=e4><p id=e5>c</p><div id=e6 class=k><p id=e7>d<span id=e8>e</span></p></div></div></div>"
+            "<p id=e9>f</p></div>",800,600);
+        flow_tree_t *old=flow_layout(p.doc,p.page,800,&p.env);
+        uint32_t r=seed*2654435761u;
+        for (int step=0; step<40; step++) {
+            r=r*1103515245u+12345u;
+            char id[8];snprintf(id,sizeof(id),"e%u",(r>>8)%10);
+            os64_html_node_t *e=(os64_html_node_t *)computed_find(p.doc->document,id);
+            r=r*1103515245u+12345u;
+            if ((r>>8)%3==0) {
+                const char *k=kClasses[(r>>12)%4];
+                os64_html_set_attr(p.doc,e,"class",k,strlen(k));
+            } else {
+                const char *st=kStyles[(r>>12)%10];
+                os64_html_set_attr(p.doc,e,"style",st,strlen(st));
+            }
+            restyle_round(&p,&old);
+        }
+        flow_free(old);sheeted_close(&p);
+    }
+}
+
 static void restyle_mutations(void)
 {
     Sheeted p;

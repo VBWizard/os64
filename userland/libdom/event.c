@@ -21,7 +21,7 @@ static const char *const kinds[D_EVENT_COUNT] = {
     "animationstart", "animationend", "animationiteration", "animationcancel",
     "loadstart", "progress", "suspend", "abort", "emptied", "stalled", "loadedmetadata", "loadeddata", "canplay",
     "canplaythrough", "playing", "waiting", "seeking", "seeked", "ended", "durationchange", "timeupdate", "play",
-    "pause", "ratechange", "volumechange"
+    "pause", "ratechange", "volumechange", "fullscreenchange", "fullscreenerror"
 };
 /* A page's handler attributes are a bit per kind in an
  * os64_dom_handler_mask_t (os64_dom_handler_attributes, attribute_mask). */
@@ -259,17 +259,19 @@ void d_report_as(os64_dom_t *dom, JSContext *ctx, JSValueConst error, uint32_t s
     d_report_error(dom, ctx, error, script);
 }
 
-/* LISTENER RECORDS. A callback held by a record is one of the registry's
- * values: listeners_held counts them and drain releases them. A collectable
- * plain target's are its own (DListener.engine): traced and freed with it,
- * and not counted, as the host never dispatches to such a target. */
+/* LISTENER RECORDS. A node wrapper's and a collectable plain target's
+ * callbacks are the object's (DListener.engine): its class's mark traces
+ * them and they go with it. Any other target's are the registry's values,
+ * which listeners_held counts. Drain releases both. A plain target's are
+ * also left out of listen_counts (DListener.uncounted), as the host never
+ * dispatches to such a target. */
 
 static void listeners_changed(os64_dom_t *dom, DValue *entry);
 
 static void count(os64_dom_t *dom, const DListener *listener, int delta)
 {
     dom = listener->owner;
-    if (listener->kind >= 0 && !listener->engine) dom->listen_counts[listener->kind] += (uint32_t)delta;
+    if (listener->kind >= 0 && !listener->uncounted) dom->listen_counts[listener->kind] += (uint32_t)delta;
 }
 
 static void set_callback_record(os64_dom_t *dom, DListener *listener, JSValue value,
@@ -328,12 +330,33 @@ static void unlink_removed(os64_dom_t *dom, DValue *entry)
     }
 }
 
-/* A dispatch walks records by their links, so a record removed under it is
- * only marked; the last dispatch to leave sweeps the lists, when a removal
- * was deferred at all. */
+/* A dispatch walks listener records by their links, so a listener removed
+ * under it is only marked; the last dispatch to leave unlinks the marked
+ * listeners of the targets that had one removed, which wait on their
+ * bindings' `sweeps` (a binding whose list could not grow sweeps every
+ * record on `values`; a collectable target is on neither). */
 static size_t dispatch_depth(const os64_dom_t *dom)
 {
     return dom->cluster ? dom->cluster->dispatching : dom->dispatching;
+}
+
+/* A binding's deferred records unlinked, or with its list given up, every
+ * record on `values`. */
+static void sweep_member(os64_dom_t *member)
+{
+    if (member->sweeps_all) {
+        member->sweeps_all = false;
+        for (DValue *entry = member->values; entry; entry = entry->next) {
+            entry->sweep_owed = false;
+            unlink_removed(member, entry);
+        }
+        return;
+    }
+    for (size_t i = 0; i < member->nsweeps; i++) {
+        member->sweeps[i]->sweep_owed = false;
+        unlink_removed(member, member->sweeps[i]);
+    }
+    member->nsweeps = 0;
 }
 
 static void sweep(os64_dom_t *dom)
@@ -342,14 +365,11 @@ static void sweep(os64_dom_t *dom)
     if (dom->cluster) {
         if (!dom->cluster->sweep_pending) return;
         dom->cluster->sweep_pending = false;
-        for (size_t i = 0; i < dom->cluster->count; ++i) {
-            os64_dom_t *member = dom->cluster->members[i];
-            for (DValue *entry = member->values; entry; entry = entry->next) unlink_removed(member, entry);
-        }
+        for (size_t i = 0; i < dom->cluster->count; ++i) sweep_member(dom->cluster->members[i]);
     } else {
         if (!dom->sweep_pending) return;
         dom->sweep_pending = false;
-        for (DValue *entry = dom->values; entry; entry = entry->next) unlink_removed(dom, entry);
+        sweep_member(dom);
     }
 }
 
@@ -360,8 +380,28 @@ static void remove_listener(os64_dom_t *dom, DValue *entry, DListener *listener)
     if (listener->handler == D_LISTENER) count(dom, listener, -1);
     else slot_state(dom, listener, D_SLOT_EMPTY);
     set_callback(dom, listener, JS_UNDEFINED);
-    if (dispatch_depth(dom) == 0) unlink_removed(dom, entry);
-    else if (dom->cluster) dom->cluster->sweep_pending = true;
+    if (dispatch_depth(dom) == 0) {
+        unlink_removed(dom, entry);
+        return;
+    }
+    /* A collectable target's record is in its object, on no `values`, and
+     * no sweep reaches it: the dispatch at it unlinks its marked listeners
+     * as it leaves (dispatch), and so does any removal from it outside a
+     * dispatch. */
+    if (!entry->engine_held && !entry->sweep_owed) {
+        os64_dom_t *storage = entry->dom;
+        entry->sweep_owed = true;
+        if (!storage->sweeps_all) {
+            if (d_turn_list_room(storage, &storage->sweeps, storage->nsweeps, &storage->sweeps_cap,
+                                 storage->nsweeps + 1)) {
+                storage->sweeps[storage->nsweeps++] = entry;
+            } else {
+                storage->sweeps_all = true;
+                storage->nsweeps = 0;
+            }
+        }
+    }
+    if (dom->cluster) dom->cluster->sweep_pending = true;
     else dom->sweep_pending = true;
 }
 
@@ -383,7 +423,8 @@ static DListener *listener_new(os64_dom_t *dom, JSContext *ctx, DValue *entry, c
     listener->kind = d_event_kind(type);
     listener->callback = JS_UNDEFINED;
     listener->captured = (os64_js_callback_t)OS64_JS_CALLBACK_INIT;
-    listener->engine = entry->engine_held;
+    listener->engine = entry->engine_held || d_node_wrapper(entry);
+    listener->uncounted = entry->engine_held;
     if (at_head || entry->listeners == NULL) {
         listener->next = entry->listeners;
         entry->listeners = listener;
@@ -1145,10 +1186,11 @@ static int path_entry(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *a
 {
     DValue *entry = d_find(dom, at);
     if (entry == NULL && element_has_handler(dom, at, kind)) {
-        JSValue wrapper = d_wrap(dom, ctx, at);
-        if (JS_IsException(wrapper)) return -1;
-        JS_FreeValue(ctx, wrapper);
-        entry = d_find(dom, at);
+        /* The record outlives `held`: the registry owns the wrapper. */
+        JSValue held;
+        entry = d_wrap_record(dom, ctx, at, &held);
+        if (entry == NULL) return -1;
+        JS_FreeValue(ctx, held);
     }
     *out = entry;
     return 0;
@@ -1379,17 +1421,21 @@ static int dispatch(Dispatch *d, const os64_html_node_t *node)
     bool to_window = d->plain == NULL && (node == NULL || (walk.top == document_node(dom) && kind != D_EVENT_LOAD));
     if (to_window) length++;
     /* One block: for a node's path, each step's target and relatedTarget as
-     * wrapped; the wrappers the listeners are invoked on; then the path's
-     * nodes for composedPath, which a node with no wrapper is in too, each
-     * step's target and relatedTarget as walked, and its slot-in-closed-tree. */
+     * wrapped, and the path's wrappers held for the dispatch (HOLDERS: a
+     * listener may split the path's tree); the wrappers the listeners are
+     * invoked on; then the path's nodes for composedPath, which a node with
+     * no wrapper is in too, each step's target and relatedTarget as walked,
+     * and its slot-in-closed-tree. */
     size_t values = node != NULL ? length * (related != NULL ? 2 : 1) : 0;
-    JSValue *steps = d_alloc(dom, values * sizeof(JSValue) + length * sizeof(DValue *) +
+    JSValue *steps = d_alloc(dom, (values + length) * sizeof(JSValue) + length * sizeof(DValue *) +
                                   depth * 3 * sizeof(const os64_html_node_t *) + depth * sizeof(bool));
     if (steps == NULL) {
         d_error(ctx, "QuotaExceededError", "DOM event path quota exceeded");
         return -1;
     }
-    DValue **path = (DValue **)(steps + values);
+    JSValue *kept = steps + values;
+    for (size_t i = 0; i < length; i++) kept[i] = JS_UNDEFINED;
+    DValue **path = (DValue **)(kept + length);
     const os64_html_node_t **nodes = (const os64_html_node_t **)(path + length);
     bool failed = false;
     if (node != NULL) {
@@ -1435,6 +1481,8 @@ static int dispatch(Dispatch *d, const os64_html_node_t *node)
         path[count++] = entry;
     }
     if (to_window) path[count++] = dom->window;
+    for (size_t i = 0; i < count; i++)
+        if (path[i] != NULL) kept[i] = JS_DupValue(ctx, path[i]->value);
     /* Held for as long as the path is: a listener may take a subtree out of
      * the tree, and an ancestor with no wrapper would go with it. */
     for (size_t i = 0; i < depth; i++) os64_html_hold(dom->document, nodes[i]);
@@ -1487,9 +1535,10 @@ static int dispatch(Dispatch *d, const os64_html_node_t *node)
     event->path_count = 0;
     event->path_window = false;
     event->path_closed_slots = NULL;
+    for (size_t i = 0; i < count; i++) JS_FreeValue(ctx, kept[i]);
     d_free(dom, steps);
     sweep(dom);
-    /* sweep walks the registry; a collectable target is not on it. */
+    /* sweep unlinks the marked listeners of records on the registry; a collectable target is not on it. */
     if (d->plain != NULL && d->plain->engine_held && dispatch_depth(dom) == 0) unlink_removed(dom, d->plain);
     if (activation != NULL && result == 0 &&
         d_activation_after(dom, ctx, activation, event->canceled, &saved) < 0)

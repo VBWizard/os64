@@ -10,8 +10,14 @@
 typedef struct {
     char *a, *b;            // MISSING: kind, name; FAILED: what, message; fact: key, value
     uint32_t count;         // a fact's: 1 when its latest value had no memory to keep
-    bool head;              // a fact's: set by yonder_diag_head_fact, in the head's own room
+    uint8_t room;           // a fact's: which room it took its place in, or asked for and was refused (FactRoom)
 } Line;
+// The rooms a fact takes its place in, each with its own quota: the
+// ordinary facts', the head's (yonder_diag_head_fact), the readings'
+// (yonder_diag_reading_fact), the load timeline's
+// (yonder_diag_timeline_fact) and the measuring switches' summaries
+// (yonder_diag_summary_fact).
+typedef enum { ROOM_FACTS, ROOM_HEAD, ROOM_READINGS, ROOM_TIMELINE, ROOM_SUMMARY, ROOMS } FactRoom;
 
 // The lines that met no room are counted as distinct lines, as the file
 // says them: each is kept by its key (`gone`) so a line asked for again —
@@ -72,9 +78,9 @@ struct yonder_diag {
     int64_t began_us;
     uint64_t marks[YONDER_DIAG_MARKS];
     Table missing, failed, facts;
-    // The facts that are the head's (Line.head): they have room of their
-    // own, so they are counted apart from the ordinary facts' quota.
-    uint32_t head_facts;
+    // The facts in each room (Line.room): each room's quota is its own,
+    // so neither the head's nor the readings' facts take an ordinary place.
+    uint32_t room_facts[ROOMS];
     // A line went with no memory even to name it (yonder_diag_short).
     bool short_of_memory;
     // Why the record says it cannot be judged, besides lost lines (a
@@ -330,7 +336,7 @@ static Line *table_line_shown(Table *t, const char *a, const char *b, bool both,
         t->lines = next;
         t->cap = bigger;
     }
-    Line one = {copy(a), copy(b), 0, false};
+    Line one = {copy(a), copy(b), 0, ROOM_FACTS};
     if (one.a == NULL || one.b == NULL) {
         os64_free(one.a);
         os64_free(one.b);
@@ -549,10 +555,14 @@ void yonder_diag_failed(yonder_diag_t *d, const char *what, const char *message)
 }
 
 // A plain line set. A new one takes a place in its own room: the head's
-// YONDER_DIAG_HEAD_FACTS (`head`), or the ordinary facts'
-// YONDER_DIAG_FACTS_MAX, counted apart so neither eats the other's.
-static void fact_set(yonder_diag_t *d, const char *key, const char *value, bool head)
+// YONDER_DIAG_HEAD_FACTS, the readings' YONDER_DIAG_READING_FACTS, the
+// timeline's YONDER_DIAG_TIMELINE_FACTS, or the ordinary facts'
+// YONDER_DIAG_FACTS_MAX, counted apart so none eats another's.
+static void fact_set(yonder_diag_t *d, const char *key, const char *value, FactRoom where)
 {
+    static const uint32_t kQuota[ROOMS] = {YONDER_DIAG_FACTS_MAX, YONDER_DIAG_HEAD_FACTS,
+                                           YONDER_DIAG_READING_FACTS, YONDER_DIAG_TIMELINE_FACTS,
+                                           YONDER_DIAG_SUMMARY_FACTS};
     if (d == NULL)
         return;
     Table *t = &d->facts;
@@ -562,11 +572,16 @@ static void fact_set(yonder_diag_t *d, const char *key, const char *value, bool 
     int64_t at = list_find(&t->by_line, t->lines, t->n, key, "", false);
     Line *l = at >= 0 ? &t->lines[at] : NULL;
     if (l == NULL) {
-        bool room = head ? d->head_facts < YONDER_DIAG_HEAD_FACTS : t->n - d->head_facts < YONDER_DIAG_FACTS_MAX;
+        bool room = d->room_facts[where] < kQuota[where];
         l = table_line_shown(t, key, "", false, room ? UINT32_MAX : 0);
-        if (l != NULL && head) {
-            l->head = true;
-            d->head_facts++;
+        if (l != NULL) {
+            l->room = (uint8_t)where;
+            d->room_facts[where]++;
+        } else {
+            // A line refused keeps the room it asked for, so the record
+            // says which kind of line went (yonder_diag_render).
+            int64_t gone = list_find(&t->by_gone, t->gone, t->ngone, key, "", false);
+            if (gone >= 0) t->gone[gone].room = (uint8_t)where;
         }
     }
     // A value with no memory to keep is not left empty, nor the one before
@@ -584,15 +599,32 @@ static void fact_set(yonder_diag_t *d, const char *key, const char *value, bool 
 
 void yonder_diag_fact(yonder_diag_t *d, const char *key, const char *value)
 {
-    fact_set(d, key, value, false);
+    fact_set(d, key, value, ROOM_FACTS);
 }
 
 void yonder_diag_head_fact(yonder_diag_t *d, const char *key, const char *value)
 {
-    fact_set(d, key, value, true);
+    fact_set(d, key, value, ROOM_HEAD);
 }
 
-void yonder_diag_forget(yonder_diag_t *d, const char *prefix)
+void yonder_diag_reading_fact(yonder_diag_t *d, const char *key, const char *value)
+{
+    fact_set(d, key, value, ROOM_READINGS);
+}
+
+void yonder_diag_timeline_fact(yonder_diag_t *d, const char *key, const char *value)
+{
+    fact_set(d, key, value, ROOM_TIMELINE);
+}
+
+void yonder_diag_summary_fact(yonder_diag_t *d, const char *key, const char *value)
+{
+    fact_set(d, key, value, ROOM_SUMMARY);
+}
+
+// The plain lines whose keys begin `prefix` (or, when `whole`, are exactly
+// it) let go.
+static void forget_lines(yonder_diag_t *d, const char *prefix, bool whole)
 {
     if (d == NULL)
         return;
@@ -605,9 +637,10 @@ void yonder_diag_forget(yonder_diag_t *d, const char *prefix)
         uint32_t kept = 0;
         for (uint32_t i = 0; i < *counts[k]; i++) {
             Line *l = &lists[k][i];
-            if (os64_strlen(l->a) >= len && os64_memcmp(l->a, prefix, len) == 0) {
-                if (k == 0 && l->head)
-                    d->head_facts--;
+            size_t have = os64_strlen(l->a);
+            if ((whole ? have == len : have >= len) && os64_memcmp(l->a, prefix, len) == 0) {
+                if (k == 0)
+                    d->room_facts[l->room]--;
                 os64_free(l->a);
                 os64_free(l->b);
             } else {
@@ -625,6 +658,16 @@ void yonder_diag_forget(yonder_diag_t *d, const char *prefix)
             indexes[k]->slots = NULL;
             indexes[k]->cap = 0;
         }
+}
+
+void yonder_diag_forget(yonder_diag_t *d, const char *prefix)
+{
+    forget_lines(d, prefix, false);
+}
+
+void yonder_diag_forget_key(yonder_diag_t *d, const char *key)
+{
+    forget_lines(d, key, true);
 }
 
 void yonder_diag_short(yonder_diag_t *d)
@@ -816,6 +859,27 @@ size_t yonder_diag_render(const yonder_diag_t *d, char *out, size_t cap)
     put_lost(&o, "missing names", &d->missing);
     put_lost(&o, "failures", &d->failed);
     put_lost(&o, "facts", &d->facts);
+    // Which kind of line the rooms refused or had no memory to keep, so a
+    // reading, a timeline line or a summary missing from the record is
+    // named; past the lines the record can tell apart (`and more not
+    // counted`) none is.
+    static const char *const kRooms[ROOMS] = {"plain lines", "head lines", "readings", "timeline lines",
+                                              "summaries"};
+    uint32_t lost_in[ROOMS] = {0};
+    for (uint32_t i = 0; i < d->facts.ngone; i++)
+        if (d->facts.gone[i].room < ROOMS) lost_in[d->facts.gone[i].room]++;
+    char by[160];
+    size_t at = 0;
+    for (int r = 0; r < ROOMS && at < sizeof(by); r++)
+        if (lost_in[r] != 0) {
+            int w = os64_snprintf(by + at, sizeof(by) - at, "%s%s %lu", at ? ", " : "facts not kept by kind: ",
+                                  kRooms[r], (unsigned long)lost_in[r]);
+            if (w > 0) at += (size_t)w;
+        }
+    if (at != 0) {
+        puts_(&o, by);
+        puts_(&o, "\n");
+    }
     if (d->short_of_memory)
         puts_(&o, "some lines not kept: no memory to name them\n");
     // ONE MARKER for every way a line was lost, which the readers key on:
@@ -1363,7 +1427,8 @@ uint32_t yonder_diag_next_seq(const char *dir)
 // `layout graft` line names in its bracket.
 static const char *const kReuseReasons[YONDER_LAYOUT_REUSE_REASONS] = {
     "no source", "incomplete", "inputs", "history", "budget", "memory", "structure", "dirty",
-    "style", "motion", "role", "call", "floats", "marker", "translation", "retain"};
+    "style", "motion", "role", "call", "floats", "marker", "translation", "retain", "absolute outside",
+    "atom floats"};
 
 /* Saturating totals preserve the meaning of a long-lived page's report. */
 static uint64_t layout_sum(uint64_t a, uint64_t b)
@@ -1380,13 +1445,49 @@ static void layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample,
     ADD(styles_reused); ADD(cascade_updates);
     ADD(intrinsic_hits); ADD(marker_measures);
     if (sample->metadata_peak > total->metadata_peak) total->metadata_peak = sample->metadata_peak;
+    if (sample->anchors_peak > total->anchors_peak) total->anchors_peak = sample->anchors_peak;
+    if (sample->anchors_bare_peak > total->anchors_bare_peak) total->anchors_bare_peak = sample->anchors_bare_peak;
+    ADD(bare_tested); ADD(bare_turned); ADD(bare_marked);
+    for (int f = 0; f < 2; f++) {
+        total->needed.restyled[f] = layout_sum(total->needed.restyled[f], sample->needed.restyled[f]);
+        for (int k = 0; k < YONDER_NEEDED_KINDS; k++) {
+            total->needed.count[f][k] = layout_sum(total->needed.count[f][k], sample->needed.count[f][k]);
+            total->needed.us[f][k] = layout_sum(total->needed.us[f][k], sample->needed.us[f][k]);
+        }
+    }
     for (size_t i = 0; i < YONDER_LAYOUT_REUSE_REASONS; ++i)
         total->reuse_refused[i] = layout_sum(total->reuse_refused[i], sample->reuse_refused[i]);
+    for (size_t i = 0; i < YONDER_LAYOUT_ROLES; ++i) {
+        total->role_roots[i] = layout_sum(total->role_roots[i], sample->role_roots[i]);
+        total->role_boxes[i] = layout_sum(total->role_boxes[i], sample->role_boxes[i]);
+        total->role_us[i] = layout_sum(total->role_us[i], sample->role_us[i]);
+        total->role_inside[i] = layout_sum(total->role_inside[i], sample->role_inside[i]);
+    }
+    total->role_clock_errors = layout_sum(total->role_clock_errors, sample->role_clock_errors);
+    if (sample->role_names != NULL) total->role_names = sample->role_names;
+    ADD(intrinsic_roots);
+    for (size_t i = 0; i <= YONDER_LAYOUT_ROLES; ++i)
+        total->intrinsic_role_roots[i] = layout_sum(total->intrinsic_role_roots[i], sample->intrinsic_role_roots[i]);
+    for (size_t i = 0; i < YONDER_LAYOUT_INTRINSIC_REFUSALS; ++i)
+        total->intrinsic_refused[i] = layout_sum(total->intrinsic_refused[i], sample->intrinsic_refused[i]);
+    if (sample->intrinsic_refusal_names != NULL) total->intrinsic_refusal_names = sample->intrinsic_refusal_names;
     bool cascade_sampled = sample->cascade_reason_names != NULL;
     for (size_t i = 0; i < YONDER_LAYOUT_CASCADE_REASONS; ++i)
         total->cascade_refused[i] = layout_sum(total->cascade_refused[i], sample->cascade_refused[i]);
     if (cascade_sampled) total->cascade_reason_names = sample->cascade_reason_names;
+    ADD(kept_nothing); ADD(kept_paint); ADD(kept_moved); ADD(kept_moved_boxes);
+    for (size_t i = 0; i < YONDER_LAYOUT_RESTYLE_REASONS; ++i)
+        total->kept_declined[i] = layout_sum(total->kept_declined[i], sample->kept_declined[i]);
+    if (sample->restyle_reason_names != NULL) total->restyle_reason_names = sample->restyle_reason_names;
+    ADD(reads_kept); ADD(owed_covered); ADD(others_unchanged);
+    for (size_t i = 0; i < YONDER_LAYOUT_READ_KINDS; ++i) {
+        total->reads_laid[i] = layout_sum(total->reads_laid[i], sample->reads_laid[i]);
+        total->reads_unchanged[i] = layout_sum(total->reads_unchanged[i], sample->reads_unchanged[i]);
+    }
+    if (sample->read_kind_names != NULL) total->read_kind_names = sample->read_kind_names;
     ADD(model_calls); ADD(layouts); ADD(refusals); ADD(clock_errors);
+    ADD(renewals); ADD(renew_updates); ADD(renew_bytes); ADD(renew_budget);
+    if (sample->renew_updates_most > total->renew_updates_most) total->renew_updates_most = sample->renew_updates_most;
 #undef ADD
     const yonder_layout_stats_t *s = total;
     char line[768];
@@ -1400,7 +1501,7 @@ static void layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample,
         (unsigned long)s->elements, (unsigned long)s->boxes, (unsigned long)s->measures, (unsigned long)s->reused,
         (unsigned long)s->model_calls, (unsigned long)s->layouts, (unsigned long)s->refusals,
         (unsigned long)s->clock_errors, (unsigned long)s->styles_reused, (unsigned long)s->cascade_updates);
-    yonder_diag_fact(d, key, line);
+    yonder_diag_summary_fact(d, key, line);
     char graft_key[64];
     os64_snprintf(graft_key, sizeof(graft_key), "%s graft", key);
     int g = os64_snprintf(line, sizeof(line), "intrinsic hits %lu, marker measures %lu, peak new metadata %lu bytes; refused [",
@@ -1410,9 +1511,124 @@ static void layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample,
     for (int r = 0; r < YONDER_LAYOUT_REUSE_REASONS && g > 0 && (size_t)g < sizeof(line); r++)
         g += os64_snprintf(line + g, sizeof(line) - (size_t)g, "%s%lu", r ? " " : "]: ",
                            (unsigned long)s->reuse_refused[r]);
-    yonder_diag_fact(d, graft_key, line);
+    yonder_diag_summary_fact(d, graft_key, line);
+    // `<key> graft roles`: the equal subtrees refused only for their role,
+    // by role (the outermost such subtree), with the boxes under them and
+    // the placement time spent inside them; roles never met left out.
+    if (s->role_names != NULL) {
+        char roles_key[64];
+        os64_snprintf(roles_key, sizeof(roles_key), "%s graft roles", key);
+        int k = os64_snprintf(line, sizeof(line), "equal subtrees refused only for their role, by role "
+                              "(roots, boxes in them, placement ms inside)");
+        bool any = false;
+        for (int r = 0; r < YONDER_LAYOUT_ROLES && k > 0 && (size_t)k < sizeof(line); r++) {
+            if (s->role_roots[r] == 0) continue;
+            k += os64_snprintf(line + k, sizeof(line) - (size_t)k, "%s%s %lu, %lu, %lu.%lu", any ? "; " : ": ",
+                               s->role_names[r], (unsigned long)s->role_roots[r], (unsigned long)s->role_boxes[r],
+                               (unsigned long)(s->role_us[r] / 1000), (unsigned long)(s->role_us[r] % 1000 / 100));
+            any = true;
+        }
+        if (!any && k > 0 && (size_t)k < sizeof(line))
+            k += os64_snprintf(line + k, sizeof(line) - (size_t)k, ": none");
+        bool inside = false;
+        for (int r = 0; r < YONDER_LAYOUT_ROLES && k > 0 && (size_t)k < sizeof(line); r++) {
+            if (s->role_inside[r] == 0) continue;
+            k += os64_snprintf(line + k, sizeof(line) - (size_t)k, "%s%s %lu", inside ? ", " : "; roots holding ",
+                               s->role_names[r], (unsigned long)s->role_inside[r]);
+            inside = true;
+        }
+        if (s->role_clock_errors != 0 && k > 0 && (size_t)k < sizeof(line))
+            os64_snprintf(line + k, sizeof(line) - (size_t)k, "; clock errors %lu",
+                          (unsigned long)s->role_clock_errors);
+        yonder_diag_summary_fact(d, roles_key, line);
+    }
+    // `<key> graft widths`: the boxes whose intrinsic widths were copied, a
+    // measure avoided each, in how many copies, by the root's role (roles
+    // never met left out), and the copies refused, by why.
+    if (s->role_names != NULL && s->intrinsic_refusal_names != NULL) {
+        char widths_key[64];
+        os64_snprintf(widths_key, sizeof(widths_key), "%s graft widths", key);
+        int k = os64_snprintf(line, sizeof(line), "intrinsic widths copied for %lu boxes in %lu copies; by root role",
+                              (unsigned long)s->intrinsic_hits, (unsigned long)s->intrinsic_roots);
+        bool any = false;
+        for (int r = 0; r <= YONDER_LAYOUT_ROLES && k > 0 && (size_t)k < sizeof(line); r++) {
+            if (s->intrinsic_role_roots[r] == 0) continue;
+            k += os64_snprintf(line + k, sizeof(line) - (size_t)k, "%s%s %lu", any ? ", " : ": ",
+                               r < YONDER_LAYOUT_ROLES ? s->role_names[r] : "none",
+                               (unsigned long)s->intrinsic_role_roots[r]);
+            any = true;
+        }
+        if (!any && k > 0 && (size_t)k < sizeof(line))
+            k += os64_snprintf(line + k, sizeof(line) - (size_t)k, ": none");
+        for (int r = 0; r < YONDER_LAYOUT_INTRINSIC_REFUSALS && k > 0 && (size_t)k < sizeof(line); r++)
+            k += os64_snprintf(line + k, sizeof(line) - (size_t)k, "%s%s %lu", r ? ", " : "; refused: ",
+                               s->intrinsic_refusal_names[r], (unsigned long)s->intrinsic_refused[r]);
+        yonder_diag_summary_fact(d, widths_key, line);
+    }
+    // `<key> needed`: what each layout needed (yonder_needed_t).
+    char needed_key[64];
+    os64_snprintf(needed_key, sizeof(needed_key), "%s needed", key);
+    yonder_diag_needed_text(&s->needed, line, sizeof(line));
+    yonder_diag_summary_fact(d, needed_key, line);
+    // `<key> kept`: the restyles kept in the shown tree, and the declined
+    // by reason, the reasons that never happened left out.
+    if (s->restyle_reason_names != NULL) {
+        char kept_key[64];
+        os64_snprintf(kept_key, sizeof(kept_key), "%s kept", key);
+        int k = os64_snprintf(line, sizeof(line), "nothing changed %lu, paint only %lu, a box that only moved %lu "
+                              "(%lu boxes); declined",
+                              (unsigned long)s->kept_nothing, (unsigned long)s->kept_paint,
+                              (unsigned long)s->kept_moved, (unsigned long)s->kept_moved_boxes);
+        size_t at = k > 0 && (size_t)k < sizeof(line) ? (size_t)k : 0;
+        const char *sep = ": ";
+        for (size_t i = 1; i < YONDER_LAYOUT_RESTYLE_REASONS; ++i) {
+            if (s->kept_declined[i] == 0) continue;
+            k = os64_snprintf(line + at, sizeof(line) - at, "%s%s %lu", sep, s->restyle_reason_names[i],
+                              (unsigned long)s->kept_declined[i]);
+            if (k < 0 || (size_t)k >= sizeof(line) - at) break;
+            at += (size_t)k;
+            sep = ", ";
+        }
+        if (sep[0] == ':' && at + 5 < sizeof(line)) os64_memcpy(line + at, " none", 6);
+        yonder_diag_summary_fact(d, kept_key, line);
+    }
+    // `<key> reads`: the geometry reads the shown tree answered with no
+    // work, those that met only paint-only writes and made the page current
+    // all the same, by kind, the rendering steps a covered window owed, and
+    // the rebuilds made with no layout for changes that moved nothing, by
+    // the read that asked, or as another rebuild's.
+    if (s->read_kind_names != NULL) {
+        char reads_key[64];
+        os64_snprintf(reads_key, sizeof(reads_key), "%s reads", key);
+        int k = os64_snprintf(line, sizeof(line), "from the kept tree %lu; paint pending, made current:",
+                              (unsigned long)s->reads_kept);
+        size_t at = k > 0 && (size_t)k < sizeof(line) ? (size_t)k : 0;
+        for (size_t i = 0; i < YONDER_LAYOUT_READ_KINDS; ++i) {
+            k = os64_snprintf(line + at, sizeof(line) - at, "%s %s %lu", i ? "," : "", s->read_kind_names[i],
+                              (unsigned long)s->reads_laid[i]);
+            if (k < 0 || (size_t)k >= sizeof(line) - at) break;
+            at += (size_t)k;
+        }
+        if (at < sizeof(line)) {
+            k = os64_snprintf(line + at, sizeof(line) - at, "; steps owed while covered %lu; unchanged, made current "
+                              "with no layout:", (unsigned long)s->owed_covered);
+            at += k > 0 && (size_t)k < sizeof(line) - at ? (size_t)k : sizeof(line) - at;
+        }
+        for (size_t i = 0; i < YONDER_LAYOUT_READ_KINDS && at < sizeof(line); ++i) {
+            k = os64_snprintf(line + at, sizeof(line) - at, "%s %s %lu", i ? "," : "", s->read_kind_names[i],
+                              (unsigned long)s->reads_unchanged[i]);
+            if (k < 0 || (size_t)k >= sizeof(line) - at) break;
+            at += (size_t)k;
+        }
+        if (at < sizeof(line))
+            os64_snprintf(line + at, sizeof(line) - at, ", other rebuilds %lu",
+                          (unsigned long)s->others_unchanged);
+        yonder_diag_summary_fact(d, reads_key, line);
+    }
     // `<key> cascade`: how many cascades were updated and how many built
-    // fresh, by reason, the reasons that never happened left out.
+    // fresh, by reason, the reasons that never happened left out; the
+    // renewals for bytes; then the anchored :has() compounds its cascades
+    // held and what bare ones cost.
     if (!cascade_sampled) return;
     char cascade_key[64];
     os64_snprintf(cascade_key, sizeof(cascade_key), "%s cascade", key);
@@ -1431,13 +1647,54 @@ static void layout_add(yonder_diag_t *d, const yonder_layout_stats_t *sample,
         at += (size_t)n;
         first = 0;
     }
-    yonder_diag_fact(d, cascade_key, line);
+    char part[200];
+    // A renewal for bytes: the updates it had lived and what it had
+    // retained of its budget, on average.
+    if (s->renewals != 0) {
+        n = os64_snprintf(part, sizeof(part), "; renewed for its bytes %lu, after %lu updates on average (most "
+                          "%lu), %lu KiB retained of %lu KiB on average", (unsigned long)s->renewals,
+                          (unsigned long)(s->renew_updates / s->renewals), (unsigned long)s->renew_updates_most,
+                          (unsigned long)(s->renew_bytes / s->renewals / 1024),
+                          (unsigned long)(s->renew_budget / s->renewals / 1024));
+        if (n > 0 && (size_t)n < sizeof(part) && at + (size_t)n < sizeof(line)) {
+            os64_memcpy(line + at, part, (size_t)n + 1);
+            at += (size_t)n;
+        }
+    }
+    n = os64_snprintf(part, sizeof(part), "; anchors held %lu, bare %lu; bare anchors asked again %lu, turned %lu, "
+                      "marked %lu", (unsigned long)s->anchors_peak, (unsigned long)s->anchors_bare_peak,
+                      (unsigned long)s->bare_tested, (unsigned long)s->bare_turned, (unsigned long)s->bare_marked);
+    if (n > 0 && (size_t)n < sizeof(part) && at + (size_t)n < sizeof(line)) os64_memcpy(line + at, part, (size_t)n + 1);
+    yonder_diag_summary_fact(d, cascade_key, line);
 }
 
 // Microseconds as milliseconds with one decimal, for a line.
 static void ms_text(uint64_t us, char *out, size_t cap)
 {
     os64_snprintf(out, cap, "%lu.%lu", (unsigned long)(us / 1000), (unsigned long)(us % 1000 / 100));
+}
+void yonder_diag_needed_text(const yonder_layout_needed_t *n, char *out, size_t cap)
+{
+    static const char *const kNames[YONDER_NEEDED_KINDS] = {
+        "nothing moved", "paint only", "restyled, nothing moved", "one node's boxes moved", "more moved",
+        "not compared"};
+    size_t at = 0;
+    out[0] = '\0';
+    for (int f = 0; f < 2; f++) {
+        int w = os64_snprintf(out + at, cap - at, "%s", f ? "; forced by a read: " : "");
+        if (w > 0 && (size_t)w < cap - at) at += (size_t)w;
+        for (int k = 0; k < YONDER_NEEDED_KINDS && at < cap; k++) {
+            char ms[32];
+            ms_text(n->us[f][k], ms, sizeof(ms));
+            w = os64_snprintf(out + at, cap - at, "%s%s %lu (%s ms)", k ? ", " : "", kNames[k],
+                              (unsigned long)n->count[f][k], ms);
+            if (w < 0 || (size_t)w >= cap - at) return;
+            at += (size_t)w;
+        }
+        w = os64_snprintf(out + at, cap - at, "; elements restyled different %lu", (unsigned long)n->restyled[f]);
+        if (w < 0 || (size_t)w >= cap - at) return;
+        at += (size_t)w;
+    }
 }
 
 static void layout_one(yonder_diag_t *d, const yonder_layout_one_t *one, LayoutOnes *ones, const char *key)
@@ -1461,7 +1718,7 @@ static void layout_one(yonder_diag_t *d, const yonder_layout_one_t *one, LayoutO
     }
     char by_key[64];
     os64_snprintf(by_key, sizeof(by_key), "%s by cascade", key);
-    yonder_diag_fact(d, by_key, line);
+    yonder_diag_summary_fact(d, by_key, line);
     if (one->total_us < ones->slowest.total_us) return;
     ones->slowest = *one;
     // `<key> slowest`: the slowest layout, phase by phase; `the rest` is
@@ -1507,7 +1764,7 @@ static void layout_one(yonder_diag_t *d, const yonder_layout_one_t *one, LayoutO
     }
     char slow_key[64];
     os64_snprintf(slow_key, sizeof(slow_key), "%s slowest", key);
-    yonder_diag_fact(d, slow_key, line);
+    yonder_diag_summary_fact(d, slow_key, line);
 }
 void yonder_diag_layout_one(yonder_diag_t *d, const yonder_layout_one_t *one)
 {

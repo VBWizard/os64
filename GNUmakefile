@@ -295,6 +295,17 @@ KERNEL_FIXTURES := $(addprefix kernel/bin/,test_elf arg_echo dyn_consumer \
 KERNEL_BIN      := kernel/bin/$(IMAGE_NAME)
 BT_FIRMWARE_LICENSE := firmware/intel/LICENCE.ibt_firmware
 
+# The linker outputs stay under kernel/bin and userland/bin for GDB. Image
+# recipes share the staged full kernel and stripped-debug ring-3 ELFs.
+# DEPLOY_ELFS lists the current inputs for staging.
+OBJCOPY ?= x86_64-elf-objcopy
+DEPLOY_DIR := disk/deploy
+DEPLOY_KERNEL := $(DEPLOY_DIR)/$(KERNEL_BIN)
+DEPLOY_APPS := $(addprefix $(DEPLOY_DIR)/,$(USERLAND_BINS))
+DEPLOY_TESTS := $(addprefix $(DEPLOY_DIR)/,$(USERLAND_TESTBINS) $(filter-out %libtest.so,$(KERNEL_FIXTURES)))
+DEPLOY_LIBS := $(addprefix $(DEPLOY_DIR)/,$(USERLAND_LIBS) kernel/bin/libtest.so)
+DEPLOY_ELFS := $(DEPLOY_KERNEL) $(DEPLOY_APPS) $(DEPLOY_TESTS) $(DEPLOY_LIBS)
+
 # THE TRIPWIRE FOR THE COLLISION THAT STARTED ALL THIS. Two source trees feed
 # /tests, and neither image builder complains when they claim one name: debugfs
 # refuses the second write, mcopy replaces the first, and both do it silently.
@@ -320,6 +331,21 @@ all-hdd: $(IMAGE_NAME).hdd stage-pages stage-fonts
 # they don't). That is what makes `make run` cheap when nothing changed.
 $(KERNEL_BIN) $(KERNEL_FIXTURES): kernel ;
 $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS): userland ;
+
+.PHONY: stage-deploy
+stage-deploy: $(DEPLOY_ELFS)
+
+# Keep the full kernel ELF for Limine's UEFI boot layout. Its debug paths
+# are normalized by the kernel build so the staged bytes are reproducible.
+$(DEPLOY_KERNEL): $(KERNEL_BIN) GNUmakefile
+	@mkdir -p "$(@D)"
+	@cp "$<" "$@.tmp"
+	@mv "$@.tmp" "$@"
+
+$(filter-out $(DEPLOY_KERNEL),$(DEPLOY_ELFS)): $(DEPLOY_DIR)/%: % GNUmakefile
+	@mkdir -p "$(@D)"
+	@$(OBJCOPY) --strip-debug "$<" "$@.tmp"
+	@mv "$@.tmp" "$@"
 
 # Local qemu: ~/src/qemu-9.2.0-rc0/build/
 .PHONY: run
@@ -493,9 +519,8 @@ kernel: kernel-deps
 	$(MAKE) -C kernel test-elf
 
 # The os64 userland (launch + libos64 + apps). Separate tree, its own
-# makefile; produces ring-3 ELFs under userland/bin/ that disk-populate drops
-# onto the image. Depends on nothing in the kernel build — it links only
-# against the abi/ contract.
+# makefile; produces the ring-3 link outputs used for GDB and deployment
+# staging. It links against the abi/ contract independently of the kernel.
 .PHONY: userland
 userland:
 	$(MAKE) -C userland
@@ -525,7 +550,55 @@ ICON_ASSETS := $(sort $(wildcard $(ICON_ASSET_DIR)/*.png))
 ICON_MANIFEST := $(ICON_ASSET_DIR)/theme.conf
 ICON_METADATA := $(ICON_MANIFEST) $(ICON_ASSET_DIR)/provenance.json $(ICON_ASSET_DIR)/LICENSE
 
-$(EXT2_TEST_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE license/libwebp-LICENSE license/freetype-LICENSE license/speexdsp-LICENSE license/ffmpeg-LICENSE license/big-buck-bunny-LICENSE license/android-sbc-LICENSE license/unicode-LICENSE license/libmath-LICENSE $(QUICKJS_LICENSE) $(FONT_FIXTURES) $(FONT_PRODUCT) $(ICON_ASSET_DIR) $(ICON_ASSETS) $(ICON_METADATA) $(PAGE_FIXTURES) tools/html_corpus/SOURCES.json $(FRAME_COMPOSITIONS) $(TLS_PUBLIC_ROOTS) tools/gen_ext2_testdata.py $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(KERNEL_FIXTURES) kernel/test/partition_info.txt etc/husk.rc etc/logd.conf etc/os64get.conf etc/hosts etc/crontab etc/net.conf etc/desktop.conf etc/gclock.conf etc/gterm.conf etc/os64.conf etc/gui.conf etc/menu.conf etc/mouse.conf etc/bootenv.conf etc/sshd.conf etc/vncd.conf etc/fonts.conf etc/icons.conf etc/roam.conf etc/file-associations.conf GNUmakefile
+SYSTEM_CONFIG := $(addprefix etc/,husk.rc logd.conf os64get.conf hosts crontab \
+                 net.conf desktop.conf gclock.conf gterm.conf os64.conf gui.conf menu.conf \
+                 mouse.conf icons.conf roam.conf file-associations.conf bootenv.conf \
+                 sshd.conf vncd.conf fonts.conf porter.conf)
+BOOT_MODULES := $(wildcard external/*)
+SYSTEM_LICENSES := $(foreach n,libjpeg-turbo libwebp libpage-numeric freetype unicode \
+                     libmath speexdsp ffmpeg big-buck-bunny android-sbc,$(n).txt:license/$(n)-LICENSE) \
+                   intel-bluetooth.txt:$(BT_FIRMWARE_LICENSE) quickjs.txt:$(QUICKJS_LICENSE) \
+                   DejaVu.txt:$(FONT_FIXTURE_DIR)/LICENSE-DejaVu.txt
+license_name = $(word 1,$(subst :, ,$(1)))
+license_source = $(word 2,$(subst :, ,$(1)))
+SYSTEM_LICENSE_SOURCES := $(foreach item,$(SYSTEM_LICENSES),$(call license_source,$(item)))
+
+# The publisher consumes the same file lists as the images. The FAT boot
+# menu and EFI loader have their own maintenance path. Image construction
+# also owns its filesystem test scaffold and partition markers.
+porter_inputs = $(foreach f,$(2),"$(1)" "$(3)$(notdir $(f))" "$(f)")
+PORTER_SYSTEM_INPUTS = $(call porter_inputs,apps,$(DEPLOY_APPS)) \
+                       $(call porter_inputs,libs,$(DEPLOY_LIBS)) \
+                       $(call porter_inputs,tests,$(DEPLOY_TESTS)) \
+                       $(call porter_inputs,tests,$(FONT_FIXTURES),fonts/) \
+                       $(call porter_inputs,boot,$(DEPLOY_KERNEL) $(BOOT_MODULES)) \
+                       $(call porter_inputs,config,$(SYSTEM_CONFIG)) \
+                       $(call porter_inputs,fonts,$(FONT_PRODUCT)) \
+                       $(call porter_inputs,frames,$(FRAME_COMPOSITIONS)) \
+                       $(call porter_inputs,pages,$(PAGE_FIXTURES) tools/html_corpus/SOURCES.json) \
+                       $(call porter_inputs,icons,$(ICON_METADATA) $(ICON_ASSETS)) \
+                       "certs" "roots.pem" "$(TLS_PUBLIC_ROOTS)" \
+                       $(foreach item,$(SYSTEM_LICENSES),"licenses" "$(call license_name,$(item))" "$(call license_source,$(item))")
+porter_comma := ,
+porter_system = $(filter system,$(subst $(porter_comma), ,$(PORTER_SCOPES)))
+
+export PORTER_REPO PORTER_SOURCES PORTER_SOURCES_LOCAL
+.PHONY: package porter-package-inputs
+package: private export PORTER_SCOPES = $(or $(SCOPES),system)
+package: private export PORTER_LABEL := $(if $(filter command,$(origin NAME)),$(value NAME))
+package: private export PORTER_BASELINE = $(BASELINE)
+package: private export PORTER_TOOL_CC = $(CC)
+package: private export PORTER_TOOL_LD = $(LD)
+package: private export PORTER_TOOL_OBJCOPY = $(OBJCOPY)
+package:
+	+@python3 tools/porter_publish.py "$(MAKE)"
+
+# Only the publisher sets PORTER_INVENTORY, to its own scratch file.
+porter-package-inputs: $(if $(porter_system),stage-deploy)
+	@test -n "$$PORTER_INVENTORY"
+	@$(if $(porter_system),printf '%s\t%s\t%s\n' $(PORTER_SYSTEM_INPUTS),:) > "$$PORTER_INVENTORY"
+
+$(EXT2_TEST_IMAGE): $(SYSTEM_LICENSE_SOURCES) $(SYSTEM_CONFIG) $(FONT_FIXTURES) $(FONT_PRODUCT) $(ICON_ASSET_DIR) $(ICON_ASSETS) $(ICON_METADATA) $(PAGE_FIXTURES) tools/html_corpus/SOURCES.json $(FRAME_COMPOSITIONS) $(TLS_PUBLIC_ROOTS) tools/gen_ext2_testdata.py $(DEPLOY_APPS) $(DEPLOY_TESTS) $(DEPLOY_LIBS) kernel/test/partition_info.txt GNUmakefile
 	@mkdir -p "$$(dirname $(EXT2_TEST_IMAGE))"
 	python3 tools/gen_ext2_testdata.py $(EXT2_STAGING)
 	rm -f $(EXT2_TEST_IMAGE)
@@ -543,40 +616,22 @@ $(EXT2_TEST_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE licen
 	# is writable (ratified 2026-08-07). /etc/husk.rc is the SYSTEM's rc —
 	# /home/husk.rc (the user's, on its own partition) still wins the
 	# search; /fat/husk.rc remains the lifeboat's copy.
-	printf 'mkdir /bin\nmkdir /tests\nmkdir /lib\nmkdir /etc\nmkdir /tmp\ncd /etc\nwrite etc/husk.rc husk.rc\nwrite etc/logd.conf logd.conf\nwrite etc/os64get.conf os64get.conf\nwrite etc/hosts hosts\nwrite etc/crontab crontab\nwrite etc/net.conf net.conf\nwrite etc/desktop.conf desktop.conf\nwrite etc/gclock.conf gclock.conf\nwrite etc/gterm.conf gterm.conf\nwrite etc/os64.conf os64.conf\nwrite etc/gui.conf gui.conf\nwrite etc/menu.conf menu.conf\nwrite etc/mouse.conf mouse.conf\nwrite etc/icons.conf icons.conf\nwrite etc/roam.conf roam.conf\nwrite etc/file-associations.conf file-associations.conf\nwrite etc/bootenv.conf bootenv.conf\nwrite etc/sshd.conf sshd.conf\nwrite etc/vncd.conf vncd.conf\ncd /bin\n' > $(EXT2_STAGING)/debugfs_bins.cmds
+	printf 'mkdir /bin\nmkdir /tests\nmkdir /lib\nmkdir /etc\nmkdir /tmp\ncd /etc\n' > $(EXT2_STAGING)/debugfs_bins.cmds
+	set -e; $(foreach f,$(SYSTEM_CONFIG),printf 'write %s %s\n' "$(f)" "$(notdir $(f))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
+	printf 'cd /bin\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
 	# The pinned public roots are system configuration; /home/tls.conf can
 	# select another store through the configuration ladder.
 	printf 'mkdir /etc/certs\nwrite %s /etc/certs/roots.pem\n' "$(TLS_PUBLIC_ROOTS)" >> $(EXT2_STAGING)/debugfs_bins.cmds
-	printf 'mkdir /etc/licenses\nwrite license/libjpeg-turbo-LICENSE /etc/licenses/libjpeg-turbo.txt\nwrite license/libwebp-LICENSE /etc/licenses/libwebp.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
-	printf 'write license/libpage-numeric-LICENSE /etc/licenses/libpage-numeric.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
-	# The FreeType Licence asks that anything shipping FreeType credit it in
-	# its documentation. A file on the machine IS this machine's
-	# documentation, so the credit travels with the library rather than
-	# living only in a repository nobody has at run time. The shipped file
-	# is upstream's dual-licence notice followed by the FTL in full, which
-	# is the option os64 exercises (see libfreetype/UPSTREAM_REVIEW.md).
-	printf 'write license/freetype-LICENSE /etc/licenses/freetype.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
-	printf 'write license/unicode-LICENSE /etc/licenses/unicode.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
-	printf 'write license/libmath-LICENSE /etc/licenses/libmath.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
-	printf 'write license/speexdsp-LICENSE /etc/licenses/speexdsp.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
-	# FFmpeg's LGPL notice, and where its source is, travel with libav.so.
-	printf 'write license/ffmpeg-LICENSE /etc/licenses/ffmpeg.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
-	# The H.264 test clip in /tests/pages is Big Buck Bunny's (CC-BY 3.0),
-	# whose attribution travels with it.
-	printf 'write license/big-buck-bunny-LICENSE /etc/licenses/big-buck-bunny.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
-	# The kernel carries Android's SBC encoder (kernel/ports/sbc), whose
-	# Apache 2.0 notice travels with the binary, as speexdsp's does.
-	printf 'write license/android-sbc-LICENSE /etc/licenses/android-sbc.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
-	printf 'write $(BT_FIRMWARE_LICENSE) /etc/licenses/intel-bluetooth.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
-	printf 'write %s /etc/licenses/quickjs.txt\n' "$(QUICKJS_LICENSE)" >> $(EXT2_STAGING)/debugfs_bins.cmds
-	printf 'mkdir /etc/fonts\nwrite etc/fonts.conf /etc/fonts.conf\nwrite $(FONT_FIXTURE_DIR)/LICENSE-DejaVu.txt /etc/licenses/DejaVu.txt\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
+	printf 'mkdir /etc/licenses\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
+	set -e; $(foreach item,$(SYSTEM_LICENSES),printf 'write %s /etc/licenses/%s\n' "$(call license_source,$(item))" "$(call license_name,$(item))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
+	printf 'mkdir /etc/fonts\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
 	$(foreach f,$(FONT_PRODUCT),printf 'write %s /etc/fonts/%s\n' "$(f)" "$(notdir $(f))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
 	printf 'mkdir /etc/icons\nmkdir /etc/icons/default\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
 	$(foreach f,$(ICON_METADATA),printf 'write %s /etc/icons/default/%s\n' "$(f)" "$(notdir $(f))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
 	$(foreach f,$(ICON_ASSETS),printf 'write %s /etc/icons/default/%s\n' "$(f)" "$(notdir $(f))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
 	printf 'mkdir /etc/frames\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
 	$(foreach f,$(FRAME_COMPOSITIONS),printf 'write %s /etc/frames/%s\n' "$(f)" "$(notdir $(f))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
-	$(foreach b,$(USERLAND_BINS),printf 'write %s %s\n' "$(b)" "$(notdir $(b))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
+	$(foreach b,$(DEPLOY_APPS),printf 'write %s %s\n' "$(b)" "$(notdir $(b))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
 	# /tests: the proof harness — the userland fixtures and the kernel-born
 	# ones, on one shelf. NOTE the tie-break if two source trees ever claim one
 	# name again: debugfs `write` REFUSES an existing name, so HERE the first
@@ -585,13 +640,11 @@ $(EXT2_TEST_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE licen
 	# both trees they happened to agree, which is luck and not a mechanism —
 	# separate directories are the mechanism.
 	printf 'cd /tests\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
-	$(foreach t,$(USERLAND_TESTBINS),printf 'write %s %s\n' "$(t)" "$(notdir $(t))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
+	$(foreach t,$(DEPLOY_TESTS),printf 'write %s %s\n' "$(t)" "$(notdir $(t))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
 	printf 'mkdir /tests/fonts\ncd /tests/fonts\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
 	$(foreach f,$(FONT_FIXTURES),printf 'write %s %s\n' "$(f)" "$(notdir $(f))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
 	printf 'mkdir /tests/pages\ncd /tests/pages\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
 	$(foreach f,$(PAGE_FIXTURES) tools/html_corpus/SOURCES.json,printf 'write %s %s\n' "$(f)" "$(notdir $(f))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
-	printf 'cd /tests\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
-	$(foreach f,$(KERNEL_FIXTURES),$(if $(filter %libtest.so,$(f)),,printf 'write %s %s\n' "$(f)" "$(notdir $(f))" >> $(EXT2_STAGING)/debugfs_bins.cmds;))
 	# The ext2 partition introduces ITSELF (Chris caught it claiming to be
 	# FAT — the one file that must never lie about which filesystem it's on).
 	printf 'Ima ext2 partition on the NVME disk\n' > $(EXT2_STAGING)/partition_info.txt
@@ -600,8 +653,8 @@ $(EXT2_TEST_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE licen
 	# regression fixture.
 	# Iterated, same as the apps, so a new library cannot be forgotten here.
 	printf 'cd /lib\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
-	$(foreach l,$(USERLAND_LIBS),printf 'write %s %s\n' "$(l)" "$(notdir $(l))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
-	printf 'write kernel/bin/libtest.so libtest.so\ncd /\nwrite %s partition_info\n' "$(EXT2_STAGING)/partition_info.txt" >> $(EXT2_STAGING)/debugfs_bins.cmds
+	$(foreach l,$(DEPLOY_LIBS),printf 'write %s %s\n' "$(l)" "$(notdir $(l))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
+	printf 'cd /\nwrite %s partition_info\n' "$(EXT2_STAGING)/partition_info.txt" >> $(EXT2_STAGING)/debugfs_bins.cmds
 	debugfs -w -f $(EXT2_STAGING)/debugfs_bins.cmds $(EXT2_TEST_IMAGE) > /dev/null 2>&1
 	@echo "  ext2 test image rebuilt (mkfs.ext2 + debugfs, host-authored content + $(words $(USERLAND_APPS)) apps, $(words $(USERLAND_TESTS)) fixtures)"
 
@@ -610,7 +663,7 @@ $(EXT2_TEST_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE licen
 # arrived (2026-08-23) — editing it left the image stale, which presents as "I
 # changed my wallpaper and nothing happened". Any file the recipe copies belongs
 # here; that is the whole contract of a prerequisite list.
-$(DISK_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE license/libjpeg-turbo-LICENSE license/libwebp-LICENSE license/freetype-LICENSE license/speexdsp-LICENSE license/ffmpeg-LICENSE license/big-buck-bunny-LICENSE license/android-sbc-LICENSE license/unicode-LICENSE license/libmath-LICENSE $(QUICKJS_LICENSE) $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(FONT_FIXTURES) $(FONT_PRODUCT) $(ICON_ASSET_DIR) $(ICON_ASSETS) $(ICON_METADATA) $(PAGE_FIXTURES) tools/html_corpus/SOURCES.json $(FRAME_COMPOSITIONS) kernel/test/partition_info.txt etc/husk.rc etc/desktop.conf etc/gclock.conf etc/gterm.conf etc/os64.conf etc/gui.conf etc/bootenv.conf etc/icons.conf etc/roam.conf etc/file-associations.conf etc/fonts.conf limine-hd.conf $(wildcard external/*) $(EXT2_TEST_IMAGE) GNUmakefile
+$(DISK_IMAGE): $(SYSTEM_LICENSE_SOURCES) $(DEPLOY_ELFS) $(FONT_FIXTURES) $(FONT_PRODUCT) $(ICON_ASSET_DIR) $(ICON_ASSETS) $(ICON_METADATA) $(PAGE_FIXTURES) tools/html_corpus/SOURCES.json $(FRAME_COMPOSITIONS) kernel/test/partition_info.txt etc/husk.rc etc/desktop.conf etc/gclock.conf etc/gterm.conf etc/os64.conf etc/gui.conf etc/bootenv.conf etc/icons.conf etc/roam.conf etc/file-associations.conf etc/fonts.conf etc/porter.conf limine-hd.conf $(BOOT_MODULES) $(EXT2_TEST_IMAGE) GNUmakefile
 	@mkdir -p "$$(dirname $(DISK_IMAGE))"
 	# rm + truncate instead of dd-from-/dev/zero: creates a sparse file, so
 	# rebuilding the image doesn't write $(DISK_SIZE_MB)MB of zeros each time.
@@ -639,16 +692,14 @@ $(DISK_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE license/li
 	-@mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/tests > /dev/null 2>&1
 	-@mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/lib > /dev/null 2>&1
 	# Every discovered userland app, automatically — no per-app line to forget.
-	$(foreach b,$(USERLAND_BINS),\
+	$(foreach b,$(DEPLOY_APPS),\
 	    mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(b) ::/bin/$(notdir $(b));)
 	# THE LIFEBOAT CARRIES THE PROOF HARNESS TOO (Chris's call, 2026-08-29):
 	# a lifeboat exists to be trusted while everything else is suspect, and one
 	# that cannot demonstrate the CPU, the kernel and the syscall floor are
 	# sound is asking to be taken on faith at the worst possible moment.
-	$(foreach t,$(USERLAND_TESTBINS),\
+	$(foreach t,$(DEPLOY_TESTS),\
 	    mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(t) ::/tests/$(notdir $(t));)
-	$(foreach f,$(KERNEL_FIXTURES),$(if $(filter %libtest.so,$(f)),,\
-	    mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(f) ::/tests/$(notdir $(f));))
 	# The font fixtures travel with the harness for the same reason the
 	# harness travels at all: a fixture that cannot find its inputs proves
 	# nothing, and a lifeboat where one test always skips is a lifeboat whose
@@ -659,21 +710,9 @@ $(DISK_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE license/li
 	-@mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/tests/pages > /dev/null 2>&1
 	$(foreach f,$(PAGE_FIXTURES) tools/html_corpus/SOURCES.json,\
 	    mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(f) ::/tests/pages/$(notdir $(f));)
-	# The lifeboat's own /lib. Its /bin is dynamically linked exactly like
-	# root's, so these files are what make the lifeboat a working system
-	# rather than a partition full of programs that cannot start. Iterated
-	# like the apps above — a second library added to USERLAND_LIBS must not
-	# be able to rebuild the image and still be missing from it.
-	# COPIED WITHOUT THEIR DWARF (objcopy --strip-debug), because the
-	# partition is small and the debug info is most of a library: nothing on
-	# a running os64 reads it (the kernel's stack traces read the symbol
-	# table, which is kept), and the debugger reads userland/bin on the host.
-	# `mdir -i disk/os64.img@@1048576 -/ ::` says what is left free.
-	@mkdir -p $(EXT2_STAGING)/lifeboat-lib
-	$(foreach l,$(USERLAND_LIBS),\
-	    x86_64-elf-objcopy --strip-debug $(l) $(EXT2_STAGING)/lifeboat-lib/$(notdir $(l)) && \
-	    mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(EXT2_STAGING)/lifeboat-lib/$(notdir $(l)) ::/lib/$(notdir $(l));)
-	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/bin/libtest.so ::/lib/libtest.so
+	# The lifeboat uses the same stripped-debug libraries as the ext2 root.
+	$(foreach l,$(DEPLOY_LIBS),\
+	    mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(l) ::/lib/$(notdir $(l));)
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/test/partition_info.txt ::/partition_info
 	# husk's startup script. It rides the FAT partition rather than root
 # because the DEFAULT boot entry mounts ext2 as root. On that boot this copy
@@ -693,6 +732,7 @@ $(DISK_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE license/li
 	# Product fonts live beside their configuration; create the parent first.
 	mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/etc/fonts
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/fonts.conf ::/etc/fonts.conf
+	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/porter.conf ::/etc/porter.conf
 	$(foreach f,$(FONT_PRODUCT),mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(f) ::/etc/fonts/$(notdir $(f));)
 	mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/etc/icons
 	mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/etc/icons/default
@@ -701,19 +741,7 @@ $(DISK_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE license/li
 	mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/etc/frames
 	$(foreach f,$(FRAME_COMPOSITIONS),mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(f) ::/etc/frames/$(notdir $(f));)
 	mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/etc/licenses
-	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(FONT_FIXTURE_DIR)/LICENSE-DejaVu.txt ::/etc/licenses/DejaVu.txt
-	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/libjpeg-turbo-LICENSE ::/etc/licenses/libjpeg-turbo.txt
-	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/libwebp-LICENSE ::/etc/licenses/libwebp.txt
-	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/libpage-numeric-LICENSE ::/etc/licenses/libpage-numeric.txt
-	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/freetype-LICENSE ::/etc/licenses/freetype.txt
-	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/unicode-LICENSE ::/etc/licenses/unicode.txt
-	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/libmath-LICENSE ::/etc/licenses/libmath.txt
-	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/speexdsp-LICENSE ::/etc/licenses/speexdsp.txt
-	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/ffmpeg-LICENSE ::/etc/licenses/ffmpeg.txt
-	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/big-buck-bunny-LICENSE ::/etc/licenses/big-buck-bunny.txt
-	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) license/android-sbc-LICENSE ::/etc/licenses/android-sbc.txt
-	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(BT_FIRMWARE_LICENSE) ::/etc/licenses/intel-bluetooth.txt
-	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(QUICKJS_LICENSE) ::/etc/licenses/quickjs.txt
+	set -e; $(foreach item,$(SYSTEM_LICENSES),mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) "$(call license_source,$(item))" ::/etc/licenses/$(call license_name,$(item));)
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/desktop.conf ::/etc/desktop.conf
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/gclock.conf ::/etc/gclock.conf
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/gterm.conf ::/etc/gterm.conf
@@ -745,8 +773,8 @@ $(DISK_IMAGE): $(BT_FIRMWARE_LICENSE) license/libpage-numeric-LICENSE license/li
 	-@mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/boot/limine > /dev/null 2>&1
 	-@mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/EFI > /dev/null 2>&1
 	-@mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/EFI/BOOT > /dev/null 2>&1
-	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/bin/$(IMAGE_NAME) ::/boot/os64_kernel
-	$(foreach e,$(wildcard external/*),\
+	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(DEPLOY_KERNEL) ::/boot/os64_kernel
+	$(foreach e,$(BOOT_MODULES),\
 	    mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(e) ::/boot/$(notdir $(e));)
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) limine-hd.conf ::/boot/limine/limine.conf
 	# Limine's own EFI app rides too — the lifeboat is a complete BOOT
@@ -887,9 +915,9 @@ vbox-sync: $(DISK_IMAGE)
 # guaranteed a full repack on every single make). Nearly all of the ISO's bulk
 # is $(DISK_IMAGE) riding along as a Limine module for the RAMDISK entries —
 # sparse on disk here, dense once xorriso writes it out.
-$(IMAGE_NAME).iso: $(BT_FIRMWARE_LICENSE) limine/limine $(KERNEL_BIN) $(DISK_IMAGE) limine.conf tools/p5-refresh.sh
+$(IMAGE_NAME).iso: $(BT_FIRMWARE_LICENSE) limine/limine $(DEPLOY_KERNEL) $(DISK_IMAGE) limine.conf tools/p5-refresh.sh
 	@mkdir -p iso_root/boot
-	cp kernel/bin/$(IMAGE_NAME) iso_root/boot/
+	cp $(DEPLOY_KERNEL) iso_root/boot/
 	cp $(BT_FIRMWARE_LICENSE) iso_root/
 	# The P5 refresh script rides at the ISO root: boot the target machine's
 	# Linux, mount the stick, `sudo bash <stick>/p5-refresh.sh <stick>` — the
@@ -900,8 +928,8 @@ $(IMAGE_NAME).iso: $(BT_FIRMWARE_LICENSE) limine/limine $(KERNEL_BIN) $(DISK_IMA
 	# (see /RAMDisk Boot in limine.conf). Copied after disk-populate so the
 	# module always carries the freshly built test binaries.
 	cp $(DISK_IMAGE) iso_root/boot/os64_disk.img
-	@cp external/* iso_root/boot/
-	@cp external/* iso_root/
+	@cp $(BOOT_MODULES) iso_root/boot/
+	@cp $(BOOT_MODULES) iso_root/
 	@mkdir -p iso_root/boot/limine
 	@cp limine.conf limine/limine-bios.sys limine/limine-bios-cd.bin limine/limine-uefi-cd.bin iso_root/boot/limine/
 	@mkdir -p iso_root/EFI/BOOT
@@ -954,7 +982,7 @@ copy: $(IMAGE_NAME).iso
 	cp $(IMAGE_NAME).iso /mnt/c/temp/
 	@echo "copy: C:/temp/$(IMAGE_NAME).iso updated ($$(du -h $(IMAGE_NAME).iso | cut -f1))"
 
-$(IMAGE_NAME).hdd: limine/limine kernel
+$(IMAGE_NAME).hdd: limine/limine $(DEPLOY_KERNEL) $(BT_FIRMWARE_LICENSE)
 #	@rm -f $(IMAGE_NAME).hdd
 #	@dd if=/dev/zero bs=1M count=0 seek=1024 of=$(IMAGE_NAME).hdd
 #	# Create the EFI partition
@@ -972,7 +1000,7 @@ $(IMAGE_NAME).hdd: limine/limine kernel
 #	# Create directories on the EFI partition
 #	@mmd -i $(IMAGE_NAME).hdd@@1048576 ::/EFI ::/EFI/BOOT ::/boot ::/boot/limine
 	# Copy bootloader and kernel files to the EFI partition
-	@mcopy -i $(IMAGE_NAME).hdd@@1048576 kernel/bin/os64_kernel ::/boot
+	@mcopy -i $(IMAGE_NAME).hdd@@1048576 $(DEPLOY_KERNEL) ::/boot
 	@mcopy -o -i $(IMAGE_NAME).hdd@@1048576 $(BT_FIRMWARE_LICENSE) ::/boot/LICENCE.ibt_firmware
 #	@mcopy -i $(IMAGE_NAME).hdd@@1048576 limine.conf limine/limine-bios.sys ::/boot/limine
 #	@mcopy -i $(IMAGE_NAME).hdd@@1048576 limine/BOOTX64.EFI ::/EFI/BOOT
@@ -982,6 +1010,7 @@ $(IMAGE_NAME).hdd: limine/limine kernel
 
 .PHONY: clean
 clean:
+	rm -rf disk/deploy
 	$(MAKE) -C kernel clean
 	$(MAKE) -C userland clean
 #	rm -rf iso_root $(IMAGE_NAME).iso $(IMAGE_NAME).hdd

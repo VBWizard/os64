@@ -1072,7 +1072,7 @@ h2_conn_t *h2_conn_adopt(os64_tls_client *engine, int32_t socket, const void *un
         os64_lock_acquire(&c->lock);
         bool said = emit(c, hello, n);
         os64_lock_release(&c->lock);
-        int64_t thread = said ? os64_thread(reader, c) : -1;
+        int64_t thread = said ? os64_thread_named(reader, c, "h2-reader") : -1;
         os64_free(hello);
         if (thread >= 0) {
             os64_close((int32_t)thread);        // detached: it runs on, and nobody collects it

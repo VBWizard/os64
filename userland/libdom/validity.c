@@ -36,12 +36,6 @@ _Static_assert(OS64_PAGE_VALIDITY_CUSTOM == 1u << (V_VALID - 1), "ValidityState'
 
 enum { M_WILL_VALIDATE, M_VALIDITY, M_MESSAGE, M_CHECK, M_REPORT, M_SET_CUSTOM, M_FORM_CHECK, M_FORM_REPORT };
 
-static void validity_finalizer(JSRuntime *rt, JSValue value)
-{
-    (void)rt;
-    JS_SetOpaque(value, NULL);
-}
-
 static bool html(const os64_html_node_t *node, os64_html_tag_t tag)
 {
     return node != NULL && node->kind == OS64_HTML_ELEMENT && node->ns == OS64_HTML_NS_HTML && node->tag == tag;
@@ -242,6 +236,7 @@ static JSValue validity_object(os64_dom_t *dom, JSContext *ctx, const os64_html_
     entry->dom = dom;
     entry->target = node;
     os64_html_hold(dom->document, node);
+    d_view_keep(owner, entry);
     JS_SetOpaque(object, entry);
     more->validity = entry;
     return JS_DupValue(ctx, object);
@@ -335,7 +330,8 @@ static JSValue validate_form(JSContext *ctx, JSValueConst this_value, int argc, 
 int d_validity_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     JSClassID id = os64_js_class_id(&validity_slot);
-    static const JSClassDef definition = {.class_name = "ValidityState", .finalizer = validity_finalizer};
+    static const JSClassDef definition = {.class_name = "ValidityState", .finalizer = d_view_class_finalize,
+                                          .gc_mark = d_view_class_mark};
     if (!JS_IsRegisteredClass(dom->engine, id) && JS_NewClass(dom->engine, id, &definition) < 0) return -1;
     dom->regexp = d_intrinsic(dom, ctx, global, "RegExp");
     if (dom->regexp == NULL) return -1;

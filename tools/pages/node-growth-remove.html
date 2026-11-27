@@ -1,0 +1,31 @@
+<!doctype html><html><head><title>node growth, remove</title><style>
+body{margin:0;font:14px sans-serif} .card{margin:2px;padding:2px;border:1px solid #ccc}
+</style></head><body><p id=say>round 0</p><div id=box></div>
+<script>
+/* A page that replaces a large subtree again and again, as a player page
+   does when it moves to another video: every 400 ms it builds 300 cards of
+   six nodes, removes it and puts a new one in its place, and reads a size, which forces a layout. After 20
+   rounds it stops. The record's `nodes` and `layout sizes` lines say where
+   the nodes went and what each layout walked. */
+const box = document.getElementById('box'), kept = [];
+function cards() {
+  const d = document.createElement('div');
+  for (let i = 0; i < 300; i++) {
+    const c = document.createElement('div'); c.className = 'card';
+    const t = document.createElement('b'); t.textContent = 'card ' + i;
+    const s = document.createElement('span'); s.textContent = ' with words';
+    c.append(t, s); d.appendChild(c);
+  }
+  return d;
+}
+let round = 0, current = cards();
+box.appendChild(current);
+const t = setInterval(() => {
+  round++;
+  const next = cards();
+  box.replaceChild(next, current);
+  current = next;
+  document.getElementById('say').textContent = 'round ' + round + ', height ' + box.offsetHeight;
+  if (round === 20) clearInterval(t);
+}, 400);
+</script></body></html>

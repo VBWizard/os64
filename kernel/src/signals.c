@@ -16,6 +16,7 @@
 #include "smp_core.h"
 #include "console.h"
 #include "tty.h"     // tty_summon_wake — rousting kworker for a knocked terminal
+#include "thread_reap.h"   // and for ended threads' stacks
 #include "pipe.h"
 #include "thread_join.h"
 #include "BasicRenderer.h"   // renderer_flush_if_dirty — the blit-throttle rider
@@ -1015,6 +1016,8 @@ void processSignals()
 	// kworker's own backstop nap is 2s — fine for burials, rude for a human
 	// standing at a dark terminal). Same wake idiom, same lock, same reasons.
 	tty_summon_wake();
+	// And ended threads whose stacks wait for it (thread_reap.h).
+	thread_reap_wake_if_owed_locked();
 
 	// Same discipline, same reason, for pipes: wake any reader whose pipe has
 	// bytes (or whose last writer just left — that is its EOF), and any writer

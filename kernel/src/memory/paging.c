@@ -429,6 +429,31 @@ uintptr_t paging_resolve_user_writable(pt_entry_t *pml4v, uint64_t va)
 	return (pte & ~0xFFFULL) | (va & 0xFFFULL);
 }
 
+bool paging_user_page_reachable(pt_entry_t *pml4v, uint64_t va, bool for_write)
+{
+	if (va >= USER_CANONICAL_MAX)
+		return false;
+	if ((uintptr_t)pml4v < kHHDMOffset)
+		pml4v = (pt_entry_t *)((uintptr_t)pml4v | kHHDMOffset);
+	// The frame address of an entry: bits 12-51 (NX is bit 63).
+	const uint64_t frame = 0x000FFFFFFFFFF000ULL;
+	const uint64_t need = PAGE_PRESENT | PAGE_USER | (for_write ? PAGE_WRITE : 0);
+	const uint64_t index[4] = { PML4_INDEX(va), PDPT_INDEX(va), PD_INDEX(va), PT_INDEX(va) };
+	pt_entry_t *table = pml4v;
+	for (int level = 0; level < 4; level++)
+	{
+		pt_entry_t e = table[index[level]];
+		if ((e & need) != need)
+			return false;
+		if (level == 3)
+			return true;
+		if (level > 0 && (e & (1ULL << 7)))   // PS: a large page, which ring 3 is never given
+			return false;
+		table = (pt_entry_t *)((e & frame) | kHHDMOffset);
+	}
+	return false;
+}
+
 /// @brief Fund one table page from `source` (a task's arena) or the pool.
 ///
 /// Ordinary mapping draws from the task arena or the kernel pool

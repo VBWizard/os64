@@ -79,6 +79,7 @@ struct DWaEffect {
     os64_dom_t *dom;                /* NULL once the binding drained it */
     DWaEffect *prev, *next;         /* dom->wa_fx_first */
     const os64_html_node_t *element;    /* the target, held */
+    JSValue wrapper;                /* the target's (HOLDERS), the object's count */
     DWaData *data;
     uint64_t owner;                 /* the animation's serial, or 0 */
     bool fill_auto, duration_auto;
@@ -139,7 +140,8 @@ struct DWaEvent {
     JSValue animation;
     const char *type;
     double current, timeline, scheduled;
-    const os64_html_node_t *element;
+    const os64_html_node_t *element;    /* held, with its wrapper (HOLDERS) */
+    JSValue wrapper;
     char *name;
     size_t name_len;
     double elapsed;
@@ -490,6 +492,7 @@ static void event_free(os64_dom_t *dom, DWaEvent *e)
 {
     JS_FreeValueRT(dom->engine, e->animation);
     if (e->element != NULL) os64_html_release(dom->document, e->element);
+    JS_FreeValueRT(dom->engine, e->wrapper);
     d_free(dom, e->name);
     d_free(dom, e);
 }
@@ -1754,6 +1757,15 @@ static void effect_let_go(os64_dom_t *dom, DWaEffect *e)
     e->data = NULL;
     if (e->element != NULL) os64_html_release(dom->document, e->element);
     e->element = NULL;
+    JSValue wrapper = e->wrapper;
+    e->wrapper = JS_UNDEFINED;
+    JS_FreeValueRT(dom->engine, wrapper);
+}
+
+static void effect_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark)
+{
+    DWaEffect *e = fx_state(value);
+    if (e != NULL) JS_MarkValue(rt, e->wrapper, mark);
 }
 
 /* The composite each keyframe hands libflow: its own, or the effect's
@@ -1770,15 +1782,37 @@ static void effect_composites(DWaEffect *e)
     d->fx.iteration_accumulate = e->iteration_composite == WA_COMPOSITE_ACCUMULATE;
 }
 
+/* A finalizer runs inside a collection, where releasing the target could
+ * free nodes: the effect buries its data (a list, no node is touched),
+ * lets go of its target's wrapper and goes on the dead list, and
+ * d_web_animations_sweep releases the target. */
 static void effect_finalizer(JSRuntime *rt, JSValue value)
 {
     DWaEffect *e = fx_state(value);
     if (e == NULL) return;
-    if (e->dom != NULL) {
-        effect_unlink(e->dom, e);
-        effect_let_go(e->dom, e);
+    if (e->dom == NULL) {
+        js_free_rt(rt, e);
+        return;
     }
-    js_free_rt(rt, e);
+    JSValue wrapper = e->wrapper;
+    e->wrapper = JS_UNDEFINED;
+    os64_dom_t *dom = e->dom;
+    effect_unlink(dom, e);
+    data_bury(dom, e->data);
+    e->data = NULL;
+    e->next = dom->wa_fx_dead;
+    dom->wa_fx_dead = e;
+    JS_FreeValueRT(rt, wrapper);
+}
+
+void d_web_animations_sweep(os64_dom_t *dom)
+{
+    while (dom->wa_fx_dead != NULL) {
+        DWaEffect *e = dom->wa_fx_dead;
+        dom->wa_fx_dead = e->next;
+        effect_let_go(dom, e);
+        js_free_rt(dom->engine, e);
+    }
 }
 
 /* A new effect, its target held and its data taken, on `prototype` (a
@@ -1807,6 +1841,7 @@ static JSValue effect_new(os64_dom_t *dom, JSContext *ctx, const os64_html_node_
     if (element != NULL) {
         os64_html_hold(dom->document, element);
         e->element = element;
+        e->wrapper = d_holder_take(dom, element);
     }
     e->next = dom->wa_fx_first;
     if (e->next != NULL) e->next->prev = e;
@@ -2250,6 +2285,9 @@ static JSValue effect_member(JSContext *ctx, JSValueConst self, int argc, JSValu
         }
         if (element != NULL) os64_html_hold(dom->document, element);
         e->element = element;
+        JSValue old = e->wrapper;
+        e->wrapper = JS_DupValue(ctx, arg);
+        JS_FreeValue(ctx, old);
         effect_changed(ctx, e, false);
         return JS_UNDEFINED;
     }
@@ -2873,7 +2911,7 @@ static void css_queue(os64_dom_t *dom, const DWaSeen *s, const char *type, doubl
     os64_html_hold(dom->document, s->element);
     *e = (DWaEvent){.animation = JS_UNDEFINED, .type = type, .current = NAN, .timeline = NAN,
                     .scheduled = scheduled, .element = s->element, .name = name, .name_len = s->name_len,
-                    .elapsed = elapsed / 1000};
+                    .elapsed = elapsed / 1000, .wrapper = d_holder_take(dom, s->element)};
     if (dom->wa_events_last != NULL) dom->wa_events_last->next = e;
     else dom->wa_events = e;
     dom->wa_events_last = e;
@@ -3657,6 +3695,7 @@ void d_web_animations_drain(os64_dom_t *dom)
         effect_let_go(dom, e);
         e->dom = NULL;
     }
+    d_web_animations_sweep(dom);
 }
 
 void d_web_animations_free(os64_dom_t *dom)
@@ -3673,7 +3712,8 @@ int d_web_animations_install(os64_dom_t *dom, JSContext *ctx, JSValueConst globa
 {
     static const JSClassDef animation_class = {.class_name = "Animation", .finalizer = animation_finalizer,
                                                .gc_mark = animation_mark};
-    static const JSClassDef effect_class = {.class_name = "KeyframeEffect", .finalizer = effect_finalizer};
+    static const JSClassDef effect_class = {.class_name = "KeyframeEffect", .finalizer = effect_finalizer,
+                                            .gc_mark = effect_mark};
     static const JSClassDef timeline_class = {.class_name = "DocumentTimeline"};
     JSClassID aid = os64_js_class_id(&animation_slot), eid = os64_js_class_id(&effect_slot),
               tid = os64_js_class_id(&timeline_slot);

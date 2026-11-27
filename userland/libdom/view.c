@@ -953,7 +953,7 @@ static JSValue element_scroll_member(JSContext *ctx, JSValueConst self, int argc
     magic &= ~D_SET;
     if (magic == E_WIDTH || magic == E_HEIGHT) {
         os64_dom_geometry_t g;
-        if (!d_geometry_read(dom, ctx, element, &g)) return JS_EXCEPTION;
+        if (!d_geometry_read(dom, ctx, element, OS64_DOM_NEED_REACH, &g)) return JS_EXCEPTION;
         return JS_NewInt32(ctx, magic == E_WIDTH ? g.scroll_width : g.scroll_height);
     }
     // The setters and the methods read their arguments before anything
@@ -1190,7 +1190,9 @@ static void media_release(os64_dom_t *dom)
         DValue *e = *link;
         DMedia *m = JS_IsObject(e->value) && JS_GetClassID(e->value) == dom->media_class
                         ? JS_GetOpaque(e->value, dom->media_class) : NULL;
-        if (m != NULL && m->entry == e && !listened(e)) {
+        // One waiting on its binding's `sweeps` (a removal deferred under
+        // another member's dispatch) waits for a later release.
+        if (m != NULL && m->entry == e && !listened(e) && !e->sweep_owed) {
             *link = e->next;
             dom->retained--;
             m->entry = NULL;
@@ -1445,6 +1447,10 @@ bool os64_dom_view_step(os64_dom_t *dom, os64_js_outcome_t *outcome)
             return true;
         }
     }
+    // The fullscreen steps: one queued fullscreenchange or fullscreenerror
+    // (or a promise settled alone) a call (fullscreen.c).
+    if (d_fullscreen_step(dom, outcome))
+        return true;
     // Every list is judged again when what a query reads moved since the
     // lists were last judged; each one whose answer moved is owed an event,
     // and they are dispatched one a call, in the order the page made them.

@@ -31,9 +31,9 @@
 // A session's `lock` guards what more than one thread touches: the asks
 // (play, seek, settings, stop), the facts, the loader's product.
 // `s_audio.lock` guards the session list and the loader slots taken. No
-// thread is joined (thread_start): a loader says it is done as its last
-// touch of its session, and a player says `finished`; only then
-// is the session freed. LOCK ORDER: s_audio.lock, then the output's, then
+// thread is joined (thread_start): a loader and a plane helper each say
+// they are done as their last touch of the session, and a player says
+// `finished`; only then is the session freed. LOCK ORDER: s_audio.lock, then the output's, then
 // a player's, then a session's; never the other way, so no call into the
 // output or a player is made with a session's lock held. A bell is rung
 // only with the lock that guards its owner's right to close it held
@@ -86,6 +86,21 @@
 // How often yonder's end looks for the threads to have let go.
 #define STOP_POLL_MS 10u
 
+// What the bytes' reader has heard of the last request, for a failure's
+// record (yonder_media_failure_take): where it began (0: the first, else a
+// Range request), its answer's status and Content-Type (0 and "" before
+// its head), the bytes it brought, and the first of them, which say what
+// the answer is when libmedia could not read it. Each request begins them
+// again (loader_start).
+typedef struct {
+    int status;
+    char type[48];
+    uint64_t received;
+    uint64_t from;
+    uint8_t first[YONDER_MEDIA_FIRST_BYTES];
+    uint32_t nfirst;
+} MediaHeard;
+
 struct yonder_media {
     yonder_media_t *next;           // s_audio.sessions
     os64_lock_t lock;
@@ -124,11 +139,21 @@ struct yonder_media {
     // facts. The window's alone.
     int64_t opened_us, told_us, read_us;
     // The threads, which hold no handles (thread_start). A session is
-    // freed only once each one that may be running has said it is done.
+    // freed only once each one started has said it is done.
     void *product;                  // the loader's, set once as it ends
-    bool loader_started;            // a loader may be running
+    bool loader_started;            // a loader was started (or is about to be)
     bool loader_quit;               // the bytes' reader gave up on it: cancel the fetch
     bool loader_done;               // the loader's last touch of the session
+    // Its plane (VIDEO_PLANE.md § 5): a helper thread asks for it, since
+    // the ask waits for the plane to be made, and the window must not. A
+    // close while it asks is the helper's to carry out when the ask
+    // returns: the player must outlive the call.
+    bool plane_asked;               // yonder_media_plane_ask was made
+    bool plane_helper_started;      // a helper was started (or is about to be)
+    bool plane_helper_in_ask;       // the helper is inside os64_media_player_plane
+    bool plane_helper_done;         // the helper's last touch of the session
+    bool plane_close_owed;          // closed while the helper asked: it closes the player
+    int64_t plane_win;              // the window the plane is asked of
     bool closed;                    // the window let go of it
     // The bytes' reader's own (the player's decoding thread's).
     char *url;
@@ -164,6 +189,18 @@ struct yonder_media {
     bool arrived;                   // the resource's end is in the window
     bool failed, opening;
     char why[96];
+    MediaHeard heard;               // the reader's; told to `heard_told` under `lock`
+    // A failure's record, the window's: the element and its address as
+    // the record names them, given at open.
+    char element[32];
+    char *named;
+    // Under `lock`: what the reader had heard when it last told (bytes_arrival,
+    // fail), what libmedia said and named of a failed open or decode
+    // (session_facts), and whether the failure is on the record.
+    MediaHeard heard_told;
+    int open_result;
+    os64_media_info_t open_info;
+    bool failure_told;
 };
 
 static struct {
@@ -188,13 +225,14 @@ static void ring_reader_locked(yonder_media_t *m)
     (void)os64_bell_ring(&m->bell);
 }
 
-// Starts a thread that is never joined: its handle is let go at once, so a
-// page with many players does not spend the program's handles on them. A
-// failure means fn never runs (os64_thread_or_nothing), so the caller may
-// unwind at once.
-static bool thread_start(int64_t (*fn)(void *), void *arg)
+// Starts a thread, named for its job, that is never joined: its handle is
+// let go at once, so a page with many players does not spend the program's
+// handles on them. A failure means no thread was made (the kernel takes the
+// handle before it makes the thread), so the caller undoes the start at
+// once: nothing waits for a done flag that will not come.
+static bool thread_start(int64_t (*fn)(void *), void *arg, const char *name)
 {
-    int64_t handle = os64_thread_or_nothing(fn, arg);
+    int64_t handle = os64_thread_named(fn, arg, name);
     if (handle < 0)
         return false;
     os64_close((int32_t)handle);
@@ -278,6 +316,9 @@ static bool keep(yonder_media_t *m, const uint8_t *data, size_t n)
     }
     os64_memcpy(m->bytes + have, data, n);
     m->window.have += n;
+    m->heard.received += n;
+    for (size_t i = 0; i < n && m->heard.nfirst < YONDER_MEDIA_FIRST_BYTES; i++)
+        m->heard.first[m->heard.nfirst++] = data[i];
     return true;
 }
 
@@ -288,6 +329,8 @@ static bool keep(yonder_media_t *m, const uint8_t *data, size_t n)
 // the head fails the load (`why` says why).
 static bool head_taken(yonder_media_t *m, const yonder_fetched_t *head)
 {
+    m->heard.status = head->status;
+    yonder_media_content_type(head->headers, head->headers_len, m->heard.type, sizeof(m->heard.type));
     if (head->status != 0 && (head->status < 200 || head->status > 299)) {
         os64_snprintf(m->why, sizeof(m->why), "The server answered %d", (int)head->status);
         return false;
@@ -396,8 +439,15 @@ static bool pump_ahead(yonder_media_t *m, uint64_t ahead)
     yonder_fetched_t *got = m->product;
     os64_lock_release(&m->lock);
     if (done && !m->arrived && !m->failed && !m->headed) {
+        if (got != NULL) {
+            m->heard.status = got->status;
+            yonder_media_content_type(got->headers, got->headers_len, m->heard.type, sizeof(m->heard.type));
+        }
         if (got == NULL || !got->ok) {
-            os64_strcopy(m->why, sizeof(m->why), "The sound could not be fetched");
+            if (got != NULL && got->why[0] != '\0')
+                os64_snprintf(m->why, sizeof(m->why), "The sound could not be fetched: %s", got->why);
+            else
+                os64_strcopy(m->why, sizeof(m->why), "The sound could not be fetched");
             m->failed = true;
         } else if (!got->streamed) {
             if (got->status != 0 && (got->status < 200 || got->status > 299)) {
@@ -411,6 +461,7 @@ static bool pump_ahead(yonder_media_t *m, uint64_t ahead)
             }
         } else {
             // Streamed, but its head was never published: nothing will come.
+            os64_strcopy(m->why, sizeof(m->why), "The answer ended before its head came");
             m->failed = true;
         }
         moved = true;
@@ -549,8 +600,10 @@ static int64_t store_read(void *ctx, uint8_t *out, size_t cap)
             m->arrived = true;
             continue;
         }
-        if (m->held && !fetch_restart(m, end))
+        if (m->held && !fetch_restart(m, end)) {
+            bytes_arrival(m);       // a restart that failed is the bytes' failure, told
             return -1;
+        }
         if (!pump(m) && !reader_wait(m, 200))
             return -1;
     }
@@ -599,8 +652,10 @@ static int64_t store_seek(void *ctx, uint64_t offset)
             m->refused_back = offset + 1;
         return -1;
     }
-    if (plan == YONDER_MEDIA_SEEK_JUMP && !fetch_restart(m, offset))
+    if (plan == YONDER_MEDIA_SEEK_JUMP && !fetch_restart(m, offset)) {
+        bytes_arrival(m);
         return -1;
+    }
     m->at = offset;
     return (int64_t)offset;
 }
@@ -729,6 +784,7 @@ static bool loader_start(yonder_media_t *m, uint64_t from)
         job->headers_len = os64_strlen(job->headers);
     }
     m->asked_from = from;
+    m->heard = (MediaHeard){.from = from};
     m->headed = false;
     way_origin_of(m->page_url, m->page != 0 ? m->page : 1, &job->request.origin);
     // HTML's CORS settings attribute: none is no-cors with credentials,
@@ -768,7 +824,7 @@ static bool loader_start(yonder_media_t *m, uint64_t from)
     os64_lock_acquire(&m->lock);
     m->loader_started = true;
     os64_lock_release(&m->lock);
-    if (!thread_start(loader_main, m)) {
+    if (!thread_start(loader_main, m, "loader")) {
         os64_lock_acquire(&m->lock);
         m->loader_started = false;
         m->job = NULL;
@@ -802,6 +858,7 @@ static void bytes_arrival(yonder_media_t *m)
 {
     os64_lock_acquire(&m->lock);
     arrival_locked(m);
+    m->heard_told = m->heard;
     if (m->failed && !m->bytes_failed) {
         m->bytes_failed = true;
         os64_strcopy(m->bytes_why, sizeof(m->bytes_why), m->why);
@@ -810,12 +867,17 @@ static void bytes_arrival(yonder_media_t *m)
     product_trim(m);
 }
 
+// The session failed, on the bytes' reader's thread (its player's
+// `prepare`, or the reader later): `why` is the page's MediaError.message,
+// and a failure with none says so rather than nothing.
 static void fail(yonder_media_t *m, int code, const char *why)
 {
     os64_lock_acquire(&m->lock);
+    m->heard_told = m->heard;
     if (m->facts.error == 0) {
         m->facts.error = code;
-        os64_strcopy(m->facts.message, sizeof(m->facts.message), why);
+        os64_strcopy(m->facts.message, sizeof(m->facts.message),
+                     why[0] != '\0' ? why : "The media failed, and nothing said why");
     }
     os64_lock_release(&m->lock);
     ring_window();
@@ -962,7 +1024,7 @@ static void session_facts(yonder_media_t *m, os64_dom_media_facts_t *out)
     *out = m->facts;
     os64_lock_release(&m->lock);
     if (p == NULL)
-        return;                     // opening, or failed before it had a player (`fail` told)
+        return;                     // closed, or its asks not yet told: the session's own facts (`fail` told)
     os64_media_player_facts_t f;
     os64_media_player_facts(p, &f);
     bool probed = f.probed && f.failure == 0;
@@ -973,6 +1035,10 @@ static void session_facts(yonder_media_t *m, os64_dom_media_facts_t *out)
         bool opened = f.info.sound == OS64_MEDIA_PLAYABLE || f.info.picture == OS64_MEDIA_PLAYABLE;
         out->error = opened ? OS64_DOM_MEDIA_ERR_DECODE : open_error(f.failure);
         os64_lock_acquire(&m->lock);
+        if (m->facts.error == 0 && m->open_result == 0) {
+            m->open_result = f.failure;
+            m->open_info = f.info;
+        }
         bool network = m->bytes_failed;
         if (network) {
             out->error = OS64_DOM_MEDIA_ERR_NETWORK;
@@ -1102,7 +1168,8 @@ static bool audio_running(void)
 // included. Its lock held.
 static bool threads_done_locked(const yonder_media_t *m)
 {
-    return (!m->loader_started || m->loader_done) && (m->player == NULL || m->player_finished);
+    return (!m->loader_started || m->loader_done) && (!m->plane_helper_started || m->plane_helper_done) &&
+           (m->player == NULL || m->player_finished);
 }
 
 // Frees a session no thread is using any more (threads_done_locked).
@@ -1116,6 +1183,7 @@ static void session_free(yonder_media_t *m)
     os64_bell_close(&m->bell);
     os64_free(m->bytes);
     os64_free(m->url);
+    os64_free(m->named);
     os64_dom_blob_release(m->blob);
     os64_free(m->page_url);
     os64_free(m);
@@ -1143,7 +1211,9 @@ yonder_media_t *yonder_media_open(const yonder_media_request_t *r)
     m->blob = os64_dom_blob_hold(r->blob);
     m->page_url = copy_text(r->page_url != NULL ? r->page_url : "about:blank");
     m->picture = r->picture;
-    if (m->url == NULL || m->page_url == NULL || os64_bell_make(&m->bell) != 0) {
+    os64_strcopy(m->element, sizeof(m->element), r->element != NULL ? r->element : (r->picture ? "video" : "audio"));
+    m->named = copy_text(r->named != NULL ? r->named : r->url);
+    if (m->url == NULL || m->page_url == NULL || m->named == NULL || os64_bell_make(&m->bell) != 0) {
         session_free(m);
         return NULL;
     }
@@ -1183,12 +1253,19 @@ yonder_media_t *yonder_media_open(const yonder_media_request_t *r)
 }
 
 // A session's player closed, once: its decoding thread's read fails on the
-// stop already set (store_read), and it frees itself. Window.
+// stop already set (store_read), and it frees itself. Window. While the
+// plane's helper is inside its ask, the close is owed to the helper, which
+// makes it as the ask returns (plane_helper): the player is freed after its
+// close, and the ask must not be inside it then.
 static void player_close(yonder_media_t *m)
 {
     os64_lock_acquire(&m->lock);
     os64_media_player_t *p = m->player_closed ? NULL : m->player;
     m->player_closed = true;
+    if (p != NULL && m->plane_helper_in_ask) {
+        m->plane_close_owed = true;
+        p = NULL;
+    }
     os64_lock_release(&m->lock);
     if (p != NULL)
         os64_media_player_close(p);
@@ -1352,6 +1429,31 @@ bool yonder_media_report(uint32_t i, char *out, size_t cap)
     return true;
 }
 
+bool yonder_media_failure_take(yonder_media_t *m, int code, char *out, size_t cap)
+{
+    os64_lock_acquire(&m->lock);
+    bool take = m->facts.error != 0 && !m->failure_told;
+    m->failure_told |= take;
+    MediaHeard heard = m->heard_told;
+    int error = code != 0 ? code : m->facts.error, result = m->open_result;
+    os64_media_info_t info = m->open_info;
+    char reason[sizeof(m->facts.message)];
+    os64_strcopy(reason, sizeof(reason), m->facts.message);
+    os64_lock_release(&m->lock);
+    if (!take)
+        return false;
+    yonder_media_failure_t f = {
+        .element = m->element, .error = error, .reason = reason, .fetched = !is_scheme(m->named, "file:"),
+        .status = heard.status, .type = heard.type, .received = heard.received, .range_from = heard.from,
+        .said = result != 0 ? os64_media_strerror(result) : "", .format = info.format, .sound = info.codec,
+        .picture = info.picture_codec, .sound_unplayable = info.sound == OS64_MEDIA_UNPLAYABLE,
+        .picture_unplayable = info.picture == OS64_MEDIA_UNPLAYABLE, .first = heard.first, .nfirst = heard.nfirst};
+    char text[512];
+    yonder_media_failure_text(&f, text, sizeof(text));
+    os64_snprintf(out, cap, "%s: %s", m->named, text);
+    return true;
+}
+
 bool yonder_media_frame(yonder_media_t *m, int64_t blank, int64_t period, os64_media_player_frame_t *out)
 {
     os64_media_player_t *p = m->picture ? player_of(m) : NULL;
@@ -1369,6 +1471,107 @@ bool yonder_media_player_facts(yonder_media_t *m, os64_media_player_facts_t *out
         return false;
     os64_media_player_facts(p, out);
     return true;
+}
+
+// The plane's helper: the ask, which waits for the plane to be made or
+// refused, then the close the window owed it, if it did. Whether it is
+// inside the ask is said under the session's lock, so a close is owed to it
+// only while it is (player_close), and a helper that never ran, or one
+// that finds the player closed already, is owed nothing. The close owed is
+// read in the same locked section that says the helper is done, so none
+// can arrive unseen between the two; the session outlives the close made
+// after it, since its player cannot finish before it is closed.
+static int64_t plane_helper(void *arg)
+{
+    yonder_media_t *m = arg;
+    os64_lock_acquire(&m->lock);
+    os64_media_player_t *p = m->player;
+    int64_t win = m->plane_win;
+    bool ask = !m->player_closed;
+    m->plane_helper_in_ask = ask;
+    os64_lock_release(&m->lock);
+    if (ask)
+        (void)os64_media_player_plane(p, win);
+    os64_lock_acquire(&m->lock);
+    m->plane_helper_in_ask = false;
+    bool close = m->plane_close_owed;
+    m->plane_helper_done = true;
+    os64_lock_release(&m->lock);
+    if (close)
+        os64_media_player_close(p);
+    // The window reads the verdict from the player's facts at its next turn.
+    ring_window();
+    return 0;
+}
+
+bool yonder_media_plane_ask(yonder_media_t *m, int64_t win)
+{
+    os64_media_player_t *p = m->picture ? player_of(m) : NULL;
+    if (p == NULL)
+        return false;
+    os64_lock_acquire(&m->lock);
+    // Once a session, or again once the last ask's helper is done (the
+    // caller asks again for a plane that ended; the player answers BUSY to
+    // any other). The done flag goes back down before the new helper
+    // starts, so the session's free waits for it.
+    bool ask = (!m->plane_asked || m->plane_helper_done) && !m->player_closed;
+    if (ask) {
+        m->plane_asked = true;
+        m->plane_helper_done = false;
+        m->plane_win = win;
+        // Started before the thread runs, so the session's free waits
+        // for its done flag from the moment it may run.
+        m->plane_helper_started = true;
+    }
+    os64_lock_release(&m->lock);
+    if (!ask)
+        return false;
+    if (!thread_start(plane_helper, m, "plane")) {
+        // No helper was made (thread_start): the ask is over as one whose
+        // helper asked nothing, so the session's free does not wait for it
+        // and a later ask may be made.
+        os64_lock_acquire(&m->lock);
+        m->plane_helper_done = true;
+        os64_lock_release(&m->lock);
+        return false;
+    }
+    return true;
+}
+
+int64_t yonder_media_plane_gap_take(yonder_media_t *m)
+{
+    os64_media_player_t *p = m->picture ? player_of(m) : NULL;
+    return p != NULL ? os64_media_player_plane_gap_take(p) : 0;
+}
+
+void yonder_media_plane_want(yonder_media_t *m, bool want)
+{
+    os64_media_player_t *p = m->picture ? player_of(m) : NULL;
+    if (p != NULL)
+        os64_media_player_plane_want(p, want);
+}
+
+bool yonder_media_shown(yonder_media_t *m, os64_media_player_view_t *out)
+{
+    os64_media_player_t *p = m->picture ? player_of(m) : NULL;
+    *out = (os64_media_player_view_t){0};
+    return p != NULL && os64_media_player_shown(p, out) == 0;
+}
+
+void yonder_media_shown_done(yonder_media_t *m, os64_media_player_view_t *view)
+{
+    if (view->frame == NULL)
+        return;
+    // The window gives every view back before it closes the session
+    // (video_remove), so the player is still open here. It is read
+    // directly rather than through player_of, which answers NULL once a
+    // close has been asked for.
+    os64_lock_acquire(&m->lock);
+    os64_media_player_t *p = m->player;
+    os64_lock_release(&m->lock);
+    if (p != NULL)
+        os64_media_player_shown_done(p, view);
+    *view = (os64_media_player_view_t){0};
 }
 
 void yonder_media_size(yonder_media_t *m, uint32_t width, uint32_t height)

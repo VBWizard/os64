@@ -148,6 +148,7 @@ int64_t d_replace_content(os64_dom_t *dom, os64_html_node_t *parent,
                            os64_html_node_t *replacement)
 {
     dom = d_owner(dom, parent);
+    d_documents_moved(dom, parent, replacement);
     DAdopting scope;
     d_adopting_begin(dom, &scope, replacement, parent);
     int64_t status = os64_page_node_replace_children(dom->state, parent, replacement);

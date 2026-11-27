@@ -65,6 +65,9 @@ typedef enum input_event_type
     // The answer to a frame request (FRAME_CLOCK.md § 6); coalesced outside
     // the ring, as the doorbell is.
     INPUT_EVENT_FRAME,
+    // The window entered or left full screen (wm_set_full_screen); no
+    // payload, coalesced outside the ring so a full queue cannot lose it.
+    INPUT_EVENT_WINDOW_FULL_SCREEN,
 } input_event_type_t;
 
 _Static_assert(INPUT_EVENT_WINDOW_RESIZE    == OS64_GUI_EVENT_WINDOW_RESIZE,    "event ABI: resize");
@@ -82,6 +85,7 @@ _Static_assert(INPUT_EVENT_DOORBELL == OS64_GUI_EVENT_DOORBELL, "event ABI: door
 _Static_assert(INPUT_EVENT_WINDOW_PLACEMENT == OS64_GUI_EVENT_WINDOW_PLACEMENT, "event ABI: placement");
 _Static_assert(INPUT_EVENT_WINDOW_PIN_CHANGED == OS64_GUI_EVENT_WINDOW_PIN_CHANGED, "event ABI: pin state");
 _Static_assert(INPUT_EVENT_FRAME == OS64_GUI_EVENT_FRAME, "event ABI: frame");
+_Static_assert(INPUT_EVENT_WINDOW_FULL_SCREEN == OS64_GUI_EVENT_WINDOW_FULL_SCREEN, "event ABI: full screen");
 
 // Mouse button bit positions (in `buttons`, and named in `button` for the
 // BUTTON_DOWN/UP events). These numbers are ABI — they ride out to ring 3 in

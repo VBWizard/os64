@@ -333,9 +333,40 @@ static void sparse_paint(void)
 }
 #include "test_draw2d_blur.inc"
 #include "test_draw2d_rect.inc"
+// canvas_bitmap_t.revision: a value no canvas has had before at every
+// reset and every draw that changes a pixel — the kept canvas pictures'
+// key (yonder's canvas_keep.h) — and the same value while nothing is drawn.
+// What the path renderer draws (fills, strokes, images, shadows, another
+// composite operator) is held to it in test_canvas_paths.c.
+static void revisions(void)
+{
+    Owner o = {0}; canvas_options_t opts = options(&o); canvas_context_t *c, *d;
+    OK(canvas_create(&opts, 8, 8, &c));
+    uint64_t seen[16]; int n = 0;
+    seen[n++] = bitmap(c).revision;
+    CHECK(seen[0] != 0);
+#define CHANGED() do { uint64_t r = bitmap(c).revision; for (int i = 0; i < n; ++i) CHECK(r != seen[i]); seen[n++] = r; } while (0)
+    OK(canvas_set_fill_rgb_alpha(c, 0xff0000, 1)); OK(canvas_fill_rect(c, 1, 1, 3, 3)); CHANGED();
+    OK(canvas_clear_rect(c, 0, 0, 2, 2)); CHANGED();
+    uint8_t source[] = {9, 8, 7, 255, 1, 2, 3, 255};
+    canvas_rgba8_t src = {source, 2, 1, 8, sizeof(source)};
+    OK(canvas_put_pixels(c, &src, 5, 5, NULL)); CHANGED();
+    OK(canvas_reset(c, 8, 8)); CHANGED();
+    // Nothing drawn: a rectangle of no area, a state change, a read.
+    uint64_t still = bitmap(c).revision;
+    OK(canvas_fill_rect(c, 3, 3, 0, 0)); OK(canvas_set_fill_rgb_alpha(c, 0x123456, 1)); OK(canvas_ack_damage(c));
+    CHECK(bitmap(c).revision == still);
+    // Another canvas never shares one.
+    OK(canvas_create(&opts, 8, 8, &d));
+    uint64_t other = bitmap(d).revision;
+    for (int i = 0; i < n; ++i) CHECK(other != seen[i]);
+#undef CHANGED
+    OK(canvas_destroy(d)); OK(canvas_destroy(c));
+}
+
 int main(void)
 {
-    basics(); surfaces(); repeated_blends(); failures(); shared_owner(); pixels(); sparse_paint(); shared_blur(); rectangle_spans(); rectangle_blend_table();
+    basics(); surfaces(); repeated_blends(); failures(); shared_owner(); pixels(); sparse_paint(); shared_blur(); rectangle_spans(); rectangle_blend_table(); revisions();
     printf("Canvas core: %zu assertions passed (pixels, rounding, bounds, state, reset, refusal, ownership)\n", checks);
     return 0;
 }

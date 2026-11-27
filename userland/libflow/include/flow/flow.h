@@ -523,6 +523,15 @@ typedef enum {
 // (flow_filter_reach) is this one's.
 #define FLOW_FILTER_BLUR_MAX 100
 
+// The most farther than its reach that one blur reads round a pixel, in
+// px: the painter makes a large blur on a reduced copy (yonder's filter.c
+// § A large blur), whose squares reach past three boxes' 3 (blur / 2). A
+// filtered group's inside is culled against a view grown by this for each
+// blur in its list beside the reach, so a part painted alone is handed
+// every box the whole view's painting reads. tools/test_yonder_filter_host.c
+// holds the painter's reads under it at every radius.
+#define FLOW_FILTER_READS_MORE 24
+
 // One function of a transform (CSS Transforms 1 § 9, 2 § 12). What drawing
 // reads: a translation by `x` and `y` — PX, or PERCENT of the border box,
 // which waits for the box — then `m`, a 4x4 matrix in column-major order
@@ -1004,10 +1013,22 @@ typedef struct {
  * from the caller's monotonic clock, with invalid/backward reads counted.
  * Counts come from stages that returned a result; a stage returning NULL
  * has no count. Times include attempted stages, including refused builds.
- * `reused` is zero for a full rebuild. No clock is read without a sink. */
+ * `reused` is zero for a full rebuild. No clock is read without a sink.
+ * Only when a clock is given (the counts cost a comparison an element and a
+ * lookup a box), what came out different from a previous tree of the same
+ * document, whether or not its styles could be reused: `styles_paint`
+ * elements whose style differs only in paint (colours, opacity, shadows, a
+ * transform changed while present: no box's placement reads them, though a
+ * transform moves a scroller's reach) and `styles_layout` elements whose
+ * style differs otherwise or that had none, animated ones left out; and
+ * `nodes_moved`, the nodes whose first box has another border box than in
+ * that tree, had none there, or has none here. Not counted, `nodes_moved`
+ * is -1, and every element is in `styles_layout`. */
 typedef struct {
     uint64_t style_us, boxes_us, layout_us, public_us;
     uint64_t elements, boxes, measures, reused, clock_errors;
+    uint64_t styles_paint, styles_layout;
+    int64_t nodes_moved;
 } flow_profile_t;
 
 typedef struct {
@@ -1287,7 +1308,9 @@ struct flow_box {
     uint64_t drawn;
     // `opacity: 0` on it or on an element it is inside, unless that
     // element's opacity is animated (a group then, laid over at its
-    // opacity, which may be none): flow_visit does not hand it over.
+    // opacity, which may be none), or that element is round the full-screen
+    // element it is in (the top layer is painted whatever is round it):
+    // flow_visit does not hand it over.
     // flow_hit still finds it, as a browser's pointer does,
     // unless it is `pointer-events: none`. A face drawing live widgets
     // draws a control's whatever its opacity — a control made invisible is
@@ -1365,8 +1388,44 @@ typedef enum {
     FLOW_REUSE_MARKER,
     FLOW_REUSE_TRANSLATION,
     FLOW_REUSE_RETAIN,
+    FLOW_REUSE_ABSOLUTE_OUTSIDE,    // an out-of-flow box inside, its containing block outside
+    FLOW_REUSE_ATOM_FLOATS,         // an atom's content inside made a float query in its line's space
     FLOW_REUSE_NREASONS
 } flow_reuse_reason_t;
+
+/* Why a subtree whose boxes are all equal to the previous tree's was
+ * refused for its role (FLOW_REUSE_BOX_ROLE, and the two refusals by name
+ * after it): the role of its root, or failing that the first role under it
+ * that may not stand inside a copy, in this order. An item of a flex or
+ * grid container, an absolute child of one included (refused as a root); an
+ * absolute or fixed box (refused as a root; under one, only when its
+ * containing block is outside: FLOW_REUSE_ABSOLUTE_OUTSIDE); a float; an
+ * atomic inline's content (refused as a root; under one, only when it made
+ * a float query: FLOW_REUSE_ATOM_FLOATS); a block holding a positioned or
+ * split inline's pieces; missing-image alt text; a box that is no block
+ * container (a picture, a table and its parts). A flex or grid container, a
+ * positioned box in the flow, a transformed box and a containing block for
+ * other reasons (a filter, the root) refuse nothing, root or inside
+ * (RELAYOUT_GRAFT.md § Roles inside a copy), and are not counted; their
+ * names stay for the records kept before. */
+typedef enum {
+    FLOW_ROLE_ITEM, FLOW_ROLE_FLEX, FLOW_ROLE_GRID, FLOW_ROLE_POSITIONED, FLOW_ROLE_OUT_OF_FLOW,
+    FLOW_ROLE_TRANSFORMED, FLOW_ROLE_FLOAT, FLOW_ROLE_ATOMIC, FLOW_ROLE_CONTAINER, FLOW_ROLE_INLINE,
+    FLOW_ROLE_ALT_TEXT, FLOW_ROLE_KIND, FLOW_ROLES
+} flow_role_t;
+const char *flow_role_name(flow_role_t role);
+
+/* Why an equal subtree's intrinsic widths were measured again rather than
+ * copied (RELAYOUT_GRAFT.md § Intrinsic widths have a separate memo): a box
+ * its measure would measure reads another height than in the source; a box
+ * the source measured before it is not measured here with the same widths;
+ * a box its measure measured is measured here already with other widths; a
+ * table, or a part of one, would be copied. */
+typedef enum {
+    FLOW_INTRINSIC_HEIGHT, FLOW_INTRINSIC_ORDER, FLOW_INTRINSIC_KNOWN, FLOW_INTRINSIC_TABLE,
+    FLOW_INTRINSIC_NREFUSALS
+} flow_intrinsic_refusal_t;
+const char *flow_intrinsic_refusal_name(flow_intrinsic_refusal_t why);
 
 /* Snapshot diagnostics, separate from geometry's profile.reused. Refusals
  * count failed preparation checks; source and destination preparation may
@@ -1379,6 +1438,31 @@ typedef struct {
     uint64_t intrinsic_hits, marker_measures;
     size_t metadata_bytes, metadata_peak;
     uint64_t refused[FLOW_REUSE_NREASONS];
+    // The intrinsic widths copied from the source: `intrinsic_hits` the
+    // boxes whose widths were copied, a measure avoided each;
+    // `intrinsic_roots` the copies, each of a box asked for its widths and
+    // the boxes its measure measured in the source; and the copies refused,
+    // by flow_intrinsic_refusal_t. A RECORD ONLY, kept when the layout is
+    // profiled with a clock: the copies by their root's own first role
+    // (flow_role_t: an item, a flex or grid container, an out-of-flow, a
+    // positioned or a transformed box, else what the graft refuses it for),
+    // FLOW_ROLES for a root with none.
+    uint64_t intrinsic_roots, intrinsic_refused[FLOW_INTRINSIC_NREFUSALS];
+    uint64_t intrinsic_role_roots[FLOW_ROLES + 1];
+    // A RECORD ONLY, kept when the layout is profiled with a clock: the
+    // roots of the equal subtrees refused for their role, each the
+    // outermost such subtree that no candidate for a copy above it takes in,
+    // by its role (flow_role_t); the boxes in them no candidate under them
+    // takes in (a candidate whose copy misses is counted neither way), the
+    // roots' own included; the roots whose subtree holds each refusing
+    // role anywhere (`role_inside`, a root counted under every one it
+    // holds);
+    // and the placement time spent inside the roots, every pass through a
+    // root's block layout summed, on the profile's clock, whose own reads
+    // it includes (a root its table places, a row or a group, takes none),
+    // with `role_clock_errors` the reads that failed or went backward.
+    uint64_t role_roots[FLOW_ROLES], role_boxes[FLOW_ROLES], role_inside[FLOW_ROLES], role_us[FLOW_ROLES];
+    uint64_t role_clock_errors;
     bool source_ready;
 } flow_reuse_stats_t;
 
@@ -1397,6 +1481,169 @@ flow_tree_t *flow_layout_incremental(const os64_html_document_t *doc, const os64
                                     flow_profile_t *profile, int64_t (*clock)(void *), void *clock_ctx);
 /* NULL supplies zero statistics. The answer is copied, not borrowed. */
 flow_reuse_stats_t flow_reuse_stats(const flow_tree_t *tree);
+
+/* A RESTYLE KEPT IN THE TREE (BRIEF_LAYOUT_NEEDS.md N1): the styles rebuilt
+ * for the document as it stands, and, when every element whose style came
+ * out different differs only in what the painter reads and moves nothing
+ * else, those values written into `tree` in place, with no box built or
+ * placed. An element whose insets changed besides is written too when
+ * nothing reads them (no box, or a static one), or when it is a positioned
+ * block-level box they only move (N4: its size does not follow them, the
+ * same side places it, no percentage, and nothing in it is clipped,
+ * scrolled, sticky, fixed or transformed but its own transform): what was
+ * made of it is made again where it moved to, from the layout's records,
+ * which stay as they were, so the next layout places it afresh. The tree must be the one laid out last for this document, at
+ * `width`, with the env and inputs of the layout that would follow, the
+ * cascade's generation among them (the graft's own source test: the tree's
+ * records point into the cascade they were computed in). A kept tree is
+ * the same tree: its boxes and their places stand, its styles, transforms'
+ * frames, ink and drawn stamps
+ * follow the new values, a moved box's place follows its insets, and so,
+ * where a transform or a box moved, do the page's
+ * extent and the scroll containers' ranges (a scroll past a range that
+ * shrank is held within it). Declined, the tree is as it was unless `why` is
+ * FLOW_RESTYLE_ROOM, which may have written part of it; either way the
+ * caller lays out afresh. The cascade must be current.
+ *
+ * WHAT IT PAINTED (LAYOUT_NEEDS_N3.md § 3 A): with `marks` not NULL, a
+ * written tree hands `marks->mark` what each element whose style it wrote
+ * painted before the write and paints after it, in page coordinates at
+ * `marks->scroll`, as flow_layout_parts hands its parts: each box's reach
+ * (its overflow grown by its ink, so all it holds), a group's bounds, either
+ * spread by the filters it is drawn through and taken out through every
+ * matrix with what the warp reads past it (flow.c § WHAT A CHANGE PAINTS,
+ * WHERE THE PAGE SHOWS IT), and each stacked box drawn outside it that takes
+ * from it; an element with no box of its own, the replaced box that draws
+ * it (an inline svg's shape), if one does. `parts` (a flow_parts_why_t) is
+ * FLOW_PARTS_MARKED when that was all of it, or nothing was written;
+ * anything else names why the caller must take the whole view: the canvas
+ * may take a written element's background (CANVAS), a transform or a
+ * moved box moved a scroller's range or a scroll (MOVED; the page's extent
+ * changing alone moves only the host's scrollbars, set from flow_width and
+ * flow_height after every layout, and the marks are all of it), what draws a
+ * boxless element cannot be bounded (NO_BOX), the walks ran too deep, no
+ * memory. A declined restyle hands nothing it can stand by: its `parts` is
+ * not MARKED, and its `written` is not 0 only when it wrote the tree before
+ * declining, which then holds some of the new styles. */
+typedef struct {
+    flow_point_t scroll;
+    void (*mark)(void *ctx, const flow_box_t *box, os64_gui_rect_t r);
+    void *ctx;
+} flow_restyle_marks_t;
+typedef enum {
+    FLOW_RESTYLE_DECLINED = 0,
+    FLOW_RESTYLE_NOTHING,       /* no style came out different */
+    FLOW_RESTYLE_PAINT          /* written: paint only, or a box that only moved */
+} flow_restyle_kind_t;
+typedef enum {
+    FLOW_RESTYLE_NONE = 0,
+    FLOW_RESTYLE_NO_TREE,       /* no tree, another document's, incomplete, or its room spent */
+    FLOW_RESTYLE_NO_HISTORY,    /* no change history for it, or the history was lost */
+    FLOW_RESTYLE_STRUCTURE,     /* in the page: nodes added or removed, a text, adopted sheets, an
+                                   attribute boxes read */
+    FLOW_RESTYLE_INPUTS,        /* another width, cascade, env or resource */
+    FLOW_RESTYLE_STYLES,        /* the styles could not be built whole */
+    FLOW_RESTYLE_MEMBERSHIP,    /* an element came to have a style, or lost it */
+    FLOW_RESTYLE_GEOMETRY,      /* a style placement reads changed, or what boxes are built from */
+    FLOW_RESTYLE_MOTION,        /* an animated element (before or after) whose style or underlying style changed */
+    FLOW_RESTYLE_STACKING,      /* a box comes to be a group or a context or ceases to, or a matrix is crossed */
+    FLOW_RESTYLE_DECORATION,    /* a decoration, or its colours where a line is drawn, which fragments copy */
+    FLOW_RESTYLE_ROOM,          /* the restyle arena's room, or memory */
+    FLOW_RESTYLE_NREASONS
+} flow_restyle_reason_t;
+typedef struct {
+    flow_restyle_kind_t kind;
+    flow_restyle_reason_t why;  /* when declined */
+    uint64_t written;           /* elements and pseudo-elements whose style was written */
+    /* When declined, for the record: the element it was declined at, a
+     * document's element the tree styled (a pseudo-element's is its host's;
+     * NULL for none, as for another width), and what was found there, in
+     * words ("text", "attribute title", "derived quotes", "placement byte
+     * 212"). */
+    const os64_html_node_t *at;
+    char detail[48];
+    int32_t parts;              /* a flow_parts_why_t: whether `marks` had all of it */
+    uint64_t moved;             /* of those written, the boxes that only moved */
+} flow_restyle_t;
+flow_restyle_t flow_restyle_in_place(flow_tree_t *tree, const os64_html_document_t *doc,
+                                     const os64_page_t *model, const flow_env_t *env,
+                                     const flow_reuse_inputs_t *inputs, int32_t width,
+                                     const flow_restyle_marks_t *marks);
+/* Whether a change of `doc`'s log is one a kept restyle declines as
+ * structural (FLOW_RESTYLE_STRUCTURE): children or a text changed, a tree's
+ * adopted sheets, or an attribute the cascade is not alone in reading (any
+ * but class, style, id, data-* and aria-*), at a node in the document. */
+bool flow_change_structural(const os64_html_document_t *doc, const os64_html_change_entry_t *entry);
+/* Whether the kept tree `a` answers as the whole layout `b` of the same
+ * document does (the caller's check, `--geometry-check`): the same boxes in
+ * order, each of the same kind, node, border box, content box, baseline, own
+ * transform's frame (where it stands and its matrix as drawn), overflow,
+ * clip and stacking flags, its style equal in every field, its decoration the same
+ * where it draws one, and its ink and outlines covering the whole layout's
+ * (a kept tree's only grow); the same paint layers; the same page extent and
+ * scroll containers' ranges and scrolls. Hit testing reads what this
+ * compares. False names the first difference: the node (an anonymous box's
+ * element) when a box is to blame, and what differed. */
+bool flow_restyle_check(const flow_tree_t *a, const flow_tree_t *b, const os64_html_node_t **node,
+                        const char **what);
+
+/* WHAT IS PENDING since `tree` was made current (BRIEF_LAYOUT_NEEDS.md N2):
+ * laid out, or a restyle kept in it. PAINT says every change since then is
+ * an inline style write whose changed longhands placement and box
+ * generation never read (flow_pending_longhand), on the same side of `none`
+ * where the side makes a containing block; so every border box, padding
+ * box, offset parent and scroll position the tree holds is the one a
+ * layout would give. `transforms`: a longhand of the transform family or its
+ * origin is pending, which moves what a transform reaches (scroll ranges,
+ * the page's extent, a transformed box's rectangles). NONE says nothing the
+ * tree was styled from changed (inline styles may have been written back to
+ * what the cascade parsed), and RESTYLE anything else, or that it cannot be
+ * said: `cascade` must be the
+ * page's, at the version the tree is current at. A change log the tree's
+ * reader found lost is RESTYLE: everything is owed. The verdict only rises
+ * until the tree is made current again. A read answered from the tree is a
+ * style change event that did not happen, which CSS transitions would see
+ * (pending.inc says what they will owe). */
+typedef enum {
+    FLOW_PENDING_NONE = 0,
+    FLOW_PENDING_PAINT,
+    FLOW_PENDING_RESTYLE
+} flow_pending_verdict_t;
+/* `why` says why the verdict is what it is, for the record: the class and
+ * what wrote it ("paint: a style write", "restyle: attribute class",
+ * "structural: children", ...; a style write judged RESTYLE names what made
+ * it one: "restyle: a style write: width", "...: transform side",
+ * "...: animated") at the element `at` (tag#id.class), or the
+ * condition that made it RESTYLE unasked ("restyle: the log was lost",
+ * "restyle: no reader", ...); empty for NONE. `lost` says this call found
+ * the change log lost, which leaves everything owed until the tree is made
+ * current again. `style_read` says this call judged a style write RESTYLE
+ * because a selector may read that element's style attribute
+ * (garb_cascade_style_may_read, N2a), the element `style_read_at`. */
+typedef struct {
+    flow_pending_verdict_t verdict;
+    bool transforms;
+    bool lost, style_read;
+    char why[64], at[80], style_read_at[80];
+} flow_pending_t;
+flow_pending_t flow_pending(flow_tree_t *tree, const os64_html_document_t *doc, const struct garb_cascade *cascade);
+/* The tree made current at the document's version with nothing laid out,
+ * when flow_pending says NONE: the cascade is brought there with nothing
+ * restyled (garb_cascade_advance), and the tree's pending reader, which
+ * flow_pending has just read to that version, is current there as a layout
+ * would leave it. True when the tree is current at the document's version
+ * (also when it already was); false when the verdict is not NONE or the
+ * cascade refused, which leaves a layout owed (a refused cascade owes a
+ * fresh build). `judged`, when not NULL, is given flow_pending's answer.
+ * The graft's reader (the next layout's reuse) is not moved: it still sees
+ * those writes, which costs that layout a fresh placement of the written
+ * elements and never a wrong answer. */
+bool flow_pending_advance(flow_tree_t *tree, const os64_html_document_t *doc, struct garb_cascade *cascade,
+                          flow_pending_t *judged);
+/* How a pending write of libgarb's longhand `prop` (a garb_prop_t) is judged:
+ * 0 when placement or boxes may read it, else the kind of judgement
+ * (pending.inc). For the table's test. */
+int flow_pending_longhand(int prop);
 /* WHAT A TREE HOLDS (MEMORY_CENSUS.md § 3): the bytes each of its arenas
  * has reserved — the computed styles, the boxes, the lines and fragments,
  * and the public boxes — and how many boxes it built, anonymous ones
@@ -1420,6 +1667,19 @@ const os64_page_t *flow_model(const flow_tree_t *tree);
 int32_t flow_height(const flow_tree_t *tree);
 int32_t flow_width(const flow_tree_t *tree);
 bool flow_incomplete(const flow_tree_t *tree);
+// The document's elements in the flat tree as the tree laid them out, for a
+// record of where a page's elements go: those with a box of their own;
+// those without one, by why: `display: none` on themselves, inside an
+// element that is, drawn by a replaced box an ancestor makes (an inline
+// svg's shapes, a select's options), or none of those (`display: contents`;
+// svg another svg may draw by reference — a definition, a symbol, a paint
+// server, a clip, a mask, a marker, a filter — or one in an svg that draws
+// nothing; and what the tree did not reach). A walk of the document, for a
+// record.
+typedef struct {
+    size_t boxed, none, under_none, drawn, other;
+} flow_census_t;
+void flow_census(const flow_tree_t *tree, flow_census_t *out);
 
 // ── Animations (PILE3.md § Animations) ──────────────────────────────────
 //
@@ -1533,12 +1793,44 @@ typedef struct {
 // are.
 int32_t flow_motion_entries(const flow_tree_t *tree, os64_gui_rect_t view, flow_point_t scroll,
                             flow_motion_entry_t *out, int32_t cap);
+// One animation of the `entry`th element flow_motion_entries lists, the
+// `anim`th in composite order, said for a record of what a page started:
+// whether it is a script's effect (element.animate and the like) or a CSS
+// animation, and its name; its timing, and whether it is held (paused, or
+// a playback rate of 0: a script's effect by its own clock, a CSS animation
+// by its record, which a play state and a script's pause() both set) with,
+// for a script's effect, its local time at the layout's time, which may be
+// negative (NaN for a CSS animation's, whose clock is the timeline's); how
+// many longhands it sets and the first of them (a garb_prop_t, -1 for
+// none), and that longhand's value at its first and last keyframe as
+// getComputedStyle writes one — only for an element that ticks, whose
+// keyframes the layout resolved ("" else); and the element's clock: the
+// time its style is at and its next phase edge (for an element that does
+// not tick, the layout's time and none: INFINITY), and the tree's layout
+// time and last tick, all on the page's clock in milliseconds.
+typedef struct {
+    bool script;
+    flow_name_t name;
+    flow_animation_t timing;
+    bool held;
+    double local_ms;
+    int32_t nprops, prop, nframes;
+    char first[64], last[64];
+    double at, edge;
+    uint64_t now_ms, tick_ms;
+} flow_motion_anim_t;
+// False past the element's animations, or the tree's list.
+bool flow_motion_describe(const flow_tree_t *tree, const flow_env_t *env, int32_t entry, int32_t anim,
+                          flow_motion_anim_t *out);
 // The page's ticking animations moved to `now`, which is no earlier than
 // the tree's last tick or its layout (PILE3.md § Animations in place, A
 // tick): each element's style rewritten, its transform frames remade and
 // the ink of its shadows grown. `mark`, when not NULL, is handed what each
 // element that changed painted before the tick and what it paints after,
-// in page coordinates at `scroll`, with the box that paints it — and an
+// in page coordinates at `scroll`, with the box that paints it (spread by
+// the filters it is drawn through and taken out through every matrix with
+// what the warp reads past it: flow.c § WHAT A CHANGE PAINTS, WHERE THE
+// PAGE SHOWS IT) — and an
 // empty rectangle for the element whose background the canvas may take,
 // whatever its boxes reach, since the canvas paints the view wherever its
 // box is — and
@@ -1549,6 +1841,14 @@ int32_t flow_motion_entries(const flow_tree_t *tree, os64_gui_rect_t view, flow_
 bool flow_motion_tick(flow_tree_t *tree, uint64_t now, flow_point_t scroll,
                       void (*mark)(void *ctx, const flow_box_t *box, os64_gui_rect_t r), void *ctx,
                       bool *moved);
+// Each element the tree's last taken tick (flow_motion_tick) changed,
+// handed to `each` once per longhand its animations set (`prop`, a
+// garb_prop_t), with its node and its pseudo-element (a garb_pseudo_t, 0
+// for the element itself), each element's longhands together: what a
+// record names a tick by, the longhands included, which no mark says.
+void flow_motion_ticked(const flow_tree_t *tree,
+                        void (*each)(void *ctx, const os64_html_node_t *node, uint8_t pseudo, int32_t prop),
+                        void *ctx);
 // What a layout made for the page's animations alone changed between the
 // tree on screen (`was`) and the one laid out to replace it (`now`), both
 // alive (YONDER_PERF.md § perf-4): when the two are the same boxes laid out
@@ -1579,6 +1879,8 @@ typedef enum {
     FLOW_PARTS_DEEP,            // stacked boxes nested so deep that finding which take the
                                 // change would cost more than the repaint
     FLOW_PARTS_MEMORY,          // no memory
+    FLOW_PARTS_LONG,            // flow_change_parts: trees too big to compare for less than
+                                // the repaint
     FLOW_PARTS_COUNT
 } flow_parts_why_t;
 typedef struct {
@@ -1593,6 +1895,39 @@ typedef struct {
     int32_t prop;               // PLACED: the garb_prop_t a layout places; -1 otherwise
 } flow_parts_said_t;
 bool flow_layout_parts(const flow_tree_t *was, const flow_tree_t *now, flow_point_t scroll,
+                       void (*mark)(void *ctx, const flow_box_t *box, os64_gui_rect_t r), void *ctx,
+                       flow_parts_said_t *said);
+// The parts of the view a script's change painted, between the tree that
+// was shown (`was`) and the tree laid out after it (`now`), of one
+// document at one width, zoom and cascade environment, handed to `mark`
+// in page coordinates at `scroll` as flow_layout_parts hands them
+// (LAYOUT_NEEDS_N3.md § 3 B). True when they were; false, with why in
+// `said`, for the whole view. Over-marking is its error's direction: what
+// it cannot account for refuses.
+//
+// - The trees must paint the same layers, scroll alike, and reach as far:
+//   the page's extent and each scroller's range (LAYERS, SCROLLED, MOVED).
+// - Walked together, each pair of boxes placed alike in itself is
+//   compared by what it draws from the tree: its whole style, its
+//   decorations, and a text's or marker's bytes and the glyphs its run
+//   places, font by font. One that differs marks its element. What a replaced box draws from the document (a picture,
+//   an svg's shapes) is the caller's `touched` to name.
+// - A pair whose children differ (another list, one of them empty, or a
+//   child placed otherwise) is marked by its own reach in each tree and not
+//   gone into, when everything inside both is in its frame, in flow and in
+//   no layer of its own; otherwise MOVED.
+// - An element with no box in either tree whose style differs marks the
+//   replaced box that draws it, if one does; NO_BOX when an svg element is
+//   one another svg may draw through a reference, or sits in an svg that
+//   draws nothing itself (a sprite sheet's), since what draws it then is
+//   not bounded.
+// - A walk past its bound is LONG.
+// - `touched` (`ntouched` elements) are what the script changed that no
+//   style says, the face's to name (an attribute a box draws from): each
+//   marks its boxes, or the replaced box that draws it.
+// - A changed element the canvas may take a background from is CANVAS.
+bool flow_change_parts(const flow_tree_t *was, const flow_tree_t *now, flow_point_t scroll,
+                       const os64_html_node_t *const *touched, int32_t ntouched,
                        void (*mark)(void *ctx, const flow_box_t *box, os64_gui_rect_t r), void *ctx,
                        flow_parts_said_t *said);
 // Whether an animation of the tree, wherever its element is, still has a
@@ -1783,6 +2118,13 @@ bool flow_affine_invert(const double m[6], double inv[6]);
 // empty when `m` cannot be undone.
 os64_gui_rect_t flow_affine_rect(const double m[6], os64_gui_rect_t r);
 os64_gui_rect_t flow_affine_rect_back(const double m[6], os64_gui_rect_t r);
+// The sheet a group of `bounds` drawn through `m` is laid through when
+// `view` is what shows of the page around it: its bounds met with the view
+// taken back through the matrix, a pixel wider all round, since a bilinear
+// sample at the view's edge mixes the source pixel beyond; nothing when no
+// pixel of its bounds shows. The painter asks for this sheet and
+// flow_paint_asks bounds it, through this one function.
+os64_gui_rect_t flow_through_sheet(os64_gui_rect_t bounds, const double m[6], os64_gui_rect_t view);
 // What its corners' radii come to, in whole pixels, in flow_style_t's
 // corner order, horizontal then vertical: a percentage of its border box,
 // and every one scaled down by one factor when the radii along any side
@@ -1870,6 +2212,11 @@ bool flow_box_covered(const flow_tree_t *tree, const flow_box_t *box, flow_point
 // the box's centre, for a widget that covers only part of its box (a
 // video's player, the strip along its bottom).
 bool flow_box_covered_at(const flow_tree_t *tree, const flow_box_t *box, int32_t x, int32_t y, flow_point_t scroll);
+// The same question while only `top` and what is inside it are there (the
+// Fullscreen API's top layer, flow_hit_within): a box outside `top` is
+// covered, and one inside it is covered only by what is inside it too.
+bool flow_box_covered_within(const flow_tree_t *tree, const flow_box_t *box, int32_t x, int32_t y,
+                             flow_point_t scroll, const flow_box_t *top);
 
 // Every box that meets `viewport` but the LINE boxes, which paint nothing of
 // their own (flow_hit can still answer one) — except a line of a box with
@@ -1928,8 +2275,9 @@ void flow_visit(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t 
 // after its `open`, how the walk culls inside it, to the depth the walk
 // keeps views (past it nothing is culled): against the view taken back
 // as above; not at all, for a face that paints the whole group to keep
-// it between paints; or wholly, for one laying what it kept — the opens
-// and closes of the groups inside still come, and nothing else.
+// it between paints; or wholly, for one laying what it kept or painting
+// nothing of the group — the opens and closes of the groups inside still
+// come, and nothing else.
 typedef enum {
     FLOW_INSIDE_VIEW = 0,
     FLOW_INSIDE_ALL,
@@ -1946,6 +2294,99 @@ typedef struct {
 
 void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
                        const flow_visitor_t *visitor);
+
+// The same walk for a face that will draw `from` over everything before it
+// (a cover, VIDEO.md § 5, The paint beneath the picture): nothing emitted
+// before `from` itself is handed over. Every part of the paint order
+// before the one that paints `from` (flow_paint_path) is culled as a part
+// outside the view is; a group's open and close come exactly when they
+// span that part — the groups `from` is handed over inside, when it is —
+// with the open's bounds the group's whole, and every other group before
+// it is culled whole, its opens, closes and boxes alike; inside the part
+// that paints it, no box is handed over until `from` is. From there the
+// walk is flow_visit_groups'. Whether `from` was handed over is written to
+// `*found` (when not NULL): a face told false has drawn only what came
+// after a box it never saw, the spanning groups' opens and closes among
+// it.
+void flow_visit_groups_from(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
+                            const flow_visitor_t *visitor, const flow_box_t *from, bool *found);
+
+// The groups that hold `box` in the paint order — those whose open comes
+// before the part that paints it and whose close after — outermost first,
+// at most `cap` of them written to `out`; the count, or -1 when no part
+// paints it (no tree, or a box of none). The part that paints a box is of
+// its nearest stacked ancestor, or of itself when it is stacked, or of the
+// root: that box's whole walk, or, where members of negative z-index split
+// it, its own background and borders for the box itself and the rest of it
+// for a box inside.
+int32_t flow_paint_path(const flow_tree_t *tree, const flow_box_t *box, const flow_box_t **out, int32_t cap);
+
+// What a paint of `viewport` at `scroll`, or of a part of it, can ask of a
+// face at most, worked through the views the walk keeps (which hold the
+// painter's at every depth): each layer grows the view inside it by what
+// its filter spreads, and a group drawn through a matrix takes in the view
+// taken back through it, so a group under a filtered one is counted with
+// the grown view. Each view only grows with the viewport, so the
+// viewport's answer bounds a part's. Inside a group drawn through a matrix
+// a group counts its bounds whole.
+//
+// flow_layer_area_bound: at least as many pixels as any such paint can
+// charge the budget for layers and backdrops — each group that may take a
+// layer (a filter, a mask, a blend other than normal), what shows of its
+// bounds met with the view inside it, once and once a mask layer; each box
+// with a backdrop filter, its part in the view. A face whose budget holds
+// it refuses no layer in any such paint.
+//
+// flow_sheets_fit: whether every sheet such a paint could ask for keeps
+// within its limits — the sheet a group drawn through a matrix is laid
+// through (its bounds met with the view taken back through the matrix, a
+// pixel wider), at most `through_side` a side and `through_pixels` in all; each layer, and
+// each backdrop filter's part grown by its list's reach, at most
+// `layer_side` and `layer_pixels`.
+//
+// flow_paint_asks: both in one walk against `limits`, true when the
+// charge is within `budget` and every sheet within its limit; `out` says
+// the charge, whether the sheets fit, and the first limit passed in paint
+// order with the box that passed it (what of it was counted, its own
+// charge for the budget, and whether it was counted inside a matrix), for
+// a caller that says why it would not split or cover a paint.
+//
+// Together they are what lets a paint split into parts, or culled beneath a
+// cover, decide every layer and sheet as the whole paint would (VIDEO.md
+// § 5, The paint beneath the picture). Groups nested past 64 deep ask for
+// more than any budget and fit no limit.
+typedef struct {
+    int64_t budget;                         // layers' and backdrops' pixels in all
+    int32_t through_side;                   // a sheet a group is laid through: a side,
+    int64_t through_pixels;                 // and in all
+    int32_t layer_side;                     // a layer's sheet, or a backdrop's
+    int64_t layer_pixels;
+} flow_paint_limits_t;
+
+typedef enum {
+    FLOW_ASKS_WITHIN = 0,                   // no limit passed
+    FLOW_ASKS_BUDGET,                       // the charge passed the budget at `box`
+    FLOW_ASKS_THROUGH_SHEET,                // `box`'s sheet through its matrix
+    FLOW_ASKS_LAYER_SHEET,                  // `box`'s layer
+    FLOW_ASKS_BACKDROP_SHEET,               // `box`'s backdrop, grown by its reach
+    FLOW_ASKS_DEEP,                         // `box` nested past the walk's depth
+} flow_asks_over_t;
+
+typedef struct {
+    int64_t charge;
+    bool sheets_fit;
+    flow_asks_over_t over;
+    const flow_box_t *box;
+    os64_gui_rect_t rect;                   // the sheet, or the part charged
+    int64_t box_charge;                     // its own charge, for the budget
+    bool inside;                            // counted inside a matrix: its bounds whole
+} flow_paint_asks_t;
+
+int64_t flow_layer_area_bound(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll);
+bool flow_sheets_fit(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll, int32_t through_side,
+                     int64_t through_pixels, int32_t layer_side, int64_t layer_pixels);
+bool flow_paint_asks(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
+                     const flow_paint_limits_t *limits, flow_paint_asks_t *out);
 
 // The deepest box whose OWN rect holds (x, y), the last painted winning —
 // the stacked boxes backwards, then the ordinary tree — whose clip holds
@@ -1965,6 +2406,13 @@ void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_p
 // flow_hit_counted answers the same and says, in `*cuts`, how many cuts
 // it worked.
 const flow_box_t *flow_hit(const flow_tree_t *tree, int32_t x, int32_t y, flow_point_t scroll);
+// The same, with only `top` and the boxes inside it there: a top layer's
+// hit (the Fullscreen API's, VIDEO.md § 9), where nothing of the page
+// outside the element takes the pointer, whatever it is stacked over.
+// `top` is a stacked box (a fixed one is), so the walk keeps the stacked
+// boxes inside it and leaves the rest out.
+const flow_box_t *flow_hit_within(const flow_tree_t *tree, int32_t x, int32_t y, flow_point_t scroll,
+                                  const flow_box_t *top);
 // The processed offset (`begin`'s units) of source byte `source` of a TEXT
 // box's node's data, as white-space processing made it (RANGE.md § 7): the
 // box's item's collapse replayed from where it began, under the box's own
@@ -2004,8 +2452,8 @@ const flow_style_t *flow_style_for(const flow_tree_t *tree, const os64_html_node
 // containing blocks): in the flow, its parent element; an absolute box's
 // containing block, the nearest element that can contain one (a position
 // other than static, a transform, a filter); a fixed box's, the nearest
-// transformed or filtered one. NULL for the viewport, and for an element
-// the layout styled nothing for. Walked to the top it is the chain
+// transformed or filtered one; the fullscreen element's, the viewport. NULL
+// for the viewport, and for an element the layout styled nothing for. Walked to the top it is the chain
 // Intersection Observer calls the containing block chain; a parent that
 // is inline, or makes no box, is on it and clips nothing.
 const os64_html_node_t *flow_clip_parent(const flow_tree_t *tree, const os64_html_node_t *node);

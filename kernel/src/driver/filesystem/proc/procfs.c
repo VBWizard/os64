@@ -490,6 +490,55 @@ static uint64_t proc_cycles_to_us(uint64_t cycles)
 	return per_us ? cycles / per_us : 0;
 }
 
+// Nanoseconds, for the mapping lock's waits and holds: a walk of the list
+// is far shorter than a microsecond.
+static uint64_t proc_cycles_to_ns(uint64_t cycles)
+{
+	uint64_t per_ms = kCPUCyclesPerSecond / 1000;
+	return per_ms ? cycles / per_ms * 1000000 + cycles % per_ms * 1000000 / per_ms : 0;
+}
+
+// A counted lock's line: taken, waited, the worst wait and hold, since it
+// began and since the last read.
+// `tag`, when not NULL, names what a holder's hold_tag counts, printed after
+// each worst hold.
+static void proc_add_counted_lock(synth_text_t *t, const char *key, const counted_lock_stats_t *l, const char *tag)
+{
+	synth_text_addf(t, "%s\t%lu taken %lu waited %lu ns worst wait %lu ns worst hold %lu ns",
+	                key, l->acquires, l->contended, proc_cycles_to_ns(l->wait_cycles),
+	                proc_cycles_to_ns(l->max_wait_cycles), proc_cycles_to_ns(l->max_hold_cycles));
+	if (tag != NULL)
+		synth_text_addf(t, " (%lu %s)", l->max_hold_tag, tag);
+	synth_text_addf(t, "; since read %lu taken %lu waited %lu ns worst wait %lu ns worst hold %lu ns",
+	                l->window_acquires, l->window_contended, proc_cycles_to_ns(l->window_wait_cycles),
+	                proc_cycles_to_ns(l->window_max_wait_cycles), proc_cycles_to_ns(l->window_max_hold_cycles));
+	if (tag != NULL)
+		synth_text_addf(t, " (%lu %s)", l->window_max_hold_tag, tag);
+	synth_text_addf(t, "\n");
+}
+
+// The task's list of mappings: how many, the walks the lookups took (in
+// mappings stepped over; a miss steps over all of them), the pages of
+// syscall ranges the page table answered for without a lookup, and the
+// waits and holds of its lock (each worst hold with the nodes its holder
+// walked) and of the task's page lock (which a fault
+// publishes a page under and unmap removes one under), each since the task
+// began and since this file was last read (MAPPING_LIST.md). A long walk is
+// the list lock's hold, which is why both are here.
+static void proc_add_mapping_counts(synth_text_t *t, task_t *task)
+{
+	vma_counts_t c;
+	vma_read_counts(task, &c);
+	synth_text_addf(t, "mappings\t%u\n", c.listed);
+	synth_text_addf(t, "mapping_walks\t%lu lookups %lu misses %lu steps longest %lu; "
+	                "since read %lu lookups %lu misses %lu steps longest %lu\n",
+	                c.walks.lookups, c.walks.misses, c.walks.steps, c.walks.steps_most,
+	                c.walks_since.lookups, c.walks_since.misses, c.walks_since.steps, c.walks_since.steps_most);
+	synth_text_addf(t, "pages_by_table\t%lu; since read %lu\n", c.table_answers, c.table_answers_since);
+	proc_add_counted_lock(t, "mapping_lock", &c.lock, "walked");
+	proc_add_counted_lock(t, "page_lock", &c.page_lock, NULL);
+}
+
 static void proc_add_system_causes(synth_text_t *t, const accounting_thread_cycles_t *cycles,
                                    uint64_t system_us)
 {
@@ -563,8 +612,25 @@ static void proc_gen_task_status(synth_text_t *t, task_t *task)
 		task_tty_release(tty);
 	}
 	synth_text_addf(t, "shell\t%s\n", task->controllingShell ? "yes" : "no");
-	synth_text_addf(t, "threads\t%u\n", proc_task_thread_count(task));
+	// Made: every thread on the task's chain, which keeps a thread_t until
+	// burial. Live: those whose stacks are not yet released (thread_reap.h);
+	// a released one never runs again. The first number is what this line
+	// has always said, so a reader taking one number reads the same.
+	uint32_t threads_made = 0, threads_live = 0;
+	for (thread_t *th = task->threads; th != NULL; th = th->taskNext)
+	{
+		threads_made++;
+		if (__atomic_load_n(&th->reap.state, __ATOMIC_RELAXED) != REAP_DONE)
+			threads_live++;
+	}
+	synth_text_addf(t, "threads\t%u made, %u live\n", threads_made, threads_live);
+	synth_text_addf(t, "reaps_pending\t%u\n", __atomic_load_n(&task->reaps.pending, __ATOMIC_RELAXED));
+	// The heap range holds the task's mappings and its threads' stacks; the
+	// next line says how much of it the stacks took, guards included.
 	synth_text_addf(t, "heap\t%p-%p\n", (void *)task->heapStart, (void *)task->heapEnd);
+	synth_text_addf(t, "stacks\t%lu bytes in %lu ranges\n",
+	                (unsigned long)__atomic_load_n(&task->stackBytes, __ATOMIC_RELAXED),
+	                (unsigned long)__atomic_load_n(&task->stackRanges, __ATOMIC_RELAXED));
 	synth_text_addf(t, "entry\t%p\n", (void *)task->entryPoint);
 	if (task->loadBias)
 		synth_text_addf(t, "bias\t%p\n", (void *)task->loadBias);
@@ -577,6 +643,7 @@ static void proc_gen_task_status(synth_text_t *t, task_t *task)
 	}
 	synth_text_addf(t, "faults\t%lu minor %lu major\n", minor_faults, major_faults);
 	synth_text_addf(t, "anon_zero_pages\t%lu\n", anon_zero_pages);
+	proc_add_mapping_counts(t, task);
 	synth_text_addf(t, "switches\t%u\n", task->cSwitches);
 	// Which CPU the task's thread last ran on — the answer to "whose plate
 	// did this time come off", without which per-CPU arithmetic is guesswork.
@@ -752,6 +819,15 @@ static void proc_add_handle_path(synth_text_t *t, int handle, const char *type,
 
 static void proc_gen_handles(synth_text_t *t, task_t *task)
 {
+	// THE FIRST LINE IS THE TABLE ITSELF (handle_blocks.h): "table", then
+	// the entries held, the room the table has now, the ceiling it may
+	// grow to, the most ever held at once, and the opens refused for want of
+	// room. Its first field is not a number, so a reader tells it from the
+	// rows.
+	synth_text_addf(t, "table\theld %u\troom %u\tceiling %u\tmost %u\tfailed %lu\n",
+	                __atomic_load_n(&task->handleCounts.held, __ATOMIC_RELAXED), handle_table_room(task),
+	                TASK_HANDLES_CEILING, __atomic_load_n(&task->handleCounts.most, __ATOMIC_RELAXED),
+	                (unsigned long)__atomic_load_n(&task->handleCounts.failed, __ATOMIC_RELAXED));
 	// "handle<TAB>type[<TAB>detail]" — files and directories expose their
 	// full path, and FILE rows append the fs-local identity (vfs.h f_ident:
 	// ext2 inode, FAT start cluster) so lsof can join a task's handle to a
@@ -766,9 +842,10 @@ static void proc_gen_handles(synth_text_t *t, task_t *task)
 	// both: one such name turns a row into two, and lsof — which rejects a
 	// malformed row rather than guess — loses the whole task's handles.
 	// The reader reverses it with os64_unescape_field after splitting.
-	for (int i = 0; i < TASK_MAX_HANDLES; i++)
+	uint32_t room = handle_table_room(task);
+	for (int i = 0; i < (int)room; i++)
 	{
-		handle_t *h = &task->handles[i];
+		handle_t *h = handle_entry(task, i);
 		if (h->type == HANDLE_NONE)
 			continue;
 
@@ -834,10 +911,11 @@ static void proc_gen_handles(synth_text_t *t, task_t *task)
 // The regions come from three places and are sorted at the end: the VMA
 // list; three fixed windows (TASK_ARGV_VIRT, TASK_ENV_VIRT,
 // TASK_EXIT_TRAMPOLINE_VIRT — sizes from argvPages, env->page_count, and one
-// page); and per thread, the two guarded stacks (esp3BaseV/esp0BaseV with
-// the constant sizes thread.h hands task_alloc_guarded_stack, and
+// page); and per thread, the two guarded stacks (esp3BaseV with the size it
+// got, esp3Size; esp0BaseV with THREAD_KERNEL_STACK_SIZE; and
 // THREAD_STACK_GUARD_PAGE_COUNT pages either side). A kernel task's threads
-// have no ring-3 stack (esp3BaseV == 0) and are skipped.
+// have no ring-3 stack (esp3BaseV == 0), and a thread whose stacks the reap
+// released (thread_reap.h) has neither; what is not there draws no row.
 
 typedef struct
 {
@@ -852,7 +930,7 @@ typedef struct
 // root, "/boot/x" under /fat). The owner filesystem is matched back to its
 // mount entry by pointer; a file with no owner (should not exist) or an
 // unmatched one prints its local path bare rather than nothing.
-static void proc_map_file_path(const vma_t *v, char *out, size_t cap)
+static void proc_map_file_path(const vma_facts_t *v, char *out, size_t cap)
 {
 	// MAP_SHARED_LIBRARY REPURPOSES vma->file: it holds a shared_object_t*,
 	// not a vfs_file_t* (memory/vma.h says so, and a VMA is only ever one or
@@ -900,12 +978,20 @@ static void proc_map_row(proc_map_row_t *r, uintptr_t start, uintptr_t end,
 
 static void proc_gen_maps(synth_text_t *t, task_t *task)
 {
-	// Count first, then allocate exactly: VMAs (capped by the walk guard) +
-	// 3 fixed windows + 6 rows per thread (two stacks, two guards each).
-	size_t vmaCount = 0;
-	if (task->mmaps != NULL)
-		for (dlist_node_t *n = task->mmaps->head; n != NULL && vmaCount < PROC_MAX_LIST_WALK; n = n->next)
-			vmaCount++;
+	// The mappings' facts are copied out of the list under its lock, then
+	// formatted with the lock released: nothing is formatted or allocated
+	// under it. At most the walk guard's worth: past it, the rows are the
+	// mappings most recently found or made (the list's order, maplist.h).
+	vma_facts_t *facts = kmalloc(PROC_MAX_LIST_WALK * sizeof(vma_facts_t));
+	if (facts == NULL)
+	{
+		synth_text_addf(t, "(out of memory)\n");
+		return;
+	}
+	size_t vmaCount = vma_copy_all_facts(task, facts, PROC_MAX_LIST_WALK, NULL);
+
+	// Then allocate exactly: the mappings copied + 3 fixed windows + 6 rows
+	// per thread (two stacks, two guards each).
 	size_t threadCount = 0;
 	for (thread_t *th = task->threads; th != NULL && threadCount < PROC_MAX_LIST_WALK; th = th->taskNext)
 		threadCount++;
@@ -914,20 +1000,23 @@ static void proc_gen_maps(synth_text_t *t, task_t *task)
 	proc_map_row_t *rows = kmalloc(cap * sizeof(proc_map_row_t));
 	if (rows == NULL)
 	{
+		kfree(facts);
 		synth_text_addf(t, "(out of memory)\n");
 		return;
 	}
 	size_t count = 0;
 
 	// 1. The VMAs — what the task mapped, or had mapped for it by the loader.
-	if (task->mmaps != NULL)
+	// A file-backed or library mapping's `file` stays good to read here
+	// while the task lives: unmap takes only anonymous mappings, so only
+	// burial removes the others. Burial running between the copy and this
+	// formatting is not ruled out, as the rest of this file's reads of a
+	// task are not: /proc holds no reference on the task it reads (DEBTS,
+	// the lockless list walkers' lifetime).
 	{
-		size_t walked = 0;
-		for (dlist_node_t *n = task->mmaps->head; n != NULL && walked < vmaCount; n = n->next, walked++)
+		for (size_t i = 0; i < vmaCount; i++)
 		{
-			vma_t *v = (vma_t *)n->data;
-			if (v == NULL)
-				continue;
+			const vma_facts_t *v = &facts[i];
 			char prot[4];
 			prot[0] = (v->prot & PROT_READ)  ? 'r' : '-';
 			prot[1] = (v->prot & PROT_WRITE) ? 'w' : '-';
@@ -967,19 +1056,23 @@ static void proc_gen_maps(synth_text_t *t, task_t *task)
 		for (thread_t *th = task->threads; th != NULL && walked < threadCount; th = th->taskNext, walked++)
 		{
 			char name[32];
-			if (th->esp3BaseV != 0)
+			// Each address loaded once: the reap clears it when it releases
+			// the stack (thread_reap.h), and a second load could see 0.
+			uintptr_t user = __atomic_load_n(&th->esp3BaseV, __ATOMIC_ACQUIRE);
+			uintptr_t kernel = __atomic_load_n(&th->esp0BaseV, __ATOMIC_ACQUIRE);
+			if (user != 0)
 			{
 				// The size it got: a main thread's is what its program
 				// declared (SCRIPT_STACK.md), and yonder reads it here.
-				uintptr_t s = th->esp3BaseV, e = s + th->esp3Size;
+				uintptr_t s = user, e = s + th->esp3Size;
 				snprintf(name, sizeof(name), "[stack:%lu]", (unsigned long)th->threadID);
 				proc_map_row(&rows[count++], s - guardBytes, s, "---", "private", "[guard]");
 				proc_map_row(&rows[count++], s, e, "rw-", "private", name);
 				proc_map_row(&rows[count++], e, e + guardBytes, "---", "private", "[guard]");
 			}
-			if (th->esp0BaseV != 0)
+			if (kernel != 0)
 			{
-				uintptr_t s = th->esp0BaseV, e = s + THREAD_KERNEL_STACK_SIZE;
+				uintptr_t s = kernel, e = s + THREAD_KERNEL_STACK_SIZE;
 				snprintf(name, sizeof(name), "[kstack:%lu]", (unsigned long)th->threadID);
 				proc_map_row(&rows[count++], s - guardBytes, s, "---", "private", "[guard]");
 				proc_map_row(&rows[count++], s, e, "rw-", "private", name);
@@ -1007,6 +1100,7 @@ static void proc_gen_maps(synth_text_t *t, task_t *task)
 		                rows[i].prot, rows[i].flags, rows[i].what);
 
 	kfree(rows);
+	kfree(facts);
 }
 
 // Copy `len` bytes OUT OF A TASK'S ADDRESS SPACE — the fixed-length sibling
@@ -1175,6 +1269,9 @@ static void proc_gen_thread_status(synth_text_t *t, task_t *task, thread_t *th)
 
 	synth_text_addf(t, "thread\t%lu\n", th->threadID);
 	synth_text_addf(t, "task\t%lu\n", task->taskID);
+	// Empty when unnamed. Printed as it is: the rule admits printable ASCII
+	// alone (os64/thread_name.h), so no tab or newline can split the record.
+	synth_text_addf(t, "name\t%s\n", th->name);
 	synth_text_addf(t, "state\t%s\n", proc_state_name(th->threadState));
 	// pinnedCPU is the thread's PINNED AFFINITY, not the CPU it is running on —
 	// a distinction worth the extra word, because labelling it "core" printed

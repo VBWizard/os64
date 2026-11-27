@@ -33,10 +33,13 @@ enum {
 typedef struct DMutation {
     struct DMutation *next;
     uint8_t type;
-    /* All held: the target, the siblings, and every added and removed node. */
+    /* All held: the target, the siblings, and every added and removed node,
+     * each with its wrapper (`wrappers`, in that order: HOLDERS). */
     const os64_html_node_t *target, *previous, *following;
     const os64_html_node_t **added, **removed;
     size_t nadded, nremoved;
+    JSValue *wrappers;
+    size_t nwrappers;
     /* attributes: the local name and namespace; the old value when the
      * observer asked for it. NULL for null. */
     char *name, *ns, *old;
@@ -65,7 +68,9 @@ typedef struct DObserver {
 
 typedef struct DRegistration {
     struct DRegistration *next;
+    /* Held, with its wrapper (HOLDERS). */
     const os64_html_node_t *node;
+    JSValue wrapper;
     DObserver *observer;
     /* A transient registration's source (DOM § 4.3: one added to a removed
      * node for an ancestor's subtree observer), else NULL. */
@@ -110,6 +115,7 @@ static void mutation_free(os64_dom_t *dom, DMutation *m)
         if (nodes[i] != NULL) os64_html_release(dom->document, nodes[i]);
     for (size_t i = 0; i < m->nadded; i++) os64_html_release(dom->document, m->added[i]);
     for (size_t i = 0; i < m->nremoved; i++) os64_html_release(dom->document, m->removed[i]);
+    for (size_t i = 0; i < m->nwrappers; i++) JS_FreeValueRT(dom->engine, m->wrappers[i]);
     d_free(dom, m);
 }
 
@@ -147,7 +153,7 @@ static DMutation *mutation_new(os64_dom_t *dom, const os64_html_change_t *c, int
     if (!with_old) old = NULL;
     const char *name = type == T_ATTRIBUTES ? c->attr_local : NULL, *ns = type == T_ATTRIBUTES ? c->attr_ns : NULL;
     size_t nodes = type == T_CHILD_LIST ? c->nadded + c->nremoved : 0;
-    size_t size = sizeof(DMutation) + nodes * sizeof(const os64_html_node_t *) +
+    size_t size = sizeof(DMutation) + (3 + nodes) * sizeof(JSValue) + nodes * sizeof(const os64_html_node_t *) +
         text_size(name, name != NULL ? os64_strlen(name) : 0) + text_size(ns, ns != NULL ? os64_strlen(ns) : 0) +
         text_size(old, old_len);
     DMutation *m = d_alloc_kind(dom, size, OS64_DOM_MEM_MUTATION);
@@ -155,7 +161,8 @@ static DMutation *mutation_new(os64_dom_t *dom, const os64_html_change_t *c, int
     os64_memset(m, 0, sizeof(*m));
     m->type = (uint8_t)type;
     m->target = c->target;
-    const os64_html_node_t **list = (const os64_html_node_t **)(m + 1);
+    m->wrappers = (JSValue *)(m + 1);
+    const os64_html_node_t **list = (const os64_html_node_t **)(m->wrappers + 3 + nodes);
     if (type == T_CHILD_LIST) {
         m->previous = c->previous_sibling;
         m->following = c->next_sibling;
@@ -175,6 +182,9 @@ static DMutation *mutation_new(os64_dom_t *dom, const os64_html_change_t *c, int
         if (held[i] != NULL) os64_html_hold(dom->document, held[i]);
     for (size_t i = 0; i < m->nadded; i++) os64_html_hold(dom->document, m->added[i]);
     for (size_t i = 0; i < m->nremoved; i++) os64_html_hold(dom->document, m->removed[i]);
+    for (size_t i = 0; i < 3; i++) m->wrappers[m->nwrappers++] = d_holder_take(dom, held[i]);
+    for (size_t i = 0; i < m->nadded; i++) m->wrappers[m->nwrappers++] = d_holder_take(dom, m->added[i]);
+    for (size_t i = 0; i < m->nremoved; i++) m->wrappers[m->nwrappers++] = d_holder_take(dom, m->removed[i]);
     return m;
 }
 
@@ -251,6 +261,7 @@ static bool add_transients(os64_dom_t *dom, const os64_html_change_t *c)
                 *t = (DRegistration){.node = n, .observer = r->observer, .source = r->source != NULL ? r->source : r,
                                      .options = r->options, .filter = r->filter, .nfilter = r->nfilter};
                 os64_html_hold(dom->document, n);
+                t->wrapper = d_holder_take(dom, n);
                 size_t b = node_bucket(n);
                 t->next = s->registrations[b];
                 s->registrations[b] = t;
@@ -318,6 +329,7 @@ static void registration_release(os64_dom_t *dom, DRegistration *r)
     struct DObservers *s = dom->observers;
     DObserver *o = r->observer;
     os64_html_release(dom->document, r->node);
+    JS_FreeValueRT(dom->engine, r->wrapper);
     if (r->source == NULL) d_strings_free(dom, r->filter, r->nfilter);
     d_free(dom, r);
     s->count--;
@@ -803,6 +815,7 @@ static JSValue observe(os64_dom_t *dom, JSContext *ctx, DObserver *o, int argc, 
     }
     *r = (DRegistration){.node = target, .observer = o, .options = options, .filter = filter, .nfilter = nfilter};
     os64_html_hold(dom->document, target);
+    r->wrapper = d_holder_take(dom, target);
     size_t b = node_bucket(target);
     /* Last on the node's list, as the standard appends. */
     DRegistration **link = &s->registrations[b];
@@ -916,6 +929,17 @@ void d_observers_drain(os64_dom_t *dom)
 {
     struct DObservers *s = dom->observers;
     if (s == NULL) return;
+    /* The holders' wrappers go now: the records outlive the engine. */
+    for (size_t b = 0; b < D_OBSERVER_BUCKETS; b++)
+        for (DRegistration *r = s->registrations[b]; r != NULL; r = r->next) {
+            JS_FreeValueRT(dom->engine, r->wrapper);
+            r->wrapper = JS_UNDEFINED;
+        }
+    for (DObserver *o = s->observers; o != NULL; o = o->next)
+        for (DMutation *m = o->first; m != NULL; m = m->next) {
+            for (size_t i = 0; i < m->nwrappers; i++) JS_FreeValueRT(dom->engine, m->wrappers[i]);
+            m->nwrappers = 0;
+        }
     for (DObserver *o = s->observers; o != NULL; o = o->next)
         if (o->held) {
             o->held = false;

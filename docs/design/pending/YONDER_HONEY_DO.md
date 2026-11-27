@@ -497,3 +497,51 @@ matter one day.
   departed pages leave memory behind, which lengthens HEAP_BINS.md's
   first-fit walk. Proof needs an allocation count or the walk's length for
   a first load against a third reload of one page.
+
+## Added 2026-11-26, from Chris's video runs
+
+Not for now, on Chris's word; for the list.
+
+- **Dark pages darken a page that is already dark by its own design.**
+  With `appearance = dark` yonder answers `prefers-color-scheme: dark`, in
+  style sheets and to script, so a page set to follow the device's theme
+  sends its own dark design (confirmed on the P5: the page goes light and
+  dark with yonder's setting). The painter then still moves what is left
+  (paint.h's `yonder_dark_t`: paper brighter than mid grey goes dark), and
+  a part such a page keeps light on purpose is lost. Seen on a media
+  player's seek bar: its light, see-through "loaded this far" and "seek to
+  here" strips no longer show, while its red line and the graph above it
+  do. The row to design: a page that took the dark answer, or whose own
+  canvas is already dark, keeps its colours as it sent them. How yonder
+  knows the page took the answer (a media query that matched, a
+  `color-scheme` it declared, the canvas's own colour) is the design's
+  question.
+- **yonder's complaints go to the console alone, not the system log.**
+  Chris, 2026-11-26; not urgent, for the next time yonder's reporting is
+  open. Today a complaint is said twice: `os64_complain` writes the line to
+  standard error and hands the same line to `os64_debug_log`, which puts it
+  in the kernel's log as `[user] ...`, and a few sites call
+  `os64_debug_log` alone (yonder.conf's refused values, the cookie file).
+  The row: yonder says each of them once, on standard error, and nothing of
+  yonder's reaches the kernel's log. It is yonder's change, not
+  `os64_complain`'s: other programs keep both. A yonder started from
+  grootmenu inherits the desktop's terminal, so its lines land there unseen;
+  grootmenu spawns its command directly, with no shell, so `> /dev/null` in
+  a menu entry would reach yonder as two arguments, not as a redirection.
+  If the lines should be discarded outright for a menu start, that is a
+  word for grootmenu's entries (a way to say "no output"), its own row.
+
+- **A local file that is not a page opens as what it is.** `yonder
+  clip.mp4` reads the file whole and parses it as HTML: a local path's
+  body is a page whatever the file holds, and one past the size a page
+  may be is "Too big to open". Over the network a picture or a sound
+  asked for by itself already gets a page of its own (libway's
+  `WAY_BODY_IMAGE` and `WAY_BODY_MEDIA`); a local path gets neither. The
+  row: a local picture, sound or video opens on the same page of its own
+  as a fetched one, its kind taken from what the file holds, and a media
+  file is played through the player's window of bytes, never read whole
+  (a film is larger than any page). A video asked for by itself, local
+  or fetched, is part of it. It is also the fair way to compare yonder
+  with gplay on one clip, which is how it came up. **PDF** is named by
+  Chris for the same door and is not the same work: nothing in os64
+  draws one, so it is an arc of its own with a design before it.

@@ -39,6 +39,10 @@ yonder_host_build() {
     # back under its own and run from what was read, so the suite proves
     # through the bytecode everything it proves.
     if [ "${JS_ROUND_TRIP:-0}" = 1 ]; then host_flags+=(-DOS64_JS_BYTECODE_ROUND_TRIP); fi
+    # DOM_GC_STRESS=1: a whole engine collection at each of libdom's safe
+    # points (report.c d_safe_point), so every mark is checked by the
+    # engine's assertions many times over.
+    if [ "${DOM_GC_STRESS:-0}" = 1 ]; then host_flags+=(-DOS64_DOM_GC_STRESS); fi
     # Match the production SVG library membership as geometry modules grow.
     local svg_sources=()
     mapfile -t svg_sources < <(python3 -c '
@@ -51,8 +55,8 @@ for name in text.split("LIBSVG_SRCS := ", 1)[1].splitlines()[0].split():
     for source in "$unit" ${YONDER_HOST_UNITS:-} tools/test_yonder_gif_host.c tools/test_js_port_calendar.c tools/test_libflow_fonts.c \
         userland/libjs/runtime/runtime.c userland/libjs/runtime/ledger.c userland/libjs/runtime/owner_incarnation.c userland/libjs/runtime/owner_tickets.c userland/libjs/intl/intl.c userland/libdom/{core,node,collection,content,inner_text,event,timer,window,geometry,classic,style,mixin,modern,view}.c \
         userland/libdom/{storage,performance,url,encoding,screen,base64,implementation,attr}.c \
-        userland/libdom/{exception,abort,blob,blob_url,file_reader,fetch,xhr,browsing,crypto,subtle,subtle_core,report,document,frames,clone,message,idle,animation,webanimation,pointer,options,selection,importmap,controls,elements,tables,forms,validity,compare,sheets,point,rect,intersection,resize,kept,css,svg_geometry,image_data,canvas,canvas_path,canvas_path2d,canvas_text,canvas_image,mutation,custom,observer,streams,walker,shadow,adopted,range,data_nodes,hit,media,video,media_session}.c \
-        userland/apps/yonder/{scripts,census,modules,bytecode,importmap,script_decode,geometry,paint,paint_cache,keep,scratch,scale,warp,filter,agent,bar,diag,svg,svg_document,picture,sheet,download,download_job,player,strip,frame_plan}.c \
+        userland/libdom/{exception,abort,blob,blob_url,file_reader,fetch,xhr,browsing,crypto,subtle,subtle_core,report,document,frames,clone,message,idle,animation,webanimation,pointer,options,selection,importmap,controls,elements,tables,forms,validity,compare,sheets,point,rect,intersection,resize,kept,css,svg_geometry,image_data,canvas,canvas_path,canvas_path2d,canvas_text,canvas_image,mutation,custom,observer,streams,walker,shadow,adopted,range,data_nodes,hit,media,video,media_session,fullscreen}.c \
+        userland/apps/yonder/{scripts,census,modules,bytecode,importmap,script_decode,geometry,paint,paint_cache,keep,canvas_keep,scratch,scale,warp,filter,agent,bar,diag,svg,svg_document,picture,sheet,download,download_job,player,strip,frame_plan,plane_place,plane_blend,task_order,load_timeline,thread_reading}.c \
         "${svg_sources[@]}" userland/libdraw2d/gradient.c userland/libdraw2d/paint.c userland/libdraw2d/stroke.c userland/libdraw2d/blur.c userland/libpng/encode.c userland/libpng/png.c userland/libgzip/inflate.c userland/libgzip/zlib.c userland/libos64/crc32.c userland/libcanvas/gradient.c userland/libcanvas/core.c userland/libcanvas/path.c userland/libcanvas/shadow.c \
         userland/apps/yonder/storage.c userland/apps/yonder/cookies.c \
         userland/libhtml/{core,encoding,tokenizer,tree,dom,fragment,serialize,serialize_xml,xml,shadow,range}.c userland/libxml/xml.c \
@@ -68,6 +72,8 @@ for name in text.split("LIBSVG_SRCS := ", 1)[1].splitlines()[0].split():
         object="$work/${source//\//_}.o"
         private=()
         if [[ "$source" == userland/libdom/* ]]; then private=(-Dd_alloc=dom_fixture_private_alloc); fi
+        # The kernel's blend, which includes its own header (userland/GNUmakefile's rule for it).
+        if [ "$source" = userland/apps/yonder/plane_blend.c ]; then private=(-Ikernel/include); fi
         if [ "$source" = "$unit" ]; then private=("$@"); fi
         host_compile "$source" "$object" "${private[@]}"
         objects+=("$object")

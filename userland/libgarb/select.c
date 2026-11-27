@@ -22,7 +22,7 @@ typedef enum {
     P_ONLY_OF_TYPE, P_NTH_CHILD, P_NTH_LAST_CHILD, P_NTH_OF_TYPE, P_NTH_LAST_OF_TYPE, P_EMPTY,
     P_LINK, P_ANY_LINK, P_NEVER, P_USER_ACTION, P_ENABLED, P_DISABLED, P_CHECKED, P_LANG, P_DIR, P_NOT, P_IS,
     P_WHERE, P_HAS, P_REQUIRED, P_OPTIONAL, P_READ_ONLY, P_READ_WRITE, P_DEFINED, P_SCOPE,
-    P_HOST, P_SLOTTED,
+    P_HOST, P_SLOTTED, P_FULLSCREEN,
 } PKind;
 typedef enum { C_NONE, C_DESCENDANT, C_CHILD, C_NEXT, C_SUBSEQUENT } Comb;
 
@@ -343,6 +343,9 @@ static bool pseudo_class_named(const char *s, size_t n, PKind *out)
         {"disabled", P_DISABLED}, {"checked", P_CHECKED}, {"required", P_REQUIRED},
         {"optional", P_OPTIONAL}, {"read-only", P_READ_ONLY}, {"read-write", P_READ_WRITE},
         {"defined", P_DEFINED}, {"scope", P_SCOPE}, {"host", P_HOST},
+        // The Fullscreen API's element, and the prefixed name Chrome and
+        // Safari still answer to (pages written for them use it).
+        {"fullscreen", P_FULLSCREEN}, {"-webkit-full-screen", P_FULLSCREEN},
     };
     for (size_t k = 0; k < sizeof(kNames) / sizeof(kNames[0]); k++)
         if (ascii_ieq(s, n, kNames[k].name)) {
@@ -856,7 +859,7 @@ static const char *attr(const os64_html_node_t *n, const char *name)
     return a != NULL ? (a->value != NULL ? a->value : "") : NULL;
 }
 
-static bool same_type(const os64_html_node_t *a, const os64_html_node_t *b)
+bool garb_element_same_type(const os64_html_node_t *a, const os64_html_node_t *b)
 {
     const char *au = os64_html_namespace_uri(a), *bu = os64_html_namespace_uri(b);
     bool namespace_equal = au && bu ? os64_streq(au, bu) : au == bu;
@@ -996,7 +999,7 @@ static int32_t position(const garb_selectors_t *sel, const os64_html_node_t *el,
     int32_t pos = 1;
     for (const os64_html_node_t *s = from_end ? next_el(el) : prev_el(el); s != NULL;
          s = from_end ? next_el(s) : prev_el(s)) {
-        if (of_type && !same_type(s, el))
+        if (of_type && !garb_element_same_type(s, el))
             continue;
         if (of != NULL && !match_list(sel, of, s, NULL))
             continue;
@@ -1127,6 +1130,14 @@ static bool dir_matches(const Simple *s, const os64_html_node_t *el)
     return false;
 }
 
+bool garb_element_empty(const os64_html_node_t *el)
+{
+    for (const os64_html_node_t *k = el->first_child; k != NULL; k = k->next)
+        if (k->kind == OS64_HTML_ELEMENT || (k->kind == OS64_HTML_TEXT && k->text_len > 0))
+            return false;
+    return true;
+}
+
 static bool has_matches(const garb_selectors_t *sel, const List *l, const os64_html_node_t *el);
 
 static bool pseudo_matches(const garb_selectors_t *sel, const Simple *s,
@@ -1151,11 +1162,7 @@ static bool pseudo_matches(const garb_selectors_t *sel, const Simple *s,
     case P_NTH_OF_TYPE:
     case P_NTH_LAST_OF_TYPE:
         return nth(s->a, s->b, position(sel, el, s->pseudo == P_NTH_LAST_OF_TYPE, true, NULL));
-    case P_EMPTY:
-        for (const os64_html_node_t *k = el->first_child; k != NULL; k = k->next)
-            if (k->kind == OS64_HTML_ELEMENT || (k->kind == OS64_HTML_TEXT && k->text_len > 0))
-                return false;
-        return true;
+    case P_EMPTY: return garb_element_empty(el);
     case P_LINK:
     case P_ANY_LINK: return is_link(el);
     case P_NEVER:
@@ -1190,6 +1197,10 @@ static bool pseudo_matches(const garb_selectors_t *sel, const Simple *s,
     case P_DEFINED:
         return sel->modern_off || el->ce == OS64_HTML_CE_CUSTOM ||
                !(html(el) && os64_html_custom_name(el->name));
+    // The element the Fullscreen API put in the top layer (libdom sets the
+    // state bit; libhtml logs the change, so the cascade restyles it).
+    case P_FULLSCREEN:
+        return (el->state & OS64_HTML_STATE_FULLSCREEN) != 0;
     case P_LANG: return lang_matches(s, el);
     case P_DIR: return dir_matches(s, el);
     case P_NOT: return !match_list(sel, s->list, el, scope);
@@ -1323,7 +1334,8 @@ static bool match_complex(const garb_selectors_t *sel, const Complex *x,
 
 // :has(): some element the relative selector reaches from `el` — its
 // subtree for a descendant or child, its following siblings and their
-// subtrees for a sibling — matches with `el` as the anchor. Brute force,
+// subtrees for a sibling — matches with `el` as the anchor. A walk of every
+// element under `root` (has_matches narrows where it starts when it can),
 // which is what makes :has() costly and why GARB.md watches it.
 static bool subtree_has(const garb_selectors_t *sel, const Complex *x, const os64_html_node_t *root,
                         const os64_html_node_t *scope, bool include_root)
@@ -1346,13 +1358,48 @@ static bool subtree_has(const garb_selectors_t *sel, const Complex *x, const os6
     return false;
 }
 
+// Whether every combinator in a relative selector after its first compound
+// goes down (descendant or child): then all it reaches lies in the subtree
+// of the element its first compound matched.
+static bool goes_down(const Complex *x)
+{
+    for (int32_t j = 1; j < x->n; j++)
+        if (x->c[j].left != C_DESCENDANT && x->c[j].left != C_CHILD)
+            return false;
+    return true;
+}
+// Whether the relative selector reaches a match from `start`, an element
+// its leading `>`, `+` or `~` puts its first compound on, when it goes down
+// from there: that compound first, then (with more compounds) start's
+// subtree.
+static bool reached_from(const garb_selectors_t *sel, const Complex *x, const os64_html_node_t *start,
+                         const os64_html_node_t *el)
+{
+    if (!compound_matches(sel, &x->c[0], start, el))
+        return false;
+    return x->n == 1 || subtree_has(sel, x, start, el, false);
+}
+// A leading `>`, `+` or `~` whose selector goes down is walked from the
+// children, the next sibling or the following siblings its first compound
+// matches, and under those alone; any other walks every element it could
+// reach.
 static bool has_matches(const garb_selectors_t *sel, const List *l, const os64_html_node_t *el)
 {
     for (int32_t i = 0; l != NULL && i < l->n; i++) {
         const Complex *x = &l->v[i];
+        bool down = goes_down(x);
         if (x->relative == C_NEXT || x->relative == C_SUBSEQUENT) {
-            for (const os64_html_node_t *s = next_el(el); s != NULL; s = next_el(s))
-                if (subtree_has(sel, x, s, el, true))
+            for (const os64_html_node_t *s = next_el(el); s != NULL; s = next_el(s)) {
+                if (down ? reached_from(sel, x, s, el) : subtree_has(sel, x, s, el, true))
+                    return true;
+                if (down && x->relative == C_NEXT)
+                    break;
+            }
+        } else if (x->relative == C_CHILD && down) {
+            const os64_html_node_t *k = el->first_child;
+            if (k != NULL && !is_el(k)) k = next_el(k);
+            for (; k != NULL; k = next_el(k))
+                if (reached_from(sel, x, k, el))
                     return true;
         } else if (subtree_has(sel, x, el, el, false)) {
             return true;
@@ -1419,12 +1466,32 @@ bool garb_selector_names_host(const garb_selectors_t *list, int32_t i)
     return false;
 }
 
+// The number past which a position form's An+B answers alike (select.h
+// § THE POSITION FORMS): B for A <= 0 (it matches B, B + A, ... down to
+// 1, none past B), B - 1 for A = 1 (every index from B on), and none for
+// A > 1, which never settles; nothing when no index or every index
+// matches. `bounded` and `unbounded` are what a reader reads for each.
+static uint8_t position_reads(int32_t a, int32_t b, uint8_t bounded, uint8_t unbounded, int32_t *need)
+{
+    // In 64 bits: a B parsed as INT32_MIN has no B - 1 in 32.
+    int64_t n = a > 1 ? GARB_INDEX_MAX + 1 : a == 1 ? (int64_t)b - 1 : b;
+    *need = n > GARB_INDEX_MAX || n < 0 ? 0 : (int32_t)n;
+    return n > GARB_INDEX_MAX ? unbounded : n >= 1 ? bounded : 0;
+}
+static void index_need(uint8_t *need, bool *unbounded, int32_t a, int32_t b)
+{
+    int32_t n;
+    if (position_reads(a, b, 1, 2, &n) == 2) *unbounded = true;
+    else if (n > *need) *need = (uint8_t)n;
+}
+
 // Walk the parsed form, including :is/:not/:where and nth-child's filter.
 // `anchored`: the list sits in a compound left of a combinator, so a
 // :has() anywhere in it is an anchor (garb_selectors_anchors) rather than
 // an ancestor dependency. `counted`: the list is an nth-child's `of S`, or
-// inside one.
-static void dependencies(const List *list, bool anchored, bool counted, garb_selector_dependencies_t *out)
+// inside one. `in_has`: the list is a :has() argument, or inside one.
+static void dependencies(const List *list, bool anchored, bool counted, bool in_has,
+                         garb_selector_dependencies_t *out)
 {
     for (int32_t i = 0; i < list->n; ++i) {
         const Complex *x = &list->v[i];
@@ -1434,15 +1501,34 @@ static void dependencies(const List *list, bool anchored, bool counted, garb_sel
             out->following |= c->left == C_NEXT || c->left == C_SUBSEQUENT;
             for (int32_t k = 0; k < c->n; ++k) {
                 const Simple *s = &c->s[k];
+                if (s->kind == S_ATTR && ascii_ieq(s->name, s->len, "style"))
+                    out->style_attribute = true;
                 if (s->kind != S_PSEUDO) continue;
+                bool *fu = &out->front_unbounded, *bu = &out->back_unbounded;
+                switch (in_has ? P_NEVER : s->pseudo) {
+                case P_FIRST_CHILD: index_need(&out->front_child, fu, 0, 1); break;
+                case P_FIRST_OF_TYPE: index_need(&out->front_type, fu, 0, 1); break;
+                case P_NTH_CHILD: if (!s->list) index_need(&out->front_child, fu, s->a, s->b); break;
+                case P_NTH_OF_TYPE: index_need(&out->front_type, fu, s->a, s->b); break;
+                case P_ONLY_CHILD:
+                    index_need(&out->front_child, fu, 0, 1);
+                    index_need(&out->back_child, bu, 0, 1);
+                    break;
+                case P_LAST_CHILD: index_need(&out->back_child, bu, 0, 1); break;
+                case P_ONLY_OF_TYPE:
+                    index_need(&out->front_type, fu, 0, 1);
+                    index_need(&out->back_type, bu, 0, 1);
+                    break;
+                case P_LAST_OF_TYPE: index_need(&out->back_type, bu, 0, 1); break;
+                case P_NTH_LAST_CHILD: if (!s->list) index_need(&out->back_child, bu, s->a, s->b); break;
+                case P_NTH_LAST_OF_TYPE: index_need(&out->back_type, bu, s->a, s->b); break;
+                default: break;
+                }
                 switch (s->pseudo) {
-                case P_FIRST_CHILD: case P_FIRST_OF_TYPE:
-                case P_NTH_CHILD: case P_NTH_OF_TYPE:
-                    out->position_front = true; break;
-                case P_LAST_CHILD: case P_LAST_OF_TYPE: case P_ONLY_CHILD: case P_ONLY_OF_TYPE:
-                case P_NTH_LAST_CHILD: case P_NTH_LAST_OF_TYPE:
-                    out->position_back = true; break;
                 case P_EMPTY: out->parent_state = true; break;
+                case P_LANG: out->up_lang = true; break;
+                case P_DIR: out->up_dir = true; break;
+                case P_ENABLED: case P_DISABLED: case P_READ_ONLY: case P_READ_WRITE: out->up_disabled = true; break;
                 case P_HAS:
                     out->ancestors |= !left;
                     out->has_filtered |= counted;
@@ -1452,14 +1538,16 @@ static void dependencies(const List *list, bool anchored, bool counted, garb_sel
                     break;
                 // :dir() reads the `dir` attribute of the element and of
                 // the ancestors it inherits from (dir_matches), so what a
-                // change can turn is in the changed element's subtree,
-                // which every change marks. (dir=auto, which would read
-                // descendants' text, is not implemented: DEBTS.md.)
+                // change of `dir` can turn is in the changed element's
+                // subtree, which its change marks for a key read at an
+                // ancestor too (up_dir). (dir=auto,
+                // which would read descendants' text, is not implemented:
+                // DEBTS.md.)
                 default: break;
                 }
                 bool of = (s->pseudo == P_NTH_CHILD || s->pseudo == P_NTH_LAST_CHILD) && s->list;
                 out->filtered |= of;
-                if (s->list) dependencies(s->list, left, counted || of, out);
+                if (s->list) dependencies(s->list, left, counted || of, in_has || s->pseudo == P_HAS, out);
             }
         }
     }
@@ -1467,7 +1555,7 @@ static void dependencies(const List *list, bool anchored, bool counted, garb_sel
 garb_selector_dependencies_t garb_selectors_dependencies(const garb_selectors_t *list)
 {
     garb_selector_dependencies_t out = {0};
-    if (list) dependencies(&list->list, false, false, &out);
+    if (list) dependencies(&list->list, false, false, false, &out);
     return out;
 }
 
@@ -1480,8 +1568,29 @@ static int reach_of(Comb comb)
     return comb == C_DESCENDANT || comb == C_CHILD ? REACH_DOWN
            : comb == C_NEXT || comb == C_SUBSEQUENT ? REACH_SIBLINGS : 0;
 }
-static void anchors(const garb_selectors_t *sel, const List *list, int around, garb_anchor_t *out,
-                    int32_t cap, int32_t *n)
+// The simples that turn most elements away for the price of a compare: a
+// type, an id, a class, an attribute (select.h § AN ANCHORED :has()).
+static bool filters(const Simple *s)
+{
+    return s->kind == S_TYPE || s->kind == S_ID || s->kind == S_CLASS || s->kind == S_ATTR;
+}
+static bool has_filter(const Compound *c)
+{
+    for (int32_t k = 0; k < c->n; ++k)
+        if (filters(&c->s[k])) return true;
+    return false;
+}
+// `outer[0..nouter)`: the enclosing compounds whose filters the SUBJECT
+// compound of each complex in `list` must pass too, gathered on the way in
+// through :not(), :is() and :where(), whose argument must match the very
+// element their compound does. A compound left of a combinator in its
+// complex names another element (an ancestor or a sibling of the subject),
+// so the enclosing filters are not its; nor are they for nth-child's `of S`,
+// :host()'s or ::slotted()'s argument, which name other elements too.
+// `subjects`: gather instead the compounds holding a :has() that is its
+// selector's subject, nothing to its right (select.h § A SUBJECT :has()).
+static void anchors(const garb_selectors_t *sel, const List *list, int around, const Compound *const *outer,
+                    int32_t nouter, garb_anchor_t *out, int32_t cap, int32_t *n, bool subjects)
 {
     for (int32_t i = 0; i < list->n; ++i) {
         const Complex *x = &list->v[i];
@@ -1489,19 +1598,30 @@ static void anchors(const garb_selectors_t *sel, const List *list, int around, g
             const Compound *c = &x->c[j];
             int reach = around;
             for (int32_t r = j + 1; r < x->n; r++) reach |= reach_of(x->c[r].left);
-            bool has = false, filtered = false;
+            int32_t nmine = j == x->n - 1 ? nouter : 0;
+            bool filtered = has_filter(c);
+            // What a :not(), :is() or :where() in this compound passes in.
+            const Compound *inner[GARB_ANCHOR_FILTERS];
+            int32_t ninner = 0;
+            for (int32_t o = 0; o < nmine; o++) inner[ninner++] = outer[o];
+            if (filtered && ninner < GARB_ANCHOR_FILTERS) inner[ninner++] = c;
+            bool has = false;
             for (int32_t k = 0; k < c->n; ++k) {
                 const Simple *s = &c->s[k];
                 has |= s->kind == S_PSEUDO && s->pseudo == P_HAS;
-                filtered |= s->kind == S_TYPE || s->kind == S_ID || s->kind == S_CLASS || s->kind == S_ATTR;
                 // A :has() inside a :has() argument is refused when parsed.
-                if (s->list && !(s->kind == S_PSEUDO && s->pseudo == P_HAS))
-                    anchors(sel, s->list, reach, out, cap, n);
+                if (s->list == NULL || (s->kind == S_PSEUDO && s->pseudo == P_HAS)) continue;
+                bool same = s->kind == S_PSEUDO && (s->pseudo == P_NOT || s->pseudo == P_IS || s->pseudo == P_WHERE);
+                anchors(sel, s->list, reach, inner, same ? ninner : 0, out, cap, n, subjects);
             }
-            if (has && reach != 0) {
-                if (*n < cap)
-                    out[*n] = (garb_anchor_t){sel, c, (reach & REACH_DOWN) != 0, (reach & REACH_SIBLINGS) != 0,
-                                              !filtered};
+            if (has && (subjects ? reach == 0 : reach != 0)) {
+                if (*n < cap) {
+                    garb_anchor_t *a = &out[*n];
+                    *a = (garb_anchor_t){sel, c, .down = (reach & REACH_DOWN) != 0,
+                                         .siblings = (reach & REACH_SIBLINGS) != 0};
+                    for (int32_t o = 0; o < nmine; o++) a->outer[a->nouter++] = outer[o];
+                    a->bare = !filtered && a->nouter == 0;
+                }
                 ++*n;
             }
         }
@@ -1510,13 +1630,430 @@ static void anchors(const garb_selectors_t *sel, const List *list, int around, g
 int32_t garb_selectors_anchors(const garb_selectors_t *list, garb_anchor_t *out, int32_t cap)
 {
     int32_t n = 0;
-    if (list) anchors(list, &list->list, 0, out, cap, &n);
+    if (list) anchors(list, &list->list, 0, NULL, 0, out, cap, &n, false);
     return n;
 }
-bool garb_anchor_matches(const garb_anchor_t *anchor, const os64_html_node_t *element)
+int32_t garb_selectors_has_subjects(const garb_selectors_t *list, garb_anchor_t *out, int32_t cap)
+{
+    int32_t n = 0;
+    if (list) anchors(list, &list->list, 0, NULL, 0, out, cap, &n, true);
+    return n;
+}
+bool garb_anchor_filters_pass(const garb_anchor_t *anchor, const os64_html_node_t *element)
 {
     const Compound *c = anchor->compound;
     if (!is_el(element)) return false;
+    for (int32_t o = 0; o < anchor->nouter; o++) {
+        const Compound *around = anchor->outer[o];
+        for (int32_t k = 0; k < around->n; ++k)
+            if (filters(&around->s[k]) && !simple_matches(anchor->list, &around->s[k], element, NULL))
+                return false;
+    }
+    for (int32_t k = 0; k < c->n; ++k)
+        if (filters(&c->s[k]) && !simple_matches(anchor->list, &c->s[k], element, NULL))
+            return false;
+    return true;
+}
+// Whether `element` passes every filter of compound `c` (filters()).
+static bool filters_pass(const garb_selectors_t *sel, const Compound *c, const os64_html_node_t *element)
+{
+    for (int32_t k = 0; k < c->n; ++k)
+        if (filters(&c->s[k]) && !simple_matches(sel, &c->s[k], element, NULL))
+            return false;
+    return true;
+}
+
+// ── A subject :has() and a change of children (select.h) ───────────────
+
+// Whether a simple selector, or one inside its argument, reads what a
+// change of children can turn at an element it neither brings nor takes:
+// a position, :empty, a fieldset's children (:enabled, :disabled and the
+// two that read them), a negation, or a sibling combinator in a nested
+// selector.
+static bool reads_around(const Simple *s)
+{
+    if (s->kind != S_PSEUDO) return false;
+    switch (s->pseudo) {
+    case P_FIRST_CHILD: case P_LAST_CHILD: case P_ONLY_CHILD: case P_FIRST_OF_TYPE: case P_LAST_OF_TYPE:
+    case P_ONLY_OF_TYPE: case P_NTH_CHILD: case P_NTH_LAST_CHILD: case P_NTH_OF_TYPE: case P_NTH_LAST_OF_TYPE:
+    case P_EMPTY: case P_ENABLED: case P_DISABLED: case P_READ_ONLY: case P_READ_WRITE: case P_NOT: case P_HAS:
+        return true;
+    default: break;
+    }
+    for (int32_t i = 0; s->list && i < s->list->n; i++) {
+        const Complex *x = &s->list->v[i];
+        for (int32_t j = 0; j < x->n; j++) {
+            if (j > 0 && (x->c[j].left == C_NEXT || x->c[j].left == C_SUBSEQUENT)) return true;
+            for (int32_t k = 0; k < x->c[j].n; k++)
+                if (reads_around(&x->c[j].s[k])) return true;
+        }
+    }
+    return false;
+}
+enum { ASK_ALWAYS, ASK_ROOTS, ASK_SUBTREES };
+// How a change of children is asked of one complex of a :has() argument.
+static int children_ask(const Complex *x)
+{
+    for (int32_t j = 0; j < x->n; j++) {
+        const Compound *c = &x->c[j];
+        if ((j > 0 && (c->left == C_NEXT || c->left == C_SUBSEQUENT)) || !has_filter(c)) return ASK_ALWAYS;
+        for (int32_t k = 0; k < c->n; k++)
+            if (reads_around(&c->s[k])) return ASK_ALWAYS;
+    }
+    bool beside = x->relative == C_CHILD || x->relative == C_NEXT || x->relative == C_SUBSEQUENT;
+    return x->n == 1 && beside ? ASK_ROOTS : ASK_SUBTREES;
+}
+static const os64_html_node_t *next_under(const os64_html_node_t *x, const os64_html_node_t *root)
+{
+    if (x->first_child) return x->first_child;
+    while (x != root && !x->next) x = x->parent;
+    return x == root ? NULL : x->next;
+}
+bool garb_has_subject_children_may_turn(const garb_anchor_t *anchor, const os64_html_node_t *const *roots,
+                                        size_t n, bool (*stale)(void *, const os64_html_node_t *), void *ctx)
+{
+    const Compound *c = anchor->compound;
+    for (int32_t k = 0; k < c->n; ++k) {
+        const Simple *s = &c->s[k];
+        if (s->kind != S_PSEUDO || s->pseudo != P_HAS || s->list == NULL) continue;
+        for (int32_t i = 0; i < s->list->n; i++) {
+            const Complex *x = &s->list->v[i];
+            int ask = children_ask(x);
+            if (ask == ASK_ALWAYS) return true;
+            // An element brought between two parts them, and one taken from
+            // between two makes them neighbours: either way the next element
+            // of the one before changed, matching or not.
+            for (size_t r = 0; x->relative == C_NEXT && r < n; r++)
+                if (is_el(roots[r])) return true;
+            for (size_t r = 0; r < n; r++)
+                for (const os64_html_node_t *e = roots[r]; e; e = ask == ASK_ROOTS ? NULL : next_under(e, roots[r])) {
+                    if (!is_el(e)) continue;
+                    if (stale != NULL && stale(ctx, e)) return true;
+                    for (int32_t j = 0; j < x->n; j++)
+                        if (filters_pass(anchor->list, &x->c[j], e)) return true;
+                }
+        }
+    }
+    return false;
+}
+
+// ── The readers (select.h § A READER) ──────────────────────────────────
+
+typedef struct {
+    uint8_t reach;
+    bool down;
+} Reach;
+// What compound j of `x` reaches when its match turns: from the
+// combinators right of it, then, where its own run of sibling combinators
+// reaches the end of its complex, from `around`, the reach of the compound
+// its list is nested in.
+static Reach reach_right(const Complex *x, int32_t j, Reach around)
+{
+    int32_t sib = 0;
+    Comb first = C_NONE;
+    bool down = false;
+    for (int32_t r = j + 1; r < x->n && !down; r++) {
+        Comb comb = x->c[r].left;
+        if (comb == C_NEXT || comb == C_SUBSEQUENT) { if (sib++ == 0) first = comb; }
+        else down = true;
+    }
+    bool continues = !down && around.reach != GARB_REACH_SELF;
+    Reach out = {GARB_REACH_SELF, down || around.down};
+    if (sib == 0) out.reach = down ? GARB_REACH_SELF : around.reach;
+    else if (first == C_SUBSEQUENT) out.reach = GARB_REACH_FOLLOWING;
+    else out.reach = sib == 1 && !continues ? GARB_REACH_NEXT : GARB_REACH_CHAIN;
+    return out;
+}
+// What a simple selector itself reads (GARB_READS_*): a position form, by
+// whether it settles (position_reads), or :empty.
+static uint16_t simple_reads(const Simple *s)
+{
+    int32_t need;
+    if (s->kind != S_PSEUDO) return 0;
+    switch (s->pseudo) {
+    case P_FIRST_CHILD: return GARB_READS_FRONT;
+    case P_FIRST_OF_TYPE: return GARB_READS_FRONT_TYPE;
+    case P_LAST_CHILD: return GARB_READS_BACK;
+    case P_LAST_OF_TYPE: return GARB_READS_BACK_TYPE;
+    case P_ONLY_CHILD: return GARB_READS_FRONT | GARB_READS_BACK;
+    case P_ONLY_OF_TYPE: return GARB_READS_FRONT_TYPE | GARB_READS_BACK_TYPE;
+    case P_NTH_CHILD:
+        return s->list ? 0 : position_reads(s->a, s->b, GARB_READS_FRONT, GARB_READS_FRONT_ANY, &need);
+    case P_NTH_OF_TYPE: return position_reads(s->a, s->b, GARB_READS_FRONT_TYPE, GARB_READS_FRONT_ANY, &need);
+    case P_NTH_LAST_CHILD:
+        return s->list ? 0 : position_reads(s->a, s->b, GARB_READS_BACK, GARB_READS_BACK_ANY, &need);
+    case P_NTH_LAST_OF_TYPE: return position_reads(s->a, s->b, GARB_READS_BACK_TYPE, GARB_READS_BACK_ANY, &need);
+    case P_EMPTY: return GARB_READS_EMPTY;
+    default: return 0;
+    }
+}
+// THE KEYS a compound reads (select.h § A READER's keys): its classes, its
+// ids, the attributes it tests (by local name), and those its
+// pseudo-classes read; with `deep`, those of the subject compounds of the
+// :is(), :where() and :not() it holds too, whose match is its own. `up`:
+// read at an ancestor as well (:lang(), :dir(), :disabled and its kin).
+static int32_t key_add(garb_key_t *out, int32_t cap, int32_t n, uint8_t kind, const char *name, size_t len, bool up)
+{
+    if (n < cap) out[n] = (garb_key_t){kind, up, name, len};
+    return n + 1;
+}
+static int32_t pseudo_keys(const Simple *s, garb_key_t *out, int32_t cap, int32_t n)
+{
+    switch (s->pseudo) {
+    case P_LINK: case P_ANY_LINK: return key_add(out, cap, n, GARB_KEY_ATTR, "href", 4, false);
+    case P_CHECKED:
+        n = key_add(out, cap, n, GARB_KEY_ATTR, "checked", 7, false);
+        n = key_add(out, cap, n, GARB_KEY_ATTR, "selected", 8, false);
+        return key_add(out, cap, n, GARB_KEY_ATTR, "type", 4, false);
+    case P_REQUIRED: case P_OPTIONAL: return key_add(out, cap, n, GARB_KEY_ATTR, "required", 8, false);
+    case P_READ_ONLY: case P_READ_WRITE:
+        n = key_add(out, cap, n, GARB_KEY_ATTR, "readonly", 8, false);
+        n = key_add(out, cap, n, GARB_KEY_ATTR, "type", 4, false);
+        return key_add(out, cap, n, GARB_KEY_ATTR, "disabled", 8, true);
+    case P_ENABLED: case P_DISABLED: return key_add(out, cap, n, GARB_KEY_ATTR, "disabled", 8, true);
+    case P_LANG:
+        n = key_add(out, cap, n, GARB_KEY_ATTR, "lang", 4, true);
+        return key_add(out, cap, n, GARB_KEY_ATTR, "xml:lang", 8, true);
+    case P_DIR: return key_add(out, cap, n, GARB_KEY_ATTR, "dir", 3, true);
+    default: return n;
+    }
+}
+static int32_t compound_keys(const Compound *c, bool deep, garb_key_t *out, int32_t cap, int32_t n)
+{
+    for (int32_t k = 0; k < c->n; ++k) {
+        const Simple *s = &c->s[k];
+        if (s->kind == S_CLASS) n = key_add(out, cap, n, GARB_KEY_CLASS, s->name, s->len, false);
+        else if (s->kind == S_ID) n = key_add(out, cap, n, GARB_KEY_ID, s->name, s->len, false);
+        else if (s->kind == S_ATTR) n = key_add(out, cap, n, GARB_KEY_ATTR, s->name, s->len, false);
+        else if (s->kind == S_PSEUDO) n = pseudo_keys(s, out, cap, n);
+        bool same = s->kind == S_PSEUDO && (s->pseudo == P_NOT || s->pseudo == P_IS || s->pseudo == P_WHERE);
+        for (int32_t i = 0; deep && same && s->list && i < s->list->n; i++)
+            if (s->list->v[i].n > 0)
+                n = compound_keys(&s->list->v[i].c[s->list->v[i].n - 1], true, out, cap, n);
+    }
+    return n;
+}
+int32_t garb_reader_keys(const garb_reader_t *reader, garb_key_t *out, int32_t cap)
+{
+    int32_t n = 0;
+    for (int32_t h = 0; h < reader->nkeys_from; h++)
+        n = compound_keys(reader->keys_from[h], true, out, cap, n);
+    return n;
+}
+
+// `around`: the reach of the compound `list` is nested in. `foreign`: the
+// list is :host()'s or ::slotted()'s, naming the host or the slotted
+// element. `negated`: inside a :not(). `outer[0..nouter)`: the enclosing
+// compounds whose filters a subject of `list` must pass too, and `inherit`
+// / `inherit_untested` what they read, which an :is() or :where()
+// alternative carries as its own. `holders[0..nholders)`: the enclosing
+// compounds, filters or none, whose keys a subject of `list` reads too
+// (keys_from).
+static void readers(const garb_selectors_t *sel, const List *list, Reach around, bool foreign, bool negated,
+                    const Compound *const *outer, int32_t nouter, const Compound *const *holders, int32_t nholders,
+                    uint16_t inherit, uint16_t inherit_untested, garb_reader_t *out, int32_t cap, int32_t *n)
+{
+    for (int32_t i = 0; i < list->n; ++i) {
+        const Complex *x = &list->v[i];
+        bool slotted = false;
+        for (int32_t k = 0; x->n > 0 && k < x->c[x->n - 1].n; ++k)
+            slotted |= x->c[x->n - 1].s[k].kind == S_PSEUDO && x->c[x->n - 1].s[k].pseudo == P_SLOTTED;
+        for (int32_t j = 0; j < x->n; ++j) {
+            const Compound *c = &x->c[j];
+            bool subject = j == x->n - 1;
+            bool own = !(negated && subject);
+            Reach reach = reach_right(x, j, around);
+            // What :host() and ::slotted() test is the host or the slotted
+            // element itself: its subtree mark carries the shadow tree or
+            // what is slotted, and a sibling combinator inside reaches it.
+            reach.down |= foreign;
+            // A selector ending in ::slotted() styles what is assigned to the
+            // slot its subject names: the slot's subtree mark carries those,
+            // so whatever reaches the slot reaches its subtree.
+            reach.down |= slotted;
+            uint16_t reads = 0;
+            for (int32_t k = 0; k < c->n; ++k) reads |= simple_reads(&c->s[k]);
+            uint16_t untested = own ? 0 : reads;
+            if (subject) { reads |= inherit; untested |= inherit_untested; }
+            // What the lists this compound holds are given: its filters and
+            // its outer ones, for the subjects of an :is(), :where() or
+            // :not(); and what it reads, for an :is()'s or :where()'s.
+            const Compound *inner[GARB_ANCHOR_FILTERS], *held[GARB_ANCHOR_FILTERS + 1];
+            int32_t ninner = 0, nheld = 0;
+            for (int32_t o = 0; subject && o < nouter; o++) inner[ninner++] = outer[o];
+            if (own && has_filter(c) && ninner < GARB_ANCHOR_FILTERS) inner[ninner++] = c;
+            // The compounds whose keys it reads: its own, and for a subject
+            // the holders around it, filters or none (one more than the
+            // filters kept, past which it reads every key).
+            held[nheld++] = c;
+            for (int32_t o = 0; subject && o < nholders && nheld <= GARB_ANCHOR_FILTERS; o++) held[nheld++] = holders[o];
+            bool keys_any = subject && nholders >= GARB_ANCHOR_FILTERS + 1;
+            bool alternatives = false;
+            for (int32_t k = 0; k < c->n; ++k) {
+                const Simple *s = &c->s[k];
+                if (s->list == NULL || s->kind != S_PSEUDO) continue;
+                bool of = (s->pseudo == P_NTH_CHILD || s->pseudo == P_NTH_LAST_CHILD);
+                if (s->pseudo == P_HAS || of) continue;
+                bool alt = s->pseudo == P_IS || s->pseudo == P_WHERE, negate = s->pseudo == P_NOT;
+                bool host = s->pseudo == P_HOST || s->pseudo == P_SLOTTED;
+                alternatives |= alt;
+                readers(sel, s->list, reach, foreign || host, negated || negate, inner, alt || negate ? ninner : 0,
+                        held, alt || negate ? (nheld < GARB_ANCHOR_FILTERS + 1 ? nheld : GARB_ANCHOR_FILTERS + 1) : 0,
+                        alt ? reads : 0, alt ? untested : 0, out, cap, n);
+            }
+            if (reach.reach != GARB_REACH_SELF) reads |= GARB_READS_NEIGHBOURS;
+            // Its keys matter where its reach goes past its own element,
+            // which a change of one of them marks anyway.
+            bool keyed = keys_any;
+            for (int32_t h = 0; h < nheld && !keyed; h++) keyed = compound_keys(held[h], true, NULL, 0, 0) > 0;
+            if (keyed && (reach.reach != GARB_REACH_SELF || reach.down)) reads |= GARB_READS_KEYS;
+            if (alternatives || reads == 0) continue;
+            if (*n < cap) {
+                garb_reader_t *r = &out[*n];
+                *r = (garb_reader_t){sel, c, .reads = reads, .untested = untested, .reach = reach.reach,
+                                     .own = own, .down = reach.down, .keys_any = keys_any};
+                for (int32_t o = 0; subject && o < nouter; o++) r->outer[r->nouter++] = outer[o];
+                for (int32_t h = 0; h < nheld && h < GARB_ANCHOR_FILTERS + 1; h++) r->keys_from[r->nkeys_from++] = held[h];
+                r->bare = !(own && has_filter(c)) && r->nouter == 0;
+            }
+            ++*n;
+        }
+    }
+}
+int32_t garb_selectors_readers(const garb_selectors_t *list, garb_reader_t *out, int32_t cap)
+{
+    int32_t n = 0;
+    if (list)
+        readers(list, &list->list, (Reach){GARB_REACH_SELF, false}, false, false, NULL, 0, NULL, 0, 0, 0, out, cap, &n);
+    return n;
+}
+// Whether simple `s` tests one of the keys `changed[0..n)` names: a class
+// among them, any id where an id changed, an attribute by its local name.
+static bool tests_changed(const Simple *s, const garb_key_t *changed, int32_t n)
+{
+    for (int32_t i = 0; i < n; i++) {
+        const garb_key_t *k = &changed[i];
+        if ((s->kind == S_CLASS && k->kind == GARB_KEY_CLASS && ieq2(s->name, s->len, k->name, k->len)) ||
+            (s->kind == S_ID && k->kind == GARB_KEY_ID) ||
+            (s->kind == S_ATTR && k->kind == GARB_KEY_ATTR && ieq2(s->name, s->len, k->name, k->len)))
+            return true;
+    }
+    return false;
+}
+static bool filters_pass_except(const garb_selectors_t *sel, const Compound *c, const os64_html_node_t *element,
+                                const garb_key_t *changed, int32_t n)
+{
+    for (int32_t k = 0; k < c->n; ++k)
+        if (filters(&c->s[k]) && !tests_changed(&c->s[k], changed, n) &&
+            !simple_matches(sel, &c->s[k], element, NULL))
+            return false;
+    return true;
+}
+bool garb_reader_filters_pass_except(const garb_reader_t *reader, const os64_html_node_t *element,
+                                     const garb_key_t *changed, int32_t n)
+{
+    if (reader->bare) return true;
+    if (!is_el(element)) return false;
+    for (int32_t o = 0; o < reader->nouter; o++)
+        if (!filters_pass_except(reader->list, reader->outer[o], element, changed, n)) return false;
+    return !reader->own || filters_pass_except(reader->list, reader->compound, element, changed, n);
+}
+// Whether a key of `keys[0..n)` is read anywhere in `list`, nested lists
+// included.
+static bool list_reads_key(const List *list, const garb_key_t *keys, int32_t n)
+{
+    garb_key_t found[16];
+    for (int32_t i = 0; list && i < list->n; i++)
+        for (int32_t j = 0; j < list->v[i].n; j++) {
+            const Compound *c = &list->v[i].c[j];
+            int32_t m = compound_keys(c, false, found, 16, 0);
+            if (m > 16) return true;
+            for (int32_t a = 0; a < m; a++)
+                for (int32_t b = 0; b < n; b++)
+                    if (found[a].kind == keys[b].kind && ieq2(found[a].name, found[a].len, keys[b].name, keys[b].len))
+                        return true;
+            for (int32_t k = 0; k < c->n; k++)
+                if (c->s[k].list && list_reads_key(c->s[k].list, keys, n)) return true;
+        }
+    return false;
+}
+bool garb_has_subject_reads_key(const garb_anchor_t *anchor, const garb_key_t *keys, int32_t n)
+{
+    const Compound *c = anchor->compound;
+    for (int32_t k = 0; k < c->n; ++k) {
+        const Simple *s = &c->s[k];
+        if (s->kind == S_PSEUDO && s->pseudo == P_HAS && list_reads_key(s->list, keys, n)) return true;
+    }
+    return false;
+}
+
+bool garb_reader_filters_pass(const garb_reader_t *reader, const os64_html_node_t *element)
+{
+    if (reader->bare) return true;
+    if (!is_el(element)) return false;
+    for (int32_t o = 0; o < reader->nouter; o++)
+        if (!filters_pass(reader->list, reader->outer[o], element)) return false;
+    return !reader->own || filters_pass(reader->list, reader->compound, element);
+}
+
+// A simple selector a style reader narrows by (select.h § A STYLE READER):
+// exact, and a function of the element's own unmoved state.
+static bool narrows(const Simple *s)
+{
+    return s->kind == S_TYPE || s->kind == S_ID || s->kind == S_CLASS ||
+           (s->kind == S_ATTR && !ascii_ieq(s->name, s->len, "style"));
+}
+// Every compound in `list` that tests `style` itself, with `unknown` when
+// it sits inside :host()'s or ::slotted()'s argument, which name a shadow
+// host or a slotted element featureless or from another tree.
+static void style_readers(const garb_selectors_t *sel, const List *list, bool unknown, garb_style_reader_t *out,
+                          int32_t cap, int32_t *n)
+{
+    for (int32_t i = 0; i < list->n; ++i) {
+        const Complex *x = &list->v[i];
+        for (int32_t j = 0; j < x->n; ++j) {
+            const Compound *c = &x->c[j];
+            bool reads = false, narrowed = false, odd = unknown;
+            for (int32_t k = 0; k < c->n; ++k) {
+                const Simple *s = &c->s[k];
+                reads |= s->kind == S_ATTR && ascii_ieq(s->name, s->len, "style");
+                narrowed |= narrows(s);
+                bool host = s->kind == S_PSEUDO && (s->pseudo == P_HOST || s->pseudo == P_SLOTTED);
+                odd |= host;
+                if (s->list)
+                    style_readers(sel, s->list, unknown || host, out, cap, n);
+            }
+            if (!reads)
+                continue;
+            if (*n < cap)
+                out[*n] = (garb_style_reader_t){sel, c, odd || !narrowed};
+            ++*n;
+        }
+    }
+}
+int32_t garb_selectors_style_readers(const garb_selectors_t *list, garb_style_reader_t *out, int32_t cap)
+{
+    int32_t n = 0;
+    if (list) style_readers(list, &list->list, false, out, cap, &n);
+    return n;
+}
+bool garb_style_reader_may_match(const garb_style_reader_t *reader, const os64_html_node_t *element)
+{
+    if (reader->bare)
+        return true;
+    if (!is_el(element))
+        return false;
+    const Compound *c = reader->compound;
+    for (int32_t k = 0; k < c->n; ++k)
+        if (narrows(&c->s[k]) && !simple_matches(reader->list, &c->s[k], element, NULL))
+            return false;
+    return true;
+}
+
+bool garb_anchor_matches(const garb_anchor_t *anchor, const os64_html_node_t *element)
+{
+    const Compound *c = anchor->compound;
+    if (!garb_anchor_filters_pass(anchor, element)) return false;
     for (int32_t pass = 0; pass < 2; pass++)
         for (int32_t k = 0; k < c->n; ++k)
             if ((c->s[k].kind == S_PSEUDO) == (pass == 1) &&
