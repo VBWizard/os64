@@ -689,8 +689,10 @@ static void run(app_t *a, view_t *v, const os64_media_info_t *info, const char *
             break;
         // Entering or leaving full screen is a resize as far as the picture
         // goes, and the window manager shows the window black until it
-        // publishes again (os64_gui_window_set_full_screen), so it is answered
-        // the same way even when the size came out unchanged.
+        // publishes again (os64_gui_window_set_full_screen), so it is laid
+        // out here whether or not the size changed. The WINDOW_RESIZE that
+        // follows a size change lays it out again: an edge is rare, and that
+        // event, in the ring, is the one a full queue can drop.
         case OS64_GUI_EVENT_WINDOW_FULL_SCREEN:
         case OS64_GUI_EVENT_WINDOW_RESIZE:
             os64_draw_ctx_refresh(&v->ctx);

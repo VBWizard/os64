@@ -339,7 +339,9 @@ typedef struct os64_gui_surface
 // The window entered or left full screen, by its program's call or by the
 // person's Ctrl+Alt+F. No payload: read OS64_GUI_WINDOW_FULL_SCREEN with
 // get_state. Coalesced outside the input ring, so a full queue cannot lose
-// it. A size change arrives as WINDOW_RESIZE besides, in the ring.
+// it. A size change arrives as WINDOW_RESIZE besides, in the ring. Either
+// way, repaint the whole content and publish it: until the window publishes
+// it shows black (os64_gui_window_set_full_screen).
 #define OS64_GUI_EVENT_WINDOW_FULL_SCREEN 20
 #define OS64_GUI_PLACEMENT_X      (1u << 0)
 #define OS64_GUI_PLACEMENT_Y      (1u << 1)
@@ -585,13 +587,15 @@ static inline int64_t os64_gui_window_set_pinned(int64_t handle,bool pinned)
 //     neither the window nor a popup it owns has focus, or a text terminal
 //     holds the screen (NOT_FOCUSED); and when the screen is smaller than
 //     the window's minimum or larger than its reservation (SCREEN_FIT).
-//   - Leaving is always allowed, and returns the window to exactly where it
-//     was: maximized if it was, else its old frame.
+//   - Leaving a full-screen window is always allowed, and returns it to
+//     exactly where it was: maximized if it was, else its old frame.
 //   - Either way the window gets OS64_GUI_EVENT_WINDOW_FULL_SCREEN, and
-//     WINDOW_RESIZE when its size changed. Until it next publishes pixels
-//     (a publish of plane edits alone, with no damage, is not one) the
-//     compositor shows its content black and none of its planes, so the
-//     glass never shows the old picture at the new size.
+//     WINDOW_RESIZE when its size changed. Repaint the whole content and
+//     publish it: until the window next publishes pixels the compositor
+//     shows its content black and none of its planes, and what that publish
+//     does not cover stays black, so the glass never shows the old picture
+//     at the new size. (A publish of plane edits with an empty damage
+//     rectangle publishes no pixels.)
 //   - Losing focus to another program does not leave full screen: the
 //     window drops beneath the one that took focus and comes back over
 //     everything when it has focus again. Ctrl+Alt+F does the same as this
@@ -606,7 +610,9 @@ static inline int64_t os64_gui_window_set_full_screen(int64_t handle, bool on)
 // popup's birth capacity). The minimum must fit the
 // window's existing canvas reservation; otherwise BAD_ARGS leaves it unchanged.
 // A successful call grows an undersized window and emits WINDOW_RESIZE if its
-// size changes; lowering a limit does not shrink it. Re-fetch the surface after
+// size changes; lowering a limit does not shrink it. A full-screen window
+// keeps the screen's size: a minimum larger than the screen is BAD_ARGS
+// while it is full screen, and a smaller one is applied when it leaves. Re-fetch the surface after
 // success before drawing. An active WM resize gesture is cancelled when the
 // limits change; the WM consumes its remaining mouse releases. Drag, maximize,
 // and restore honor these content limits even if the resulting frame extends

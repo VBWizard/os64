@@ -196,12 +196,31 @@ int main(int argc, char **argv)
     if (plane > 0)
         CHECK(plane_wait(a, (uint32_t)plane) == OS64_GUI_PLANE_FRAME);
 
-    // ── Refusals ────────────────────────────────────────────────────────
+    // A pin kept while full screen does not lift it over the window that
+    // takes focus: it ranks only once the window leaves.
+    CHECK(os64_gui_window_set_pinned(a, true) == 0);
+    int64_t e = os64_gui_window_create_content("Full screen E", 140, 140, 200, 120, 0);
+    CHECK(e > 0);
+    passes();
+    CHECK(flag(a, OS64_GUI_WINDOW_FULL_SCREEN) && flag(a, OS64_GUI_WINDOW_PINNED));
+    CHECK(!flag(e, OS64_GUI_WINDOW_COVERED));
+    if (e > 0)
+        os64_gui_window_destroy(e);
+    CHECK(os64_gui_window_set_pinned(a, false) == 0);
+    CHECK(os64_gui_window_focus(a) == 0);
+
+    // ── Refusals, and a popup of the full-screen window ──────────────────
     CHECK(os64_gui_window_set_full_screen(b, true) == OS64_GUI_ERR_NOT_FOCUSED);
     int64_t popup = os64_gui_popup_create("Full screen popup", a, 20, 20, 100, 60);
     CHECK(popup > 0);
     if (popup > 0) {
         CHECK(os64_gui_window_set_full_screen(popup, true) == OS64_GUI_ERR_BAD_ARGS);
+        publish_whole(popup);
+        // Focusing the full-screen window raises it within its band, which
+        // it shares with its popups; it must stay beneath them.
+        CHECK(os64_gui_window_focus(a) == 0);
+        passes();
+        CHECK(!flag(popup, OS64_GUI_WINDOW_COVERED));
         CHECK(os64_gui_window_destroy(popup) == 0);
     }
     CHECK(os64_gui_window_set_full_screen(-1, true) == OS64_GUI_ERR_INVALID_HANDLE);

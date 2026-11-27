@@ -141,10 +141,10 @@ int os64_media_scaler_convert(os64_media_scaler_t *s, const os64_media_picture_t
     }
     int r = sws_scale_frame(s->sws, s->canvas, source);
     s->canvas->data[0] = NULL;
+    if (r < 0) return r == AVERROR(ENOMEM) ? OS64_MEDIA_NO_MEMORY : OS64_MEDIA_UNSUPPORTED;
     s->last = source->width == (int)width && source->height == (int)height ? OS64_MEDIA_SCALED_UNSCALED
             : (s->sws->flags & SWS_FAST_BILINEAR) ? OS64_MEDIA_SCALED_FAST_BILINEAR
                                                    : OS64_MEDIA_SCALED_BILINEAR;
-    if (r < 0) return r == AVERROR(ENOMEM) ? OS64_MEDIA_NO_MEMORY : OS64_MEDIA_UNSUPPORTED;
     if (edge)
         for (uint32_t y = 0; y < height; y++)
             os64_memcpy((uint8_t *)pixels + (size_t)y * pitch, s->bounce + (size_t)y * bounce_pitch(width),

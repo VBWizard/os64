@@ -13,8 +13,9 @@
 #include "os64/slurp.h"
 
 // The window's surface is the screen's, not Pulse's own normal size: it is
-// maximized, or full screen (which keeps MAXIMIZED beneath it), and neither
-// may be recorded or restored as the size Pulse chose.
+// maximized, or full screen (MAXIMIZED stays set beneath it when it was
+// maximized before), and neither may be recorded or restored as the size
+// Pulse chose.
 #define PULSE_SCREEN_SIZED (OS64_GUI_WINDOW_MAXIMIZED | OS64_GUI_WINDOW_FULL_SCREEN)
 
 static struct {

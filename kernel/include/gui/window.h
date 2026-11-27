@@ -138,9 +138,13 @@
 // insets answer 0, as for the desktop), and while the window or a popup it
 // owns has focus it ranks above every band (band_of's 3). It is a LAYER over
 // the state beneath, not a replacement for it: MAXIMIZED stays as it was,
-// fullFrom holds the frame to go back to, and the geometry verbs (maximize,
-// decorate, move, resize) decline until the window leaves. wm_set_full_screen
-// is the one door, for the client call and Ctrl+Alt+F alike.
+// fullFrom holds the frame to go back to, maximize, the decoration toggle,
+// wm_move and the chord's move and resize gestures decline until the
+// window leaves, a content size asked is kept for the frame it goes back
+// to (gui_window_set_content_size), and a new minimum waits for the leaving
+// too (wm_set_min_size). A pin it keeps ranks it only after it leaves
+// (band_of). wm_set_full_screen is the one door, for the client call and
+// Ctrl+Alt+F alike.
 #define GUI_WINDOW_FULL_SCREEN     (1u << 10)
 
 // POPUP — DERIVED AT BIRTH, NEVER A CLIENT FLAG. A window created with no
@@ -208,10 +212,11 @@ typedef struct window
     rect_t    fullFrom;
 
     // Set at each full-screen edge, cleared by the owner's next publish of
-    // pixels (gui_window_snapshot_locked; a publish of plane edits alone
-    // copies none): until then composite_one paints the content black and
-    // composes no plane, because what the window holds is a picture of its
-    // old size and its planes' places were agreed for its old box.
+    // pixels, which blacks out whatever of the content it does not cover
+    // (gui_window_snapshot_locked): until then composite_one paints the
+    // content black and composes no plane, because what the window holds is
+    // a picture of its old size and its planes' places were agreed for its
+    // old box.
     bool      blank_until_publish;
 
     // Ranked in band 3, above every other band: this window's focus root is
@@ -571,14 +576,6 @@ typedef enum {
 	WM_FULL_SCREEN_NO_FIT,      // the screen is under its minimum or over its reservation
 } wm_full_screen_result_t;
 wm_full_screen_result_t wm_set_full_screen(window_t *w, bool on, bool by_chord);
-
-// Would the window take the screen's size, chrome-less, without clamping?
-// The question maximize's titlebar button and Ctrl+Alt+M are withheld by
-// (wm_decoration_disabled: does wm_clamp_frame's minimum or reservation
-// change the screen-sized frame?), asked of full screen's content, which
-// has no chrome and so no decoration minimum: the chord declines where
-// this is false.
-bool wm_full_screen_fits(const window_t *w);
 
 // /sys/gui's full-screen line, under kGuiLock: the window ranked above
 // every band now (0: none) and since when, and the edges since boot.

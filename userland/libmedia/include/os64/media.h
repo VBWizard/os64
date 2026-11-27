@@ -348,7 +348,7 @@ int os64_media_scaler_create(uint32_t dst_width, uint32_t dst_height, uint32_t f
 int os64_media_scaler_convert(os64_media_scaler_t *s, const os64_media_picture_t *p, uint32_t *pixels,
                               uint32_t pitch);
 
-// Which way the last conversion went, for a readout: the picture at its own
+// Which way the last conversion that succeeded went, for a readout: the picture at its own
 // size (FFmpeg's unscaled converters), bilinear, or fast bilinear (FAST,
 // shrinking); NONE before the first, and for a NULL scaler.
 #define OS64_MEDIA_SCALED_NONE          0

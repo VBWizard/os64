@@ -605,10 +605,11 @@ static void retire_unasked(os64_media_player_t *p, int64_t now, collect_t *c)
 // A frame's pixels for w x h: kept when they hold it, regrown when they do
 // not, and given back and made again when they hold more than twice what it
 // needs. That last is the way back from full screen: a 2560x1440 picture
-// is 14.7 MB a frame, FRAMES of them, and a picture made smaller again
-// returns that within FRAMES pictures, as each frame comes round. The factor
-// of two keeps a size that moves a little from freeing and regrowing; at a
-// steady size nothing here allocates. The picture thread's alone, so the
+// is 14.7 MB a frame, FRAMES of them, and a picture made less than half as
+// large returns that within FRAMES pictures, as each frame comes round (one
+// a little smaller keeps it: leaving full screen for a window over half the
+// screen frees nothing). The factor of two keeps a size that moves a little
+// from freeing and regrowing; at a steady size nothing here allocates. The picture thread's alone, so the
 // counts are written atomically for facts, which reads them under no lock
 // of this thread's.
 static bool frame_fit(os64_media_player_t *p, frame_t *f, uint32_t w, uint32_t h)

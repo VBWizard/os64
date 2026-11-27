@@ -264,8 +264,7 @@ static void focus_window(window_t *w)
 	if (w)
 		w->focusSerial = ++s_focus_serial;
 	__atomic_store_n(&s_focus_owner, w ? w->owner : 0, __ATOMIC_RELEASE);
-	// Band 3 follows focus, including a refocus of the window that already
-	// had it (entering full screen raises a window that may hold focus).
+	// Band 3 follows focus (a refocus of the window that has it moves nothing).
 	front_set(front_for(w), wm_focus_root(w));
 
 	// Tell both ends (INPUT_EVENT_WINDOW_FOCUS, input.h). Every focus change
@@ -344,10 +343,15 @@ static void unlink_window(window_t *w)
 // by band again before anything else reads it, as link_on_top assumes.
 static window_t *s_front = NULL;
 static uint64_t s_front_since_tick;   // when s_front last changed, for /sys/gui
+//
+// A full-screen window that has lost band 3 is ordinary whatever its pin
+// says: pinned, it would sit over the window that took focus and cover the
+// whole screen. The pin belongs to the state beneath and ranks it again
+// when the window leaves full screen.
 static int band_of(const window_t *w)
 {
 	if (w->front) return 3;
-	if (w->flags & GUI_WINDOW_PINNED)  return 2;
+	if ((w->flags & GUI_WINDOW_PINNED) && !(w->flags & GUI_WINDOW_FULL_SCREEN)) return 2;
 	if (w->flags & GUI_WINDOW_DESKTOP) return 0;
 	return 1;
 }
@@ -584,7 +588,9 @@ void wm_raise(window_t *w)
 {
 	window_t *old_focus = s_focused;
 
-	if (!at_band_top(w)) {
+	// The full-screen front shares band 3 with its own popups and stays
+	// beneath them: raised over them it would hide them whole.
+	if (!at_band_top(w) && w != s_front) {
 		unlink_window(w);
 		link_on_top(w);
 		// Newly exposed stacking: repaint the whole raised frame.
@@ -676,9 +682,13 @@ void wm_set_pinned(window_t *w, bool pinned)
 	// Re-place in the new band. Pinning lifts it above everything; unpinning
 	// drops it to the top of the ordinary band — still the most recent thing
 	// you touched, just buriable again. Either way the stacking under its
-	// frame changed, so the frame is damaged.
-	unlink_window(w);
-	link_on_top(w);
+	// frame changed, so the frame is damaged. A full-screen window's band
+	// does not change with its pin (band_of), so it stays where it is, under
+	// its own popups when it is the front.
+	if (!(w->flags & GUI_WINDOW_FULL_SCREEN)) {
+		unlink_window(w);
+		link_on_top(w);
+	}
 	gui_damage_add_locked(w->frame);
     input_event_t changed={.type=INPUT_EVENT_WINDOW_PIN_CHANGED,.tick=kTicksSinceStart};
     wm_deliver_event(w,&changed);
@@ -791,7 +801,14 @@ void wm_set_minimized(window_t *w, bool minimized)
 	}
 }
 
-bool wm_full_screen_fits(const window_t *w)
+// Would the window take the screen's size, chrome-less, without clamping?
+// The question maximize's titlebar button and Ctrl+Alt+M are withheld by
+// (wm_decoration_disabled: does wm_clamp_frame's minimum or reservation
+// change the screen-sized frame?), asked of full screen's content, which
+// has no chrome and so no decoration minimum. Not the same answer: a
+// minimum a little under the screen withholds maximize, whose chrome eats
+// into the screen, and still fits full screen.
+static bool wm_full_screen_fits(const window_t *w)
 {
 	return kFrameBuffer.width >= w->min_content_w && kFrameBuffer.height >= w->min_content_h &&
 	       kFrameBuffer.width <= w->canvas_cap_w && kFrameBuffer.height <= w->canvas_cap_h;
@@ -799,10 +816,10 @@ bool wm_full_screen_fits(const window_t *w)
 
 wm_full_screen_result_t wm_set_full_screen(window_t *w, bool on, bool by_chord)
 {
-	if (desktop_declines(w, "full screen") || popup_declines(w, "full screen"))
-		return WM_FULL_SCREEN_DECLINED;
 	if (on == ((w->flags & GUI_WINDOW_FULL_SCREEN) != 0))
 		return WM_FULL_SCREEN_DONE;
+	if (desktop_declines(w, "full screen") || popup_declines(w, "full screen"))
+		return WM_FULL_SCREEN_DECLINED;
 	rect_t screen = {0, 0, (int32_t)kFrameBuffer.width, (int32_t)kFrameBuffer.height};
 	if (on) {
 		// The person must be using it: its own focus chain holds focus, and
@@ -837,7 +854,15 @@ wm_full_screen_result_t wm_set_full_screen(window_t *w, bool on, bool by_chord)
 	}
 	// Band 3 is the focused full-screen window's: re-reading focus moves the
 	// window in on entering and out on leaving.
+	bool was_front = w->front;
 	front_set(front_for(s_focused), wm_focus_root(s_focused));
+	// Leaving from beneath another window: front_set moved nothing, but a
+	// pin the window kept ranks it in band 2 again (band_of), so it is
+	// relinked at that band's top.
+	if (!on && !was_front && (w->flags & GUI_WINDOW_PINNED)) {
+		unlink_window(w);
+		link_on_top(w);
+	}
 	input_event_t ev = {.type = INPUT_EVENT_WINDOW_FULL_SCREEN, .tick = kTicksSinceStart};
 	wm_deliver_event(w, &ev);
 	printd(DEBUG_GUI, "wm: window %u %s full screen\n", w->id, on ? "entered" : "left");
@@ -945,6 +970,11 @@ bool wm_set_min_size(window_t *w, uint32_t width, uint32_t height)
     if (height < floor_h) height = floor_h;
 	if (width > w->canvas_cap_w || height > w->canvas_cap_h)
 		return false;
+	// A full-screen window's content is the screen, and must not be below
+	// its minimum while it stays there.
+	if ((w->flags & GUI_WINDOW_FULL_SCREEN) &&
+	    (width > kFrameBuffer.width || height > kFrameBuffer.height))
+		return false;
 	if (width != w->min_content_w || height != w->min_content_h) {
 		gui_geometry_changing(w);
 		// An outline computed with the previous limits must not commit later.
@@ -975,7 +1005,10 @@ bool wm_resize(window_t *w, rect_t frame)
 	uint32_t old_ch = w->content.height;
 	rect_t old_frame = w->frame;
 
+	// The frame's own size counts too: a change of insets (full screen's
+	// edge) can change the frame and leave the content as it was.
 	if (frame.x == old_frame.x && frame.y == old_frame.y &&
+	    frame.w == old_frame.w && frame.h == old_frame.h &&
 	    (uint32_t)content_w == old_cw && (uint32_t)content_h == old_ch)
 		return false;   // a gesture that ended where it started
 
