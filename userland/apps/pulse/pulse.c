@@ -12,6 +12,11 @@
 #include "os64/thread.h"
 #include "os64/slurp.h"
 
+// The window's surface is the screen's, not Pulse's own normal size: it is
+// maximized, or full screen (which keeps MAXIMIZED beneath it), and neither
+// may be recorded or restored as the size Pulse chose.
+#define PULSE_SCREEN_SIZED (OS64_GUI_WINDOW_MAXIMIZED | OS64_GUI_WINDOW_FULL_SCREEN)
+
 static struct {
     os64_ui_t ui;
     os64_draw_ctx_t ctx;
@@ -138,7 +143,7 @@ static void layout(os64_ui_t *ui)
     g.root.bounds=(os64_gui_rect_t){0,0,(int32_t)g.ctx.surf.width,(int32_t)g.ctx.surf.height};
     (void)arrange(ui,false);
     os64_gui_window_state_t state;
-    if(!os64_gui_window_get_state(g.window,&state) && !(state.flags&OS64_GUI_WINDOW_MAXIMIZED))
+    if(!os64_gui_window_get_state(g.window,&state) && !(state.flags&PULSE_SCREEN_SIZED))
         g.normal_size=(pulse_size_t){g.ctx.surf.width,g.ctx.surf.height};
 }
 // Plan fonts and layout before the barrier mutates native geometry.
@@ -175,7 +180,7 @@ static os64_font_status_t plan_font(os64_ui_t *ui,void *user,void **out)
     if(sw<=chrome_w || sh<=chrome_h || g.font_min_w>sw-chrome_w || g.font_min_h>sh-chrome_h){
         os64_strcopy(g.transition_message,sizeof(g.transition_message),"That view and text size cannot fit this screen.");return OS64_FONT_LIMIT;
     }
-    if((state.flags&OS64_GUI_WINDOW_MAXIMIZED) && !g.restore_size)target=g.normal_size;
+    if((state.flags&PULSE_SCREEN_SIZED) && !g.restore_size)target=g.normal_size;
     if(target.w<g.font_min_w)target.w=g.font_min_w;
     if(target.h<g.font_min_h)target.h=g.font_min_h;
     if(target.w>sw-chrome_w)target.w=sw-chrome_w;
@@ -187,7 +192,7 @@ static os64_font_status_t plan_font(os64_ui_t *ui,void *user,void **out)
         target=(pulse_size_t){g.ctx.surf.width,g.ctx.surf.height};g.resize_warning=true;
     }
     g.target_size=target;
-    pulse_size_t visible=(state.flags&OS64_GUI_WINDOW_MAXIMIZED)?(pulse_size_t){g.ctx.surf.width,g.ctx.surf.height}:target;
+    pulse_size_t visible=(state.flags&PULSE_SCREEN_SIZED)?(pulse_size_t){g.ctx.surf.width,g.ctx.surf.height}:target;
     os64_ui_widget_stage_bounds(&g.root,(os64_gui_rect_t){0,0,(int32_t)visible.w,(int32_t)visible.h});
     return arrange(ui,true)?OS64_FONT_OK:OS64_FONT_LIMIT;
 }
@@ -199,7 +204,7 @@ static os64_font_status_t resize_for_font(void *user,void *plan)
     pulse_size_t old_min=g.minimum,old_size=g.normal_size;
     os64_gui_window_state_t state;
     if(os64_gui_window_get_state(g.window,&state))return OS64_FONT_LIMIT;
-    if(!(state.flags&OS64_GUI_WINDOW_MAXIMIZED))old_size=(pulse_size_t){g.ctx.surf.width,g.ctx.surf.height};
+    if(!(state.flags&PULSE_SCREEN_SIZED))old_size=(pulse_size_t){g.ctx.surf.width,g.ctx.surf.height};
     int64_t rc=os64_gui_window_set_min_size(g.window,g.font_min_w,g.font_min_h);
     if(rc){g.transition_error=rc;return OS64_FONT_LIMIT;}
     if(g.resize_supported)rc=os64_gui_window_set_content_size(g.window,g.target_size.w,g.target_size.h);
@@ -212,7 +217,7 @@ static os64_font_status_t resize_for_font(void *user,void *plan)
         os64_gui_window_state_t restored;
         bool readback_failed=os64_gui_window_get_state(g.window,&restored)!=0;
         bool moved=!readback_failed && (restored.x!=state.x || restored.y!=state.y);
-        bool wrong_size=!(state.flags&OS64_GUI_WINDOW_MAXIMIZED) &&
+        bool wrong_size=!(state.flags&PULSE_SCREEN_SIZED) &&
             (g.ctx.surf.width!=old_size.w || g.ctx.surf.height!=old_size.h);
         if(floor_rc || size_rc || readback_failed || moved || wrong_size)
             os64_strcopy(g.transition_message,sizeof(g.transition_message),"Size change failed; restoring the previous geometry also failed. Current view retained.");

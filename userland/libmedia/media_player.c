@@ -97,6 +97,8 @@ struct os64_media_player {
     os64_media_clock_t clock;
     os64_media_pace_t pace;
     frame_t frame[FRAMES];
+    uint64_t frames_bytes;                // the converted frames' pixels held (frame_fit), read atomically by facts
+    uint32_t frames_held;                 // frames holding pixels
     frame_t *free_frames;
     frame_t *shown;                       // the caller's: the picture on the screen
     frame_t *reconverted;                 // the shown one converted again at a new size
@@ -599,14 +601,31 @@ static void retire_unasked(os64_media_player_t *p, int64_t now, collect_t *c)
 
 // ---------------------------------------------------------------- the picture thread
 
-static bool frame_fit(frame_t *f, uint32_t w, uint32_t h)
+// A frame's pixels for w x h: kept when they hold it, regrown when they do
+// not, and given back and made again when they hold more than twice what it
+// needs. That last is the way back from full screen: a 2560x1440 picture
+// is 14.7 MB a frame, FRAMES of them, and a picture made smaller again
+// returns that within FRAMES pictures, as each frame comes round. The factor
+// of two keeps a size that moves a little from freeing and regrowing; at a
+// steady size nothing here allocates. The picture thread's alone, so the
+// counts are written atomically for facts, which reads them under no lock
+// of this thread's.
+static bool frame_fit(os64_media_player_t *p, frame_t *f, uint32_t w, uint32_t h)
 {
     size_t need = (size_t)w * h;
-    if (need <= f->capacity)
+    if (need <= f->capacity && f->capacity / 2 <= need)
         return true;
+    if (f->pixels != NULL) {
+        __atomic_sub_fetch(&p->frames_bytes, (uint64_t)f->capacity * sizeof(uint32_t), __ATOMIC_RELAXED);
+        __atomic_sub_fetch(&p->frames_held, 1, __ATOMIC_RELAXED);
+    }
     os64_free(f->pixels);
     f->pixels = os64_malloc_aligned(need * sizeof(uint32_t), 64);
     f->capacity = f->pixels != NULL ? need : 0;
+    if (f->pixels != NULL) {
+        __atomic_add_fetch(&p->frames_bytes, (uint64_t)need * sizeof(uint32_t), __ATOMIC_RELAXED);
+        __atomic_add_fetch(&p->frames_held, 1, __ATOMIC_RELAXED);
+    }
     return f->pixels != NULL;
 }
 
@@ -686,7 +705,7 @@ static int64_t picture_thread(void *arg)
                 scaler_h = h;
             }
         }
-        if (scaler != NULL && frame_fit(f, w, h))
+        if (scaler != NULL && frame_fit(p, f, w, h))
             made = os64_media_scaler_convert(scaler, source, f->pixels, w * 4) == 0;
         int64_t cost = now_us() - t0;
 
@@ -1734,6 +1753,8 @@ void os64_media_player_facts(os64_media_player_t *p, os64_media_player_facts_t *
     f.ready = os64_media_pictures_count(&p->ready);
     f.decoded_depth = DECODED_DEPTH;
     f.ready_depth = READY_DEPTH;
+    f.frames_held = __atomic_load_n(&p->frames_held, __ATOMIC_RELAXED);
+    f.frames_bytes = __atomic_load_n(&p->frames_bytes, __ATOMIC_RELAXED);
     f.sound_queued = os64_media_queue_count(&p->pcm);
     f.delay_us = p->voice.delay_us;
     f.sync = p->sync;

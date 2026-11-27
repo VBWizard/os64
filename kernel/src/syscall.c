@@ -208,6 +208,13 @@ static uint64_t syscall_gui_window_set_pinned(uint64_t a0,uint64_t a1,uint64_t a
     // Keep raw arg1 intact: values outside 0/1 must be refused, not narrowed.
     return (uint64_t)gui_window_set_pinned((int64_t)a0,a1);
 }
+static uint64_t syscall_gui_window_set_full_screen(uint64_t a0,uint64_t a1,uint64_t a2,
+    uint64_t a3,uint64_t a4,uint64_t a5)
+{
+    (void)a2;(void)a3;(void)a4;(void)a5;
+    // Raw arg1, as set_pinned: a value other than 0 or 1 is refused there.
+    return (uint64_t)gui_window_set_full_screen((int64_t)a0,a1);
+}
 static uint64_t syscall_gui_window_set_content_size(uint64_t a0,uint64_t a1,uint64_t a2,
     uint64_t a3,uint64_t a4,uint64_t a5)
 {
@@ -340,6 +347,7 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_GUI_EVENT_WAIT,         "gui_event_wait",         syscall_gui_event_wait,         false, 0x00),  // arg1 = input_event_t out OR NULL (nullable: NULL = wait, don't take — handler validates); BLOCKS (like read)
     SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_SET_CONTENT_SIZE,"gui_window_set_content_size",syscall_gui_window_set_content_size,false,0),
     SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_SET_PINNED,"gui_window_set_pinned",syscall_gui_window_set_pinned,false,0),
+    SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_SET_FULL_SCREEN,"gui_window_set_full_screen",syscall_gui_window_set_full_screen,false,0),
     SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_FOCUS,"gui_window_focus",syscall_gui_window_focus,false,0),
     SYSCALL_DEFINE(SYSCALL_GUI_EVENT_WAIT_ANY,"gui_event_wait_any",syscall_gui_event_wait_any,false,0),
     SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_GET_CONTENT_RECT,"gui_window_get_content_rect",syscall_gui_window_get_content_rect,false,0),

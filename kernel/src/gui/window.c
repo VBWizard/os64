@@ -13,6 +13,8 @@
                          // the build instead of lying to ring 3)
 _Static_assert(GUI_WINDOW_COVERED == OS64_GUI_WINDOW_COVERED,
                "the COVERED flag crosses the ring boundary through get_state");
+_Static_assert(GUI_WINDOW_FULL_SCREEN == OS64_GUI_WINDOW_FULL_SCREEN,
+               "the FULL_SCREEN flag crosses the ring boundary through get_state");
 _Static_assert(GUI_WINDOW_TITLE_MAX == OS64_GUI_TITLE_MAX,
                "gui/window.h and abi os64/gui.h disagree on the title capacity");
 #include "gui/surface.h"
@@ -57,7 +59,7 @@ static rect_t fallback_settings(const window_t *w)
 
 static os64_decor_insets_t decoration_insets(const os64_decor_view_t *v, uint32_t flags)
 {
-	if (flags & GUI_WINDOW_DESKTOP) return (os64_decor_insets_t){0};
+	if (flags & (GUI_WINDOW_DESKTOP | GUI_WINDOW_FULL_SCREEN)) return (os64_decor_insets_t){0};
 	if (flags & GUI_WINDOW_NO_DECORATIONS) return (os64_decor_insets_t){1,1,1,1};
 	if (v->header) {
         os64_decor_header_t h;
@@ -155,16 +157,21 @@ bool wm_set_decoration(const os64_decor_view_t *view, void **retired)
 	if (!view || !view->header || !retired) return false;
 	*retired=NULL;
 	// Preflight the same deterministic geometry that the commit pass uses.
+	// A full-screen window has no chrome now, but the frame it goes back to
+	// (fullFrom) has the chrome of the state beneath, so that frame takes the
+	// same correction as any other window's.
 	for (window_t *w=s_top;w;w=w->below) {
-		if (!wm_has_titlebar(w->flags)) continue;
-		os64_decor_insets_t old=wm_decoration_insets(w->flags), next=decoration_insets(view,w->flags);
+		uint32_t flags=w->flags & ~GUI_WINDOW_FULL_SCREEN;
+		rect_t geom=(w->flags & GUI_WINDOW_FULL_SCREEN)?w->fullFrom:w->frame;
+		if (!wm_has_titlebar(flags)) continue;
+		os64_decor_insets_t old=wm_decoration_insets(flags), next=decoration_insets(view,flags);
 		rect_t frame,restore;
 		bool maximized=(w->flags & GUI_WINDOW_MAXIMIZED)!=0;
-		if (!decoration_frame(w->frame,old,next,maximized,&frame)) {
+		if (!decoration_frame(geom,old,next,maximized,&frame)) {
 			printd(DEBUG_GUI, "wm: decoration refused: window %u (%s): frame geometry\n", w->id, w->title);
 			return false;
 		}
-		if (frame.w<(int32_t)decoration_min_width(view,w->flags)) {
+		if (frame.w<(int32_t)decoration_min_width(view,flags)) {
 			printd(DEBUG_GUI, "wm: decoration refused: window %u (%s): decoration minimum width\n", w->id, w->title);
 			return false;
 		}
@@ -178,7 +185,7 @@ bool wm_set_decoration(const os64_decor_view_t *view, void **retired)
 			return false;
 		}
 		if (maximized && (!decoration_frame(w->restoreFrame,old,next,false,&restore) ||
-			restore.w<(int32_t)decoration_min_width(view,w->flags))) {
+			restore.w<(int32_t)decoration_min_width(view,flags))) {
 			printd(DEBUG_GUI, "wm: decoration refused: window %u (%s): restore geometry or minimum width\n", w->id, w->title);
 			return false;
 		}
@@ -187,10 +194,18 @@ bool wm_set_decoration(const os64_decor_view_t *view, void **retired)
 	gui_decoration_changed();
 	s_decoration=*view;
 	for (window_t *w=s_top;w;w=w->below) {
-		if (!wm_has_titlebar(w->flags)) continue;
-		os64_decor_insets_t old=decoration_insets(&previous,w->flags), next=wm_decoration_insets(w->flags);
-		rect_t frame=w->frame,old_frame=w->frame;
+		uint32_t flags=w->flags & ~GUI_WINDOW_FULL_SCREEN;
+		if (!wm_has_titlebar(flags)) continue;
+		os64_decor_insets_t old=decoration_insets(&previous,flags), next=wm_decoration_insets(flags);
 		bool maximized=(w->flags & GUI_WINDOW_MAXIMIZED)!=0;
+		if (w->flags & GUI_WINDOW_FULL_SCREEN) {
+			// Only the frames it goes back to move; the screen stays its own.
+			(void)decoration_frame(w->fullFrom,old,next,maximized,&w->fullFrom);
+			if (maximized)
+				(void)decoration_frame(w->restoreFrame,old,next,false,&w->restoreFrame);
+			continue;
+		}
+		rect_t frame=w->frame,old_frame=w->frame;
 		(void)decoration_frame(old_frame,old,next,maximized,&frame);
 		if (maximized) {
 			(void)decoration_frame(w->restoreFrame,old,next,false,&w->restoreFrame);
@@ -231,6 +246,17 @@ static void damage_focus_chain(window_t *w)
     }
 }
 
+static void front_set(window_t *next, window_t *anchor);
+
+// The window band 3 belongs to when `w` has focus: its focus root, if that
+// is full screen and showing; else none (window_t.front).
+static window_t *front_for(window_t *w)
+{
+	window_t *root = wm_focus_root(w);
+	return root && (root->flags & GUI_WINDOW_FULL_SCREEN) && !wm_is_hidden(root) &&
+	       !root->retiring ? root : NULL;
+}
+
 static void focus_window(window_t *w)
 {
 	window_t *old = s_focused;
@@ -238,6 +264,9 @@ static void focus_window(window_t *w)
 	if (w)
 		w->focusSerial = ++s_focus_serial;
 	__atomic_store_n(&s_focus_owner, w ? w->owner : 0, __ATOMIC_RELEASE);
+	// Band 3 follows focus, including a refocus of the window that already
+	// had it (entering full screen raises a window that may hold focus).
+	front_set(front_for(w), wm_focus_root(w));
 
 	// Tell both ends (INPUT_EVENT_WINDOW_FOCUS, input.h). Every focus change
 	// passes through here — birth, death, raise — which is why the event is
@@ -294,6 +323,8 @@ static void unlink_window(window_t *w)
 // shell's window is a client like any other, and the only thing that makes
 // it the desktop is that nothing can get beneath it.
 //
+//   3  FRONT    — the full-screen window whose own focus chain holds focus,
+//                 and the popups it owns (s_front); nothing else ranks here
 //   2  PINNED   — always on top; focused, moved and typed at, never buried
 //   1  ordinary — everything else
 //   0  DESKTOP  — always at the bottom; the thing clicks land on when they
@@ -304,8 +335,16 @@ static void unlink_window(window_t *w)
 // boundary is three chances to disagree". A rank makes link_on_top and
 // at_band_top say the same thing by construction, and a fourth band later
 // costs one line here and nothing anywhere else.
+//
+// Rank 3 is not a flag anyone sets: it follows focus. front_set, which
+// focus_window calls at every focus change, moves s_front and relinks the
+// windows whose rank that changed (window_t.front), so the list is sorted
+// by band again before anything else reads it, as link_on_top assumes.
+static window_t *s_front = NULL;
+static uint64_t s_front_since_tick;   // when s_front last changed, for /sys/gui
 static int band_of(const window_t *w)
 {
+	if (w->front) return 3;
 	if (w->flags & GUI_WINDOW_PINNED)  return 2;
 	if (w->flags & GUI_WINDOW_DESKTOP) return 0;
 	return 1;
@@ -339,6 +378,78 @@ static void link_on_top(window_t *w)
 static bool at_band_top(const window_t *w)
 {
 	return w->above == NULL || band_of(w->above) > band_of(w);
+}
+
+// Link `w` directly beneath `anchor`, which is linked and of w's band.
+static void link_beneath(window_t *w, window_t *anchor)
+{
+	w->above = anchor;
+	w->below = anchor->below;
+	if (w->below)
+		w->below->above = w;
+	else
+		s_bottom = w;
+	anchor->below = w;
+}
+
+// Make `next` the window ranked in band 3 with the popups it owns (NULL: no
+// window), relinking every window whose rank changes. A window leaving the
+// band goes directly beneath `anchor` when that is of its new band and not
+// itself moving (the focus root that took focus from it: a full-screen
+// window you Alt+Tab away from drops just beneath where you went, not to the
+// top of the ordinary band above it), else to the top of its new band.
+// Movers are relinked lowest first, each at the top of its band or beneath
+// the anchor, which keeps their order among themselves.
+static void front_set(window_t *next, window_t *anchor)
+{
+	bool any = false;
+	for (window_t *w = s_bottom; w; w = w->above) {
+		bool member = next != NULL && !w->retiring && wm_focus_root(w) == next;
+		if (member != w->front) {
+			w->front = member;
+			w->front_moving = any = true;
+		}
+	}
+	if (next != s_front)
+		s_front_since_tick = kTicksSinceStart;
+	s_front = next;
+	if (!any)
+		return;
+	if (anchor && anchor->front_moving)
+		anchor = NULL;
+	for (;;) {
+		window_t *m = s_bottom;
+		while (m && !m->front_moving)
+			m = m->above;
+		if (!m)
+			break;
+		m->front_moving = false;
+		unlink_window(m);
+		if (!m->front && anchor && band_of(anchor) == band_of(m))
+			link_beneath(m, anchor);
+		else
+			link_on_top(m);
+		gui_damage_add_locked(m->frame);
+	}
+}
+
+// /sys/gui's counts (wm_full_screen_status), under kGuiLock.
+static uint64_t s_fs_entered, s_fs_entered_by_chord, s_fs_left, s_fs_left_by_chord, s_fs_gone;
+
+void wm_full_screen_status(wm_full_screen_status_t *out)
+{
+	uint32_t now = 0;
+	for (const window_t *w = s_top; w; w = w->below)
+		if (w->flags & GUI_WINDOW_FULL_SCREEN)
+			now++;
+	*out = (wm_full_screen_status_t){
+		.front_id = s_front ? s_front->id : 0,
+		.front_owner = s_front ? s_front->owner : 0,
+		.front_since_tick = s_front ? s_front_since_tick : 0,
+		.full_screen_now = now,
+		.entered = s_fs_entered, .entered_by_chord = s_fs_entered_by_chord,
+		.left = s_fs_left, .left_by_chord = s_fs_left_by_chord, .gone = s_fs_gone,
+	};
 }
 
 window_t *wm_create(const char *title, rect_t frame, uint32_t flags, uint64_t owner,
@@ -403,6 +514,8 @@ window_t *wm_create(const char *title, rect_t frame, uint32_t flags, uint64_t ow
 	strncpy(w->title, title ? title : "", GUI_WINDOW_TITLE_MAX);
 	w->title[GUI_WINDOW_TITLE_MAX - 1] = '\0';
 
+	// A popup born to the full-screen window that holds focus ranks with it.
+	w->front = s_front != NULL && popup_owner_id != 0 && wm_focus_root(w) == s_front;
 	link_on_top(w);
 	// START_UNFOCUSED declines the focus grab a new window normally gets —
 	// unless nothing holds focus yet, because SOMETHING must (an all-
@@ -445,6 +558,12 @@ void wm_destroy(window_t *w)
             focus_window(next);
         }
     }
+    // A full-screen front whose focus sat in a popup it owns: the band must
+    // not name a window that is about to be freed.
+    if (s_front == w)
+        front_set(NULL, NULL);
+    if (w->flags & GUI_WINDOW_FULL_SCREEN)
+        s_fs_gone++;
     unlink_window(w);
 	surface_free(&w->canvas);
 	surface_free(&w->content);
@@ -509,6 +628,18 @@ static bool popup_declines(const window_t *w, const char *verb)
 	return true;
 }
 
+// FULL SCREEN DECLINES THE GEOMETRY VERBS: the frame is the screen's until
+// the window leaves, and a maximize, a decoration toggle or a move applied
+// underneath would change a frame nobody can see, or the screen-sized one.
+// Leave first (GUI_WINDOW_FULL_SCREEN).
+static bool full_screen_declines(const window_t *w, const char *verb)
+{
+	if (!(w->flags & GUI_WINDOW_FULL_SCREEN))
+		return false;
+	printd(DEBUG_GUI, "wm: %s declined — window %u is full screen\n", verb, w->id);
+	return true;
+}
+
 void wm_set_title(window_t *w, const char *title, bool utf8)
 {
 	char next[GUI_WINDOW_TITLE_MAX];
@@ -553,7 +684,8 @@ void wm_set_pinned(window_t *w, bool pinned)
 
 void wm_set_decorated(window_t *w, bool decorated)
 {
-	if (desktop_declines(w,"decorate") || popup_declines(w,"decorate")) return;
+	if (desktop_declines(w,"decorate") || popup_declines(w,"decorate") ||
+	    full_screen_declines(w,"decorate")) return;
 	if (decorated == !(w->flags & GUI_WINDOW_NO_DECORATIONS)) return;
 	uint32_t next_flags=decorated?w->flags & ~GUI_WINDOW_NO_DECORATIONS:w->flags | GUI_WINDOW_NO_DECORATIONS;
 	os64_decor_insets_t before=wm_decoration_insets(w->flags),after=wm_decoration_insets(next_flags);
@@ -580,7 +712,8 @@ static void set_maximized(window_t *w, bool maximized, bool raise)
 	// A desktop already fills the screen; "maximize" would be a no-op that
 	// still clobbered restoreFrame, and un-maximizing would then shrink your
 	// desktop to a window.
-	if (desktop_declines(w, "maximize") || popup_declines(w, "maximize"))
+	if (desktop_declines(w, "maximize") || popup_declines(w, "maximize") ||
+	    full_screen_declines(w, "maximize"))
 		return;
 	if (maximized == ((w->flags & GUI_WINDOW_MAXIMIZED) != 0))
 		return;
@@ -656,8 +789,63 @@ void wm_set_minimized(window_t *w, bool minimized)
 	}
 }
 
+bool wm_full_screen_fits(const window_t *w)
+{
+	return kFrameBuffer.width >= w->min_content_w && kFrameBuffer.height >= w->min_content_h &&
+	       kFrameBuffer.width <= w->canvas_cap_w && kFrameBuffer.height <= w->canvas_cap_h;
+}
+
+wm_full_screen_result_t wm_set_full_screen(window_t *w, bool on, bool by_chord)
+{
+	if (desktop_declines(w, "full screen") || popup_declines(w, "full screen"))
+		return WM_FULL_SCREEN_DECLINED;
+	if (on == ((w->flags & GUI_WINDOW_FULL_SCREEN) != 0))
+		return WM_FULL_SCREEN_DONE;
+	rect_t screen = {0, 0, (int32_t)kFrameBuffer.width, (int32_t)kFrameBuffer.height};
+	if (on) {
+		// The person must be using it: its own focus chain holds focus, and
+		// the glass is the desktop's rather than a text terminal's. A program
+		// in the background cannot take the screen.
+		if (wm_focus_root(s_focused) != w || wm_is_hidden(w) || !gui_owns_glass())
+			return WM_FULL_SCREEN_UNFOCUSED;
+		if (!wm_full_screen_fits(w))
+			return WM_FULL_SCREEN_NO_FIT;
+		gui_geometry_changing(w);
+		gui_cancel_decoration(w);
+		w->fullFrom = w->frame;
+		w->flags |= GUI_WINDOW_FULL_SCREEN;   // the insets are 0 from here
+		(void)wm_resize(w, screen);
+	} else {
+		gui_geometry_changing(w);
+		gui_cancel_decoration(w);
+		w->flags &= ~GUI_WINDOW_FULL_SCREEN;
+		// Back exactly where it was: the saved frame, which is the screen
+		// with chrome when the window was maximized before, through the
+		// same clamp as every resize (a minimum raised meanwhile wins).
+		(void)wm_resize(w, w->fullFrom);
+	}
+	w->blank_until_publish = true;
+	gui_damage_add_locked(rect_union(w->frame, screen));
+	if (on) {
+		s_fs_entered++;
+		s_fs_entered_by_chord += by_chord;
+	} else {
+		s_fs_left++;
+		s_fs_left_by_chord += by_chord;
+	}
+	// Band 3 is the focused full-screen window's: re-reading focus moves the
+	// window in on entering and out on leaving.
+	front_set(front_for(s_focused), wm_focus_root(s_focused));
+	input_event_t ev = {.type = INPUT_EVENT_WINDOW_FULL_SCREEN, .tick = kTicksSinceStart};
+	wm_deliver_event(w, &ev);
+	printd(DEBUG_GUI, "wm: window %u %s full screen\n", w->id, on ? "entered" : "left");
+	return WM_FULL_SCREEN_DONE;
+}
+
 void wm_move(window_t *w, int32_t x, int32_t y)
 {
+	if (full_screen_declines(w, "move"))
+		return;
 	gui_cancel_decoration(w);
 	// A moved window is no longer "the maximized one": the user took its
 	// geometry back (see GUI_WINDOW_MAXIMIZED). Cleared before the move so a
@@ -764,7 +952,10 @@ bool wm_set_min_size(window_t *w, uint32_t width, uint32_t height)
 		w->min_content_w = width;
 		w->min_content_h = height;
 	}
-	wm_resize(w, w->frame);
+	// A full-screen window keeps the screen's size; leaving applies the new
+	// minimum through wm_resize's clamp.
+	if (!(w->flags & GUI_WINDOW_FULL_SCREEN))
+		wm_resize(w, w->frame);
 	return true;
 }
 
@@ -1067,6 +1258,14 @@ static void composite_one(surface_t *backbuffer, const window_t *w, rect_t damag
 	// clipping back into the source origin, so the visible sliver comes from
 	// the right pixels without any arithmetic here.
 	rect_t content_screen = wm_content_rect_on_screen(w);
+	// Across a full-screen edge, until the owner publishes at its new size:
+	// black, and no plane (window_t.blank_until_publish). Cheaper than the
+	// blit it replaces, and the old picture never shows at the new size.
+	if (w->blank_until_publish) {
+		surface_fill_rect(&view, (rect_t){content_screen.x - damage.x, content_screen.y - damage.y,
+		                                  content_screen.w, content_screen.h}, GUI_COLOR_BLACK);
+		return;
+	}
 	if (gui_planes_compose((window_t *)w, &view, damage, content_screen))
 		return;
 	surface_blit(&view, content_screen.x - damage.x, content_screen.y - damage.y,

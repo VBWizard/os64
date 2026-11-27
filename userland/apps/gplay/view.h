@@ -44,7 +44,9 @@ typedef enum {
     GPLAY_KEY_SOUND_LATER,   // ]: the sound later against the picture by 10 ms
     GPLAY_KEY_SOUND_EARLIER, // [
     GPLAY_KEY_READOUT,       // i
-    GPLAY_KEY_QUIT,          // q, Escape
+    GPLAY_KEY_FULL_SCREEN,   // f: full screen, or back
+    GPLAY_KEY_ESCAPE,        // Escape: out of full screen, else quit (gplay decides)
+    GPLAY_KEY_QUIT,          // q
 } gplay_key_t;
 
 // From a key-down's character, its key's code and Shift. An arrow arrives as

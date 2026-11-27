@@ -293,7 +293,8 @@ static void on_close_request(os64_ui_t *ui)
         os64_complain("gclock: cannot read configuration; window state not saved");
     } else if (!os64_gui_window_get_state(gClockWin, &st)) {
         char pos[32], size[16];
-        bool save_position = conf.save_position && !(st.flags & OS64_GUI_WINDOW_MAXIMIZED);
+        bool save_position = conf.save_position &&
+                             !(st.flags & (OS64_GUI_WINDOW_MAXIMIZED | OS64_GUI_WINDOW_FULL_SCREEN));
         os64_snprintf(pos, sizeof(pos), "%d,%d", save_position ? st.x : conf.x,
                       save_position ? st.y : conf.y);
         if (conf.font_size) os64_snprintf(size, sizeof(size), "%u", conf.font_size);

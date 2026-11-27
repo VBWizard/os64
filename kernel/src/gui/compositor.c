@@ -2377,6 +2377,10 @@ static void route_event_locked(const input_event_t *ev)
 		if (wm_chord_held(ev) && (w->flags & GUI_WINDOW_DESKTOP)) {
 			printd(DEBUG_GUI, "guicomp: chord move/resize declined — window %u is the desktop\n",
 				w->id);
+		} else if (wm_chord_held(ev) && (w->flags & GUI_WINDOW_FULL_SCREEN)) {
+			// Its frame is the screen's until it leaves (GUI_WINDOW_FULL_SCREEN).
+			printd(DEBUG_GUI, "guicomp: chord move/resize declined — window %u is full screen\n",
+				w->id);
 		} else if (wm_chord_held(ev)) {
 			if (ev->mouse.button == INPUT_MOUSE_BUTTON_LEFT) {
 				s_drag_window = w;
@@ -2636,6 +2640,23 @@ static void route_event_locked(const input_event_t *ev)
 					bool was = wm_is_hidden(focus);
 					wm_decoration_action(focus,OS64_DECOR_MINIMIZE,ev->tick);
 					chord_report(focus, GUI_WINDOW_MINIMIZED, was, "minimized", "restored");
+					break;
+				}
+				// Ctrl+Alt+F: full screen (toggle). The person's way out of a
+				// program that took the screen and ignores the keyboard, which
+				// is why it is here with the other WM verbs: no program ever
+				// sees it. Entering declines exactly where maximize is
+				// withheld (wm_full_screen_fits), so a window that cannot
+				// take the screen's size is never handed it by a chord.
+				case 0x06: {
+					focus = wm_focus_root(focus);   // a popup's chord is its window's
+					bool was = (focus->flags & GUI_WINDOW_FULL_SCREEN) != 0;
+					if (!was && !wm_full_screen_fits(focus))
+						printd(DEBUG_GUI, "guicomp: full screen declined — window %u cannot take the screen's size\n",
+							focus->id);
+					else
+						(void)wm_set_full_screen(focus, !was, true);
+					chord_report(focus, GUI_WINDOW_FULL_SCREEN, was, "full screen", "left full screen");
 					break;
 				}
 				case 0x14: {   // Ctrl+Alt+T: titlebar (toggle)

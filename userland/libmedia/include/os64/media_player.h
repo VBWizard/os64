@@ -226,6 +226,11 @@ typedef struct {
     int64_t shown_at, shown_end;    // the shown picture's time and end (-1 when none)
     uint32_t decoded, ready;        // pictures in each queue
     uint32_t decoded_depth, ready_depth;
+    // The converted pictures' storage: how many hold pixels and how many
+    // bytes, which grows with the size asked and comes back within a few
+    // pictures of a smaller one (leaving full screen).
+    uint32_t frames_held;
+    uint64_t frames_bytes;
     uint32_t sound_queued;          // frames
     uint32_t delay_us;              // the sink's
     int64_t sync;

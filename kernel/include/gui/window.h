@@ -134,6 +134,14 @@
 // gui_window_get_state so a client can stop working for an audience of
 // nobody; the COVERED/UNCOVERED events announce each flip.
 #define GUI_WINDOW_COVERED         (1u << 7)
+// FULL SCREEN: the frame is the screen and there is no chrome at all (the
+// insets answer 0, as for the desktop), and while the window or a popup it
+// owns has focus it ranks above every band (band_of's 3). It is a LAYER over
+// the state beneath, not a replacement for it: MAXIMIZED stays as it was,
+// fullFrom holds the frame to go back to, and the geometry verbs (maximize,
+// decorate, move, resize) decline until the window leaves. wm_set_full_screen
+// is the one door, for the client call and Ctrl+Alt+F alike.
+#define GUI_WINDOW_FULL_SCREEN     (1u << 10)
 
 // POPUP — DERIVED AT BIRTH, NEVER A CLIENT FLAG. A window created with no
 // chrome AND always-on-top is a menu, a cascade, a tooltip: something that
@@ -154,10 +162,12 @@
 // other's; this one pins the kernel's flags to EACH OTHER.
 _Static_assert((GUI_WINDOW_NO_DECORATIONS ^ GUI_WINDOW_START_UNFOCUSED ^ GUI_WINDOW_PINNED ^
                 GUI_WINDOW_MAXIMIZED ^ GUI_WINDOW_MINIMIZED ^ GUI_WINDOW_DESKTOP ^
-                GUI_WINDOW_COVERED ^ GUI_WINDOW_POPUP ^ GUI_WINDOW_TITLE_UTF8 ^ GUI_WINDOW_HAS_SETTINGS) ==
+                GUI_WINDOW_COVERED ^ GUI_WINDOW_POPUP ^ GUI_WINDOW_TITLE_UTF8 ^ GUI_WINDOW_HAS_SETTINGS ^
+                GUI_WINDOW_FULL_SCREEN) ==
                (GUI_WINDOW_NO_DECORATIONS | GUI_WINDOW_START_UNFOCUSED | GUI_WINDOW_PINNED |
                 GUI_WINDOW_MAXIMIZED | GUI_WINDOW_MINIMIZED | GUI_WINDOW_DESKTOP |
-                GUI_WINDOW_COVERED | GUI_WINDOW_POPUP | GUI_WINDOW_TITLE_UTF8 | GUI_WINDOW_HAS_SETTINGS),
+                GUI_WINDOW_COVERED | GUI_WINDOW_POPUP | GUI_WINDOW_TITLE_UTF8 | GUI_WINDOW_HAS_SETTINGS |
+                GUI_WINDOW_FULL_SCREEN),
                "two window flags share a bit");
 
 // Alt+F4 twice within this long (5s) on a window without a popup owner
@@ -191,6 +201,25 @@ typedef struct window
     // Where the window was before it was maximized — what Ctrl+Alt+M puts
     // back. Meaningful only while GUI_WINDOW_MAXIMIZED is set.
     rect_t    restoreFrame;
+
+    // The frame leaving full screen goes back to (the screen's own frame,
+    // chrome included, when the window was maximized before). Meaningful
+    // only while GUI_WINDOW_FULL_SCREEN is set.
+    rect_t    fullFrom;
+
+    // Set at each full-screen edge, cleared by the owner's next publish:
+    // until then composite_one paints the content black and composes no
+    // plane, because what the window holds is a picture of its old size
+    // and its planes' places were agreed for its old box.
+    bool      blank_until_publish;
+
+    // Ranked in band 3, above every other band: this window's focus root is
+    // the full-screen window that holds focus (window.c's s_front). Written
+    // only by front_set and wm_create, so band_of reads a fact that does not
+    // change while the list is being relinked; front_moving is front_set's
+    // own mark for the windows it is relinking.
+    bool      front;
+    bool      front_moving;
 
     // When Alt+F4 last asked this window to close (kTicksSinceStart), 0 if
     // not armed. Owned popups leave this unarmed. For other windows a second
@@ -499,7 +528,7 @@ static inline rect_t wm_content_rect_on_screen(const window_t *w)
 
 // Titlebar presence is semantic, independent of a particular font height.
 static inline bool wm_has_titlebar(uint32_t flags)
-{ return !(flags & (GUI_WINDOW_DESKTOP | GUI_WINDOW_NO_DECORATIONS)); }
+{ return !(flags & (GUI_WINDOW_DESKTOP | GUI_WINDOW_NO_DECORATIONS | GUI_WINDOW_FULL_SCREEN)); }
 static inline bool wm_point_in_titlebar(const window_t *w, int32_t x, int32_t y)
 {
     return wm_has_titlebar(w->flags) && rect_contains_point(
@@ -524,6 +553,43 @@ void wm_maximize_at_birth(window_t *w);
 // Hide from the glass, or bring back (restored = raised + focused). See
 // GUI_WINDOW_MINIMIZED.
 void wm_set_minimized(window_t *w, bool minimized);
+
+// Enter or leave full screen (GUI_WINDOW_FULL_SCREEN), the one door for the
+// client call and Ctrl+Alt+F. Entering asks that the window is ordinary
+// (not the desktop, not a popup), that it or a popup it owns has focus and
+// the glass is the desktop's, and that the screen fits its minimum and its
+// reservation; leaving always succeeds. Either edge goes through wm_resize
+// (one WINDOW_RESIZE when the size changed), posts the coalesced
+// WINDOW_FULL_SCREEN event and sets blank_until_publish. Asking for the
+// state it is already in is WM_FULL_SCREEN_DONE and changes nothing.
+// `by_chord` says who asked, for /sys/gui's counts only.
+typedef enum {
+	WM_FULL_SCREEN_DONE,
+	WM_FULL_SCREEN_DECLINED,    // the desktop or a popup
+	WM_FULL_SCREEN_UNFOCUSED,   // neither it nor its popup has focus, or a text terminal holds the glass
+	WM_FULL_SCREEN_NO_FIT,      // the screen is under its minimum or over its reservation
+} wm_full_screen_result_t;
+wm_full_screen_result_t wm_set_full_screen(window_t *w, bool on, bool by_chord);
+
+// Would the window take the screen's size, chrome-less, without clamping?
+// The test maximize's titlebar button and Ctrl+Alt+M are withheld by
+// (wm_decoration_disabled), asked with full screen's geometry: the chord
+// declines where this is false.
+bool wm_full_screen_fits(const window_t *w);
+
+// /sys/gui's full-screen line, under kGuiLock: the window ranked above
+// every band now (0: none) and since when, and the edges since boot.
+typedef struct {
+	uint32_t front_id;
+	uint64_t front_owner;
+	uint64_t front_since_tick;   // when it last took band 3
+	uint32_t full_screen_now;    // windows full screen now, front or not
+	uint64_t entered, entered_by_chord;
+	uint64_t left, left_by_chord, gone;   // gone: destroyed while full screen
+} wm_full_screen_status_t;
+void wm_full_screen_status(wm_full_screen_status_t *out);
+// The same, taking kGuiLock itself (gui_client.c), for /sys/gui.
+void gui_full_screen_status(wm_full_screen_status_t *out);
 
 // Hidden from the glass? The one test composite, hit-testing and occlusion
 // all ask, so they cannot disagree about what "hidden" means.
