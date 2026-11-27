@@ -29,10 +29,10 @@
 #include "printd.h"
 #include "shutdown.h"          // kShuttingDown — the hangup sweep stands down mid-descent
 #include "CONFIG.h"
+#include "kworker.h"           // kworker_wake_locked — the midwife's alarm clock
 
 extern BasicRenderer kRenderer;
 extern task_t *kKernelTask;    // parent of every summoned shell (kernel.c)
-extern task_t *kKWorkerTask;   // the undertaker, moonlighting as midwife (kernel.c)
 
 tty_t kTTY[TTY_COUNT];
 tty_t * volatile kTTYFocused = &kTTY[0];
@@ -1072,15 +1072,7 @@ void tty_summon_wake(void)
 	// the glass for their new font is as badly served by a 2s nap.
 	if (!tty_summon_pending() && !console_font_pending())
 		return;
-	if (kKWorkerTask == NULL || kKWorkerTask->threads == NULL)
-		return;
-	thread_t *w = kKWorkerTask->threads;
-	if (w->threadState == THREAD_STATE_ISLEEP)
-	{
-		sigset_del(&w->signals.sigind, SIGSLEEP);
-		w->signals.sigdata[SIGSLEEP] = 0;
-		scheduler_change_thread_queue_locked(w, THREAD_STATE_RUNNABLE);
-	}
+	kworker_wake_locked();
 }
 
 // kworker context ONLY (task context — spawning loads an ELF from disk, and

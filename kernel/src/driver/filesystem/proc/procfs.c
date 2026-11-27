@@ -511,19 +511,22 @@ static void proc_add_counted_lock(synth_text_t *t, const char *key, const counte
 }
 
 // The task's list of mappings: how many, the walks the lookups took (in
-// mappings stepped over), and the waits and holds of its lock and of the
-// task's page lock (which a fault publishes a page under and unmap removes
-// one under), each since the task began and since this file was last read
-// (MAPPING_LIST.md). A long walk is the list lock's hold, which is why both
-// are here.
+// mappings stepped over; a miss steps over all of them), the pages of
+// syscall ranges the page table answered for without a lookup, and the
+// waits and holds of its lock and of the task's page lock (which a fault
+// publishes a page under and unmap removes one under), each since the task
+// began and since this file was last read (MAPPING_LIST.md). A long walk is
+// the list lock's hold, which is why both are here.
 static void proc_add_mapping_counts(synth_text_t *t, task_t *task)
 {
 	vma_counts_t c;
 	vma_read_counts(task, &c);
 	synth_text_addf(t, "mappings\t%u\n", c.listed);
-	synth_text_addf(t, "mapping_walks\t%lu lookups %lu steps longest %lu; since read %lu lookups %lu steps longest %lu\n",
-	                c.walks.lookups, c.walks.steps, c.walks.steps_most,
-	                c.walks_since.lookups, c.walks_since.steps, c.walks_since.steps_most);
+	synth_text_addf(t, "mapping_walks\t%lu lookups %lu misses %lu steps longest %lu; "
+	                "since read %lu lookups %lu misses %lu steps longest %lu\n",
+	                c.walks.lookups, c.walks.misses, c.walks.steps, c.walks.steps_most,
+	                c.walks_since.lookups, c.walks_since.misses, c.walks_since.steps, c.walks_since.steps_most);
+	synth_text_addf(t, "pages_by_table\t%lu; since read %lu\n", c.table_answers, c.table_answers_since);
 	proc_add_counted_lock(t, "mapping_lock", &c.lock);
 	proc_add_counted_lock(t, "page_lock", &c.page_lock);
 }
@@ -601,8 +604,25 @@ static void proc_gen_task_status(synth_text_t *t, task_t *task)
 		task_tty_release(tty);
 	}
 	synth_text_addf(t, "shell\t%s\n", task->controllingShell ? "yes" : "no");
-	synth_text_addf(t, "threads\t%u\n", proc_task_thread_count(task));
+	// Made: every thread on the task's chain, which keeps a thread_t until
+	// burial. Live: those whose stacks are not yet released (thread_reap.h);
+	// a released one never runs again. The first number is what this line
+	// has always said, so a reader taking one number reads the same.
+	uint32_t threads_made = 0, threads_live = 0;
+	for (thread_t *th = task->threads; th != NULL; th = th->taskNext)
+	{
+		threads_made++;
+		if (__atomic_load_n(&th->reap.state, __ATOMIC_RELAXED) != REAP_DONE)
+			threads_live++;
+	}
+	synth_text_addf(t, "threads\t%u made, %u live\n", threads_made, threads_live);
+	synth_text_addf(t, "reaps_pending\t%u\n", __atomic_load_n(&task->reaps.pending, __ATOMIC_RELAXED));
+	// The heap range holds the task's mappings and its threads' stacks; the
+	// next line says how much of it the stacks took, guards included.
 	synth_text_addf(t, "heap\t%p-%p\n", (void *)task->heapStart, (void *)task->heapEnd);
+	synth_text_addf(t, "stacks\t%lu bytes in %lu ranges\n",
+	                (unsigned long)__atomic_load_n(&task->stackBytes, __ATOMIC_RELAXED),
+	                (unsigned long)__atomic_load_n(&task->stackRanges, __ATOMIC_RELAXED));
 	synth_text_addf(t, "entry\t%p\n", (void *)task->entryPoint);
 	if (task->loadBias)
 		synth_text_addf(t, "bias\t%p\n", (void *)task->loadBias);
@@ -883,10 +903,11 @@ static void proc_gen_handles(synth_text_t *t, task_t *task)
 // The regions come from three places and are sorted at the end: the VMA
 // list; three fixed windows (TASK_ARGV_VIRT, TASK_ENV_VIRT,
 // TASK_EXIT_TRAMPOLINE_VIRT — sizes from argvPages, env->page_count, and one
-// page); and per thread, the two guarded stacks (esp3BaseV/esp0BaseV with
-// the constant sizes thread.h hands task_alloc_guarded_stack, and
+// page); and per thread, the two guarded stacks (esp3BaseV with the size it
+// got, esp3Size; esp0BaseV with THREAD_KERNEL_STACK_SIZE; and
 // THREAD_STACK_GUARD_PAGE_COUNT pages either side). A kernel task's threads
-// have no ring-3 stack (esp3BaseV == 0) and are skipped.
+// have no ring-3 stack (esp3BaseV == 0), and a thread whose stacks the reap
+// released (thread_reap.h) has neither; what is not there draws no row.
 
 typedef struct
 {
@@ -951,7 +972,8 @@ static void proc_gen_maps(synth_text_t *t, task_t *task)
 {
 	// The mappings' facts are copied out of the list under its lock, then
 	// formatted with the lock released: nothing is formatted or allocated
-	// under it. At most the walk guard's worth, newest first.
+	// under it. At most the walk guard's worth: past it, the rows are the
+	// mappings most recently found or made (the list's order, maplist.h).
 	vma_facts_t *facts = kmalloc(PROC_MAX_LIST_WALK * sizeof(vma_facts_t));
 	if (facts == NULL)
 	{
@@ -1026,19 +1048,23 @@ static void proc_gen_maps(synth_text_t *t, task_t *task)
 		for (thread_t *th = task->threads; th != NULL && walked < threadCount; th = th->taskNext, walked++)
 		{
 			char name[32];
-			if (th->esp3BaseV != 0)
+			// Each address loaded once: the reap clears it when it releases
+			// the stack (thread_reap.h), and a second load could see 0.
+			uintptr_t user = __atomic_load_n(&th->esp3BaseV, __ATOMIC_ACQUIRE);
+			uintptr_t kernel = __atomic_load_n(&th->esp0BaseV, __ATOMIC_ACQUIRE);
+			if (user != 0)
 			{
 				// The size it got: a main thread's is what its program
 				// declared (SCRIPT_STACK.md), and yonder reads it here.
-				uintptr_t s = th->esp3BaseV, e = s + th->esp3Size;
+				uintptr_t s = user, e = s + th->esp3Size;
 				snprintf(name, sizeof(name), "[stack:%lu]", (unsigned long)th->threadID);
 				proc_map_row(&rows[count++], s - guardBytes, s, "---", "private", "[guard]");
 				proc_map_row(&rows[count++], s, e, "rw-", "private", name);
 				proc_map_row(&rows[count++], e, e + guardBytes, "---", "private", "[guard]");
 			}
-			if (th->esp0BaseV != 0)
+			if (kernel != 0)
 			{
-				uintptr_t s = th->esp0BaseV, e = s + THREAD_KERNEL_STACK_SIZE;
+				uintptr_t s = kernel, e = s + THREAD_KERNEL_STACK_SIZE;
 				snprintf(name, sizeof(name), "[kstack:%lu]", (unsigned long)th->threadID);
 				proc_map_row(&rows[count++], s - guardBytes, s, "---", "private", "[guard]");
 				proc_map_row(&rows[count++], s, e, "rw-", "private", name);

@@ -68,6 +68,11 @@
 //   /sys/memory/ledger           the small-object ledger: rows against its
 //                                wall, entries, borrowed chunks, policy
 //                                counters, common free holes, its lock
+//   /sys/memory/reap             ended threads' stacks waiting for kworker,
+//                                what it gave back, how long thread makers
+//                                waited for it (thread_reap.h)
+//   /sys/memory/shootdown        the waited invalidation's rounds, the late
+//                                ones and the longest wait (smp_core.h)
 //   /sys/random                  the entropy pool: which instructions the
 //                                CPU advertises and which passed the boot
 //                                variation check, what seeded the pool,
@@ -220,6 +225,7 @@
 #include "console_font.h"   // /sys/console/font — the VTs' face, and its door
 #include "shared_object.h"  // /sys/shlib — the loaded-shared-object registry
 #include "allocator.h"      // /sys/memory — the frame table and the ledger
+#include "thread_reap.h"    // /sys/memory/reap
 #include "accounting.h"
 
 extern volatile uint64_t kTicksSinceStart;   // /sys/log stamps the sink heartbeat against it
@@ -426,6 +432,8 @@ typedef enum
 	SYS_NODE_MEMDIR,     // /memory — the physical allocator (FRAMES.md)
 	SYS_NODE_MEMFRAMES,  // /memory/frames — the frame table and its lock
 	SYS_NODE_MEMLEDGER,  // /memory/ledger — the small-object ledger and its lock
+	SYS_NODE_MEMREAP,    // /memory/reap — ended threads' stacks (thread_reap.h)
+	SYS_NODE_MEMSHOOTDOWN, // /memory/shootdown — the waited invalidation (smp_core.h)
 } sys_node_type_t;
 
 #define SYS_NAME_MAX 32
@@ -660,11 +668,14 @@ static void sys_parse_path(const char *path, sys_path_t *out)
 			out->type = SYS_NODE_MEMDIR;
 			return;
 		}
-		bool is_frames = strcmp(comp, "frames") == 0;
-		if ((!is_frames && strcmp(comp, "ledger") != 0) ||
-		    synth_next_component(path, &pos, comp, sizeof(comp)))
+		sys_node_type_t type = strcmp(comp, "frames") == 0    ? SYS_NODE_MEMFRAMES
+		                     : strcmp(comp, "ledger") == 0    ? SYS_NODE_MEMLEDGER
+		                     : strcmp(comp, "reap") == 0      ? SYS_NODE_MEMREAP
+		                     : strcmp(comp, "shootdown") == 0 ? SYS_NODE_MEMSHOOTDOWN
+		                                                      : SYS_NODE_MEMDIR;
+		if (type == SYS_NODE_MEMDIR || synth_next_component(path, &pos, comp, sizeof(comp)))
 			return;
-		out->type = is_frames ? SYS_NODE_MEMFRAMES : SYS_NODE_MEMLEDGER;
+		out->type = type;
 		return;
 	}
 
@@ -1216,6 +1227,41 @@ static void sys_gen_memory_frames(synth_text_t *t)
 		synth_text_addf(t, "  %-12s %9lu %9lu\n", range, s.live_runs_sized[b], s.free_runs_sized[b]);
 	}
 	sys_gen_memory_lock(t, "frame", &s.frame_lock);
+}
+
+// /sys/memory/reap — ended threads' stacks waiting for kworker, and what the
+// reap has given back (thread_reap.h). The window starts again at each read.
+static void sys_gen_memory_reap(synth_text_t *t)
+{
+	thread_reap_counts_t c;
+	thread_reap_read(&c);
+	synth_text_addf(t, "pending: %u now, %u most, %u most since last read\n", c.queued, c.queued_most,
+	                c.window_queued_most);
+	synth_text_addf(t, "handed: %lu, %lu since last read\n", c.handed, c.window_handed);
+	synth_text_addf(t, "released: %lu by kworker, %lu by burial, %lu since last read\n", c.by_kworker,
+	                c.by_burial, c.window_released);
+	synth_text_addf(t, "kworker rounds: %lu (one waited invalidation each, for every stack it released)\n", c.rounds);
+	synth_text_addf(t, "given back: %lu bytes of stack, %lu I/O scratch blocks\n", c.frame_bytes, c.scratches);
+	synth_text_addf(t, "thread makers parked for the backlog (over %u): %lu, %lu proceeded after %u ms, longest %lu us\n",
+	                THREAD_REAP_BACKLOG, c.creator_parks, c.creator_proceeded, THREAD_REAP_PARK_MOST_US / 1000,
+	                c.creator_park_most_us);
+	synth_text_addf(t, "refused: %lu (a node handed or claimed in the wrong state)\n", c.refused);
+}
+
+// /sys/memory/shootdown — the waited invalidation's rounds (smp_core.h).
+static void sys_gen_memory_shootdown(synth_text_t *t)
+{
+	shootdown_counts_t c;
+	tlb_shootdown_read(&c);
+	synth_text_addf(t, "rounds: %lu, %lu since last read\n", c.rounds, c.window_rounds);
+	synth_text_addf(t, "late (over %u ms): %lu, %lu since last read\n", SHOOTDOWN_LATE_US / 1000, c.late,
+	                c.window_late);
+	// The CPU that answered the longest round last: a CPU long with
+	// interrupts off holds a round, in a syscall (which runs with them off)
+	// or in a scheduler pass, whose interrupt also keeps the flush's out
+	// until its end of interrupt (same priority class).
+	synth_text_addf(t, "longest wait: %lu us (CPU %u answered last), %lu us since last read (CPU %u)\n",
+	                c.wait_most_us, c.wait_most_cpu, c.window_wait_most_us, c.window_wait_most_cpu);
 }
 
 static void sys_gen_memory_ledger(synth_text_t *t)
@@ -2839,7 +2885,8 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	         && sp.type != SYS_NODE_MOUNTSFILE && sp.type != SYS_NODE_BLOCKFILE
 	         && sp.type != SYS_NODE_OPENFILESFILE && sp.type != SYS_NODE_RANDOMFILE
 	         && sp.type != SYS_NODE_ACPIFILE
-	         && sp.type != SYS_NODE_MEMFRAMES && sp.type != SYS_NODE_MEMLEDGER)
+	         && sp.type != SYS_NODE_MEMFRAMES && sp.type != SYS_NODE_MEMLEDGER
+	         && sp.type != SYS_NODE_MEMREAP && sp.type != SYS_NODE_MEMSHOOTDOWN)
 		return -1;   // directories go through dops; everything else is not a file
 
 	synth_text_t text;
@@ -2868,6 +2915,10 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 		sys_gen_memory_frames(&text);
 	else if (sp.type == SYS_NODE_MEMLEDGER)
 		sys_gen_memory_ledger(&text);
+	else if (sp.type == SYS_NODE_MEMREAP)
+		sys_gen_memory_reap(&text);
+	else if (sp.type == SYS_NODE_MEMSHOOTDOWN)
+		sys_gen_memory_shootdown(&text);
 	else if (sp.type == SYS_NODE_CONFFILE)
 		sys_gen_conf(&text);
 	else if (sp.type == SYS_NODE_MOUNTSFILE)
@@ -3251,7 +3302,7 @@ static int sys_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 
 		case SYS_NODE_MEMDIR:
 		{
-			static const char *kSysMemoryFiles[] = { "frames", "ledger" };
+			static const char *kSysMemoryFiles[] = { "frames", "ledger", "reap", "shootdown" };
 			if (h->index >= (int)(sizeof(kSysMemoryFiles) / sizeof(kSysMemoryFiles[0])))
 				return 0;
 			strncpy(entry->name, kSysMemoryFiles[h->index], OS64_DIRENT_NAME_MAX);
@@ -3510,6 +3561,14 @@ static int sys_stat(const char *path, os64_dirent_t *entry, vfs_filesystem_t *vf
 
 		case SYS_NODE_MEMLEDGER:
 			strncpy(entry->name, "ledger", OS64_DIRENT_NAME_MAX);
+			return 0;
+
+		case SYS_NODE_MEMREAP:
+			strncpy(entry->name, "reap", OS64_DIRENT_NAME_MAX);
+			return 0;
+
+		case SYS_NODE_MEMSHOOTDOWN:
+			strncpy(entry->name, "shootdown", OS64_DIRENT_NAME_MAX);
 			return 0;
 
 		case SYS_NODE_NETIP:

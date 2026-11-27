@@ -31,14 +31,14 @@ mutants = [
     ('unlink-frees-held', '    return n->holds == 0;\n}', '    return true;\n}'),
     # A lookup with no hold.
     ('find-hold-no-hold', '    if (n != NULL)\n        n->holds++;\n    return n;', '    return n;'),
-    ('hold-no-hold', 'void maplist_hold(maplist_node_t *n)\n{\n    n->holds++;',
+    ('plain-hold-no-hold', 'void maplist_hold(maplist_node_t *n)\n{\n    n->holds++;',
      'void maplist_hold(maplist_node_t *n)\n{\n    (void)n;'),
     # A delist that leaves the entry findable.
     ('unlink-keeps-links',
      '    if (n->prev != NULL)\n        n->prev->next = n->next;\n    else\n        l->head = n->next;\n'
      '    if (n->next != NULL)\n        n->next->prev = n->prev;\n', ''),
     ('unlink-keeps-head', '    else\n        l->head = n->next;\n', '\n'),
-    ('unlink-keeps-back-link', '    if (n->next != NULL)\n        n->next->prev = n->prev;\n', ''),
+    ('unlink-keeps-back-link', '    if (n->next != NULL)\n        n->next->prev = n->prev;\n    n->prev = n->next = NULL;', '    n->prev = n->next = NULL;'),
     ('unlink-stays-listed', '    n->listed = false;\n    l->count--;', '    l->count--;'),
     ('unlink-twice', '    if (!n->listed)\n        return false;\n    if (n->prev', '    if (n->prev'),
     ('unlink-count', '    n->listed = false;\n    l->count--;', '    n->listed = false;'),
@@ -50,7 +50,7 @@ mutants = [
     ('bury-misses-head', '    maplist_node_t *chain = l->head;\n',
      '    maplist_node_t *chain = l->head ? l->head->next : NULL;\n'),
     ('bury-leaves-listed', '        n->listed = false;\n        n->prev = NULL;', '        n->prev = NULL;'),
-    ('bury-leaves-list', '    l->head = NULL;\n    l->count = 0;\n    return chain;', '    l->count = 0;\n    return chain;'),
+    ('bury-leaves-head', '    l->head = NULL;\n    l->count = 0;\n    return chain;', '    l->count = 0;\n    return chain;'),
     ('bury-holds-uncounted', '        *held += n->holds;\n', ''),
     # The head: a fresh node first.
     ('link-at-tail',
@@ -73,6 +73,25 @@ mutants = [
     ('read-no-restart-steps', '    l->read_steps = l->steps;\n', ''),
     ('read-no-restart-longest', '    l->window_steps_most = 0;\n}', '}'),
     ('walk-no-break', '            found = n;\n            break;', '            found = n;'),
+    # Move to front: a hit by address becomes the head, its old neighbours
+    # joined, its own links whole; a lookup by start and a miss move nothing.
+    ('mtf-off', '        move_to_head(l, found);\n', '        (void)move_to_head;\n'),
+    ('mtf-by-start-too', '    else if (!start_only && found != l->head &&', '    else if (found != l->head &&'),
+    ('mtf-old-link-kept', '{\n    n->prev->next = n->next;\n', '{\n'),
+    ('mtf-back-link-kept', '    if (n->next != NULL)\n        n->next->prev = n->prev;\n    n->prev = NULL;', '    n->prev = NULL;'),
+    ('mtf-stale-prev', '        n->next->prev = n->prev;\n    n->prev = NULL;\n    n->next = l->head;', '        n->next->prev = n->prev;\n    n->next = l->head;'),
+    ('mtf-head-no-back-link', '    l->head->prev = n;\n    l->head = n;\n}\n\n// May', '    l->head = n;\n}\n\n// May'),
+    ('mtf-head-not-moved', '    l->head->prev = n;\n    l->head = n;\n}\n\n// May', '    l->head->prev = n;\n}\n\n// May'),
+    # Overlap precedence: a hit never moves ahead of a newer node it overlaps.
+    ('may-lead-always', '        if (m->linked > n->linked && m->start < n->end && n->start < m->end)\n            return false;\n', ''),
+    ('may-lead-older', 'if (m->linked > n->linked && m->start', 'if (m->linked < n->linked && m->start'),
+    ('may-lead-adjacent', 'm->start < n->end && n->start < m->end', 'm->start <= n->end && n->start <= m->end'),
+    ('may-lead-uncounted', '        (*steps)++;\n', '        (void)steps;\n'),
+    ('linked-not-numbered', '    n->linked = ++l->links;', '    n->linked = l->links;'),
+    # The misses.
+    ('miss-uncounted', '        l->misses++;\n', '        ;\n'),
+    ('read-no-restart-misses', '    l->read_misses = l->misses;\n', ''),
+    ('read-misses-total', 'l->misses - l->read_misses', 'l->misses'),
 ]
 
 caught, missed, unbuilt = [], [], []

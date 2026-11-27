@@ -1947,6 +1947,6 @@ if (phys_rsp && phys_rsp != 0xbadbadba)
 **The general rule this leaves behind:** a fixed per-task virtual address is
 only safe in an address space that belongs to exactly one task. If you ever
 make two tasks share a PML4 again, every fixed lower-half VA in `task_create`
-becomes a collision, and the shared-counter dodge in `task_alloc_aligned` /
-`task_reserve_task_virt` will NOT save you — it only covers counter draws, not
-constants.
+becomes a collision, and a shared counter (ktask's `ktask_reserve_virt` is
+the one left, and it serves ktask alone) will NOT save you — it only covers
+counter draws, not constants.

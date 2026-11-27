@@ -7,7 +7,8 @@
 /* A task's list of mappings through vma.h's doors, on a task of the test's
  * own (MAPPING_LIST.md): a lookup holds, a delisted mapping lives while held
  * and is found by nothing, the last release or an unheld delist frees it,
- * unmap's lookup takes only anonymous mappings, a second delist says so,
+ * a lookup by address moves what it finds to the head, unmap's lookup
+ * takes only anonymous mappings, a second delist says so,
  * facts are copies, burial takes everything and counts the holds left, and
  * the counts read since the last read. The rules beside a model, and their
  * mutants, are tools/test_maplist_host.sh's; threads racing on the list are
@@ -38,10 +39,11 @@ bool test_vma_list_doors(void)
     ok &= held == anon && anon->node.holds == 1;
     ok &= vma_lookup_hold(t, 0x70004000) == NULL;
 
-    /* Facts are a copy, made without a hold. */
+    /* Facts are a copy, made without a hold; what a lookup finds by address
+     * moves to the head. */
     vma_facts_t facts;
     ok &= vma_lookup_facts(t, 0x60001fff, &facts) && facts.start == 0x60000000 &&
-          facts.prot == PROT_READ && file->node.holds == 0;
+          facts.prot == PROT_READ && file->node.holds == 0 && t->mmaps.head == &file->node;
     ok &= !vma_lookup_facts(t, 0x60002000, &facts);
 
     /* unmap's lookup: anonymous mappings by exact start, never the others. */
@@ -67,7 +69,8 @@ bool test_vma_list_doors(void)
           c.lock.acquires > 0 && c.lock.window_acquires == c.lock.acquires;
     (void)vma_lookup_hold(t, 0x90000000);
     vma_read_counts(t, &c);
-    ok &= c.walks_since.lookups == 1 && c.walks_since.steps == 1 && c.lock.window_acquires == 2;
+    ok &= c.walks_since.lookups == 1 && c.walks_since.misses == 1 && c.walks_since.steps == 1 &&
+          c.lock.window_acquires == 2;
 
     /* Burial takes every mapping, held or not, and counts the holds left. */
     vma_t *more = vma_create(0x70010000, 0x70011000, PROT_READ | PROT_WRITE,
