@@ -604,8 +604,25 @@ static void proc_gen_task_status(synth_text_t *t, task_t *task)
 		task_tty_release(tty);
 	}
 	synth_text_addf(t, "shell\t%s\n", task->controllingShell ? "yes" : "no");
-	synth_text_addf(t, "threads\t%u\n", proc_task_thread_count(task));
+	// Made: every thread on the task's chain, which keeps a thread_t until
+	// burial. Live: those whose stacks are not yet released (thread_reap.h);
+	// a released one never runs again. The first number is what this line
+	// has always said, so a reader taking one number reads the same.
+	uint32_t threads_made = 0, threads_live = 0;
+	for (thread_t *th = task->threads; th != NULL; th = th->taskNext)
+	{
+		threads_made++;
+		if (__atomic_load_n(&th->reap.state, __ATOMIC_RELAXED) != REAP_DONE)
+			threads_live++;
+	}
+	synth_text_addf(t, "threads\t%u made, %u live\n", threads_made, threads_live);
+	synth_text_addf(t, "reaps_pending\t%u\n", __atomic_load_n(&task->reaps.pending, __ATOMIC_RELAXED));
+	// The heap range holds the task's mappings and its threads' stacks; the
+	// next line says how much of it the stacks took, guards included.
 	synth_text_addf(t, "heap\t%p-%p\n", (void *)task->heapStart, (void *)task->heapEnd);
+	synth_text_addf(t, "stacks\t%lu bytes in %lu ranges\n",
+	                (unsigned long)__atomic_load_n(&task->stackBytes, __ATOMIC_RELAXED),
+	                (unsigned long)__atomic_load_n(&task->stackRanges, __ATOMIC_RELAXED));
 	synth_text_addf(t, "entry\t%p\n", (void *)task->entryPoint);
 	if (task->loadBias)
 		synth_text_addf(t, "bias\t%p\n", (void *)task->loadBias);
@@ -886,10 +903,11 @@ static void proc_gen_handles(synth_text_t *t, task_t *task)
 // The regions come from three places and are sorted at the end: the VMA
 // list; three fixed windows (TASK_ARGV_VIRT, TASK_ENV_VIRT,
 // TASK_EXIT_TRAMPOLINE_VIRT — sizes from argvPages, env->page_count, and one
-// page); and per thread, the two guarded stacks (esp3BaseV/esp0BaseV with
-// the constant sizes thread.h hands task_alloc_guarded_stack, and
+// page); and per thread, the two guarded stacks (esp3BaseV with the size it
+// got, esp3Size; esp0BaseV with THREAD_KERNEL_STACK_SIZE; and
 // THREAD_STACK_GUARD_PAGE_COUNT pages either side). A kernel task's threads
-// have no ring-3 stack (esp3BaseV == 0) and are skipped.
+// have no ring-3 stack (esp3BaseV == 0), and a thread whose stacks the reap
+// released (thread_reap.h) has neither; what is not there draws no row.
 
 typedef struct
 {
@@ -1030,19 +1048,23 @@ static void proc_gen_maps(synth_text_t *t, task_t *task)
 		for (thread_t *th = task->threads; th != NULL && walked < threadCount; th = th->taskNext, walked++)
 		{
 			char name[32];
-			if (th->esp3BaseV != 0)
+			// Each address loaded once: the reap clears it when it releases
+			// the stack (thread_reap.h), and a second load could see 0.
+			uintptr_t user = __atomic_load_n(&th->esp3BaseV, __ATOMIC_ACQUIRE);
+			uintptr_t kernel = __atomic_load_n(&th->esp0BaseV, __ATOMIC_ACQUIRE);
+			if (user != 0)
 			{
 				// The size it got: a main thread's is what its program
 				// declared (SCRIPT_STACK.md), and yonder reads it here.
-				uintptr_t s = th->esp3BaseV, e = s + th->esp3Size;
+				uintptr_t s = user, e = s + th->esp3Size;
 				snprintf(name, sizeof(name), "[stack:%lu]", (unsigned long)th->threadID);
 				proc_map_row(&rows[count++], s - guardBytes, s, "---", "private", "[guard]");
 				proc_map_row(&rows[count++], s, e, "rw-", "private", name);
 				proc_map_row(&rows[count++], e, e + guardBytes, "---", "private", "[guard]");
 			}
-			if (th->esp0BaseV != 0)
+			if (kernel != 0)
 			{
-				uintptr_t s = th->esp0BaseV, e = s + THREAD_KERNEL_STACK_SIZE;
+				uintptr_t s = kernel, e = s + THREAD_KERNEL_STACK_SIZE;
 				snprintf(name, sizeof(name), "[kstack:%lu]", (unsigned long)th->threadID);
 				proc_map_row(&rows[count++], s - guardBytes, s, "---", "private", "[guard]");
 				proc_map_row(&rows[count++], s, e, "rw-", "private", name);

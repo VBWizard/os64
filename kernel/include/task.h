@@ -93,9 +93,9 @@
 // deleted here 2026-08-13: defined since the first OS, referenced by nothing
 // in the kernel or userland, and sitting squarely in the middle of the window
 // argv needed. A constant nobody reads is not an ABI, it is furniture.)
-// Task-specific memory allocation base addresses (lower half)
-#define USER_TASK_MEMORY_BASE   0x10000000  // 256MB - for user task allocations
-#define KERNEL_TASK_MEMORY_BASE 0x40000000  // 1GB - for kernel task allocations
+// Where ktask's lower-half draws begin (ktask_reserve_virt); they end below
+// TASK_ARGV_VIRT. Every other task's stacks come from its heap range.
+#define KERNEL_TASK_MEMORY_BASE 0x40000000
 #define STDIN (void*)0
 #define STDOUT (void*)1
 #define STDERR (void*)2
@@ -226,8 +226,17 @@
         spinlock_t signalLock;
         // The heap range's bounds. heapEnd is the next address the range
         // hands out and only ever advances; task_va_reserve is the one door
-        // that moves it, so two threads never claim one range.
+        // that moves it, so two threads never claim one range. The range
+        // holds the task's mappings and its threads' stacks: stackBytes and
+        // stackRanges count the ranges taken for stacks, guards included (a
+        // range taken for a thread then refused still counts: it is never
+        // handed out again).
         uint64_t heapStart, heapEnd;
+        uint64_t stackBytes, stackRanges;
+        // Its threads handed to the reap list and not yet released
+        // (reaplist.h): a hint read without the list's lock, which
+        // syscall_thread waits on (thread_reap.c).
+        reap_owner_t reaps;
         // The task's planes' pairs of stores, in use or kept (gui/plane.c,
         // the GUI's own type): written only by the GUI under kGuiLock, given
         // back at the task's death with its windows.
@@ -339,7 +348,8 @@
         // last /proc read left the count, written under mapLock.
         uint64_t tableAnswers, tableAnswersRead;
         // THE TASK'S PAGE LOCK: what serializes writes to this task's leaf
-        // page-table entries inside its mappings. A fault installs a page
+        // page-table entries inside its mappings and its threads' stacks
+        // (task_stack_map and task_stack_unmap, a page a hold). A fault installs a page
         // under it, after rechecking that its mapping is still listed;
         // unmap, having delisted the mapping first, walks and removes each
         // page under it. So a page is either installed before unmap's walk
@@ -382,7 +392,6 @@
 		// Set in task_initialize, cleared at task_create's every exit.
 		uint64_t *pta_buildingChildPml4v;
 		struct arena *pta_buildingChildArena;
-		uintptr_t taskMemoryNextVirt;  // Next available virtual address for task-specific allocations
 		dlist_t* shared_objects;       // shared_object_t* this task depends on (dynamic linking, bookkeeping only — see shared_object.c)
 		// The per-task handle table (handle.h; handle_blocks.h says how a
 		// number finds its entry). Handles 0/1/2 are stdin/stdout/stderr and
@@ -515,12 +524,26 @@
 	// unburied. Returns how many were written.
 	uint32_t task_lineage(task_t* task, uint64_t* out, uint32_t cap);
 	int task_reap_eligible_zombies(size_t max_to_reap);
-	void* task_alloc_aligned(task_t* task, size_t size);
-	void* task_alloc_guarded_stack(task_t* task, size_t stackSize, bool isRing3);
-	// The same, for a stack the caller can do without: NULL when the frames
-	// are not there, where task_alloc_guarded_stack panics (SCRIPT_STACK.md).
-	void* task_try_guarded_stack(task_t* task, size_t stackSize, bool isRing3);
-	uintptr_t task_reserve_task_virt(task_t* task, size_t size);
+	// A stack, in three steps (task.c § Stacks), so that a thread that cannot
+	// be made leaves nothing mapped behind it.
+	// The frames for `usable` bytes (whole pages): their physical address, or
+	// 0 with `mayRefuse` when they are not there (without it, a panic).
+	uintptr_t task_stack_frames(size_t usable, bool mayRefuse);
+	// A range for the stack and its guards, from task_va_reserve (from
+	// ktask_reserve_virt for ktask), counted in the task's stack totals.
+	// `base` is the stack's lowest usable byte. False, with nothing taken,
+	// when the range is out of addresses.
+	bool task_stack_reserve(task_t* task, size_t usable, uintptr_t* base);
+	// The frames mapped at `base`, under the task's page lock.
+	void task_stack_map(task_t* task, uintptr_t base, uintptr_t phys, size_t usable, bool ring3);
+	// Out of the task's tables, under its page lock. The frames stay
+	// allocated: the caller frees them once no CPU can hold a translation.
+	void task_stack_unmap(task_t* task, uintptr_t base, size_t usable);
+	// ktask's lower-half addresses: ktask runs on kKernelPML4, which has no
+	// heap range of its own. Whole pages below TASK_ARGV_VIRT, never handed
+	// out twice; 0 for any other task, a size that is not whole pages, or a
+	// range that would reach TASK_ARGV_VIRT.
+	uintptr_t ktask_reserve_virt(task_t* task, size_t size);
 
 	// OR a signal bit into EVERY thread this task owns — unless the signal's
 	// default is IGNORE and the task has no handler for it, in which case

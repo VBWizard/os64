@@ -2,6 +2,7 @@
 #define SMP_CORE_H
 #include "smp.h"
 #include "msr.h"
+#include "shootdown.h"
 
 #define TIMER_SYNC_ITERATIONS 3
 #define IA32_GS_BASE 0xC0000101 
@@ -99,6 +100,25 @@
 // carries the argument — and IRQ0's priority stops mattering at all.
 #define IRQ0_APIC_VECTOR 0x20
 void mpAcctSettleAll(void);
+// THE WAITED INVALIDATION (THREAD_STACKS.md § The waited invalidation): asks
+// every other running CPU to flush its translations (IPI_INVALIDATE_TLB_VECTOR,
+// a CR3 reload), flushes its own, and returns only once every one of them has
+// said it flushed after this call began (shootdown.h's rounds). So a caller
+// that changed page tables before the call may free what they named once it
+// returns. It never gives up: a CPU that has not answered after
+// SHOOTDOWN_LATE_US is logged once under DEBUG_EXCEPTIONS and counted, and
+// the wait goes on. /sys/memory/shootdown has the counts.
+//
+// THREAD CONTEXT ONLY, WITH INTERRUPTS ON. An answer arrives only by its
+// CPU taking the IPI, so a CPU that waits with interrupts off can deadlock
+// against another waiting for it. Interrupts on also proves the caller
+// holds no irqsave lock, signalLock, pageLock and mapLock among them, on
+// this CPU. It panics, by name, if called with interrupts off. A syscall
+// runs with them off (SFMASK), so no syscall path may call it.
+#define SHOOTDOWN_LATE_US 100000
+void tlb_shootdown_wait(void);
+// The counts /sys/memory/shootdown prints; the read starts their window again.
+void tlb_shootdown_read(shootdown_counts_t *out);
 // The hlt-wait accounting bookends (smp.h's acctCurrentHalted doctrine):
 // Begin under cli right before sti;hlt — settles the caller's real work,
 // then routes the coming nap to this core's idle thread. Interrupt entry

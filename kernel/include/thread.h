@@ -6,6 +6,7 @@
 #include <stddef.h>
 #include "signals.h"
 #include "fpu.h"
+#include "reaplist.h"
 
 #define THREAD_STACK_GUARD_PAGE_COUNT	4			//Number of pages of unmapped memory assigned to each side of a stack as a guard
 
@@ -107,6 +108,12 @@ typedef struct s_thread
 	eThreadState threadState;
 	uint64_t totalRunTicks, ticksSinceLastInterrupted, prioritizedTicksInRunnable;
 	uint64_t lastRunStartTicks, lastRunEndTicks, totalRunningTicks;
+	// The two stacks (task.c § Stacks): V is the lowest usable byte in the
+	// task's address space, P the physical address behind it (one frame run
+	// per stack, guards excluded), Size the usable bytes. V is 0 once the
+	// stack is released (the reap stores it first) and for a stack never
+	// made (a kernel thread's ring-3 one); readers that race the reap load
+	// V once.
 	uintptr_t esp0BaseV, esp0BaseP, esp0Size, esp3BaseV, esp3BaseP, esp3Size;
 	void* ownerTask;
 	struct s_thread *forkedThread;
@@ -149,11 +156,18 @@ typedef struct s_thread
 	// reads BLOCK while holding the buffer, and a sleeping thread's scratch
 	// must not be handed to whoever runs next on the core. Opaque here — the
 	// layout ([params][data]) is syscall.c's business (syscall_io_scratch()).
-	// Freed by task_destroy since 2026-08-06 (the undertaker buries it with
-	// the thread). FUTURE FORK WARNING: if fork ever copies
+	// Freed with the thread's stacks: by the reap for a thread that ended by
+	// thread_exit, else by task_destroy. FUTURE FORK WARNING: if fork ever copies
 	// thread_t wholesale, NULL this in the child or two threads will share
 	// one bounce buffer.
 	void *syscallIOScratch;
+	// Its place among the stacks to release (reaplist.h; THREAD_STACKS.md
+	// § The reap). syscall_thread_exit sets reapOnExit; the pass that files
+	// the thread ZOMBIE then hands it to the list, and kworker releases its
+	// stacks and scratch. A thread that ends with its task is never handed:
+	// its stacks go at burial. `reap` is written under kReapLock.
+	reap_node_t reap;
+	bool reapOnExit;
 	// The core this thread was most recently DISPATCHED on — stamped by
 	// scheduler_load_thread, one store, no locking (single writer: the
 	// dispatching core). This is "where did it last run", not affinity
@@ -230,8 +244,11 @@ _Static_assert(offsetof(thread_t, fpuState) % FPU_IMAGE_ALIGN == 0,
 // (THREAD_USER_STACK_SIZE): a task's main thread takes its PT_GNU_STACK
 // size, a spawned thread 0. The size it got is the thread's esp3Size, which
 // every reader of the stack's bounds uses.
-thread_t* createThread(void* parentTask, bool kernelThread, uint64_t userStack);
-uintptr_t thread_allocate_guarded_stack_memory(uintptr_t pml4, uintptr_t *virtualStart, uint64_t requestedLength, bool isRing3Stack);
+// `mayRefuse`: NULL, with nothing taken, when the memory for the thread or
+// its stacks cannot be had (a thread a program asked for). Without it an
+// allocation that fails panics, as a task's first thread always has:
+// nothing unwinds a half-built task.
+thread_t* createThread(void* parentTask, bool kernelThread, uint64_t userStack, bool mayRefuse);
 // Return a thread ID to the pool (thread.c owns the TID bitmap). Called by
 // the undertaker (task_destroy) — a buried thread's ID is reusable.
 bool mark_TID_unused(uint32_t tid);
