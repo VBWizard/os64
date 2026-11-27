@@ -13,9 +13,11 @@
 //      while that sibling ends and the kernel reaps its stack.
 //
 // Passing: every call answered a byte count or -2, and the machine lives.
-// It prints how many copies the kernel recovered (/proc/self/status's
-// copy_recoveries) and how many calls answered -2, so a run says whether it
-// reached the net at all; a kernel without the recovery panics here.
+// It prints, per door, how many calls answered -2 and how many copies the
+// kernel recovered (/proc/self/status's copy_recoveries, read before, between
+// and after the doors). A -2 can also be the check refusing memory already
+// gone, with no fault at all, so the recoveries are what say a door reached
+// the net; a kernel without the recovery panics here.
 //
 //   copyrace [rounds]      (default 2000 for door 1, a quarter for door 2)
 
@@ -177,15 +179,19 @@ int main(int argc, char **argv)
         return (int)(BADGE | 1);
     }
     s_file = (int32_t)f;
+    uint64_t rec0 = recoveries();
     if (door_unmap(rounds) != 0)
         return (int)(BADGE | 2);
     long bad1 = s_bad, ok1 = s_ok;
+    uint64_t rec1 = recoveries();
     if (door_stack(rounds / 4) != 0)
         return (int)(BADGE | 3);
-    uint64_t rec = recoveries();
-    os64_printf("copyrace: door 1 (unmap): %ld calls answered a count, %ld refused; door 2 (a reaped stack): "
-                "%ld answered, %ld refused; %lu copies recovered by the kernel; %ld other answers\n",
-                ok1, bad1, s_ok - ok1, s_bad - bad1, (unsigned long)rec, s_other);
+    uint64_t rec2 = recoveries();
+    os64_printf("copyrace: door 1 (unmap): %ld calls answered a count, %ld refused, %lu copies recovered\n",
+                ok1, bad1, (unsigned long)(rec1 - rec0));
+    os64_printf("copyrace: door 2 (a reaped stack): %ld answered a count, %ld refused, %lu copies recovered\n",
+                s_ok - ok1, s_bad - bad1, (unsigned long)(rec2 - rec1));
+    os64_printf("copyrace: %ld other answers\n", s_other);
     if (s_other != 0) {
         os64_printf("copyrace: FAIL - a call answered something other than a count or -2\n");
         return (int)(BADGE | 4);

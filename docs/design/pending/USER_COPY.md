@@ -2,7 +2,7 @@
 
 The design behind `kernel/src/user_copy.S`, `copy_fault.c`, `user_copy.c` and the page-fault handler's two recovery points (2026-11-27; Fable's brief `BRIEF_USER_COPY_FIXUP.md` and the design state approved the same day). It retires the DEBTS row "A copy can outlive the check that allowed it".
 
-**The check stays the gate; the recovery is the net under it.** `user_range_accessible` (syscall.c) refuses any pointer aimed at the kernel's memory, at a supervisor page or at page zero, and it is why a copy is only ever given a user address. What this adds catches only the race the check cannot see: a page that was there at the check and is gone at the copy. The copy then answers "not copied" instead of panicking. A copy that faults on an address the check would have refused stays a panic, because that is a kernel bug, the check bypassed.
+**The check stays the gate; the recovery is the net under it.** `user_range_accessible` (syscall.c) refuses any pointer aimed at the kernel's memory, at a supervisor page or at page zero, and it is why a copy is only ever given a user address. What this adds catches only the race the check cannot see: a page that was there at the check and is gone at the copy. The copy then answers "not copied" instead of panicking. A copy that faults on the kernel's half, on page zero, or on its kernel operand (a copy that ran off its kernel buffer) stays a panic, because each is a kernel bug. The recovery does not re-run the check: a kernel bug that handed a copy a supervisor page as its user pointer, skipping the check, would be answered -2 if that page faulted. That is why every helper checks before it copies.
 
 ## The race
 
@@ -34,16 +34,17 @@ Each routine moves its bytes the way the kernel's own `memcpy` does above its sh
 
 ## Which faults recover
 
-A page fault resumes at a copy's failure exit when ALL of these hold (`copy_fault_resume`, pure, `tools/test_copy_fault_host.sh` beside a model, `tools/test_copy_fault_mutants.py`):
+A page fault resumes at a copy's failure exit when ALL of these hold (`copy_fault_resume`, pure; `tools/test_copy_fault_host.sh` runs it beside a model, and `tools/test_copy_fault_mutants.py` breaks each condition):
 
 1. **Ring 0:** the error code's U/S bit is clear.
 2. **No reserved-bit fault.**
-3. **The faulting address is one the check could have passed:** `PAGE_SIZE <= cr2 < USER_CANONICAL_MAX`.
+3. **The faulting address is in the user range:** `PAGE_SIZE <= cr2 < USER_CANONICAL_MAX`.
 4. **The faulting RIP is a resume-table instruction.**
-5. **The handler would otherwise panic** (asked only on those exits).
-6. **The handler was given the fault's own frame**, which the unified exception path always does. The old path (`EXCOLD`) gives none, and every fatal fault there panics as before.
+5. **The fault is on the move's user operand:** `cr2` lies within one step of the register that holds the user pointer (RSI for a copy in, RDI for a copy out; the table names it and the step, 1 or 8 bytes). The architecture reports a string move's fault at the element that faulted, with RSI and RDI pointing at it. This test is what keeps a kernel bug a panic: a kernel buffer is often a local on a kernel stack, and kernel stacks live in the user range too. A copy that ran off one into its guard page faults on the kernel operand, beside RDI or RSI but far from the user pointer.
+6. **The handler would otherwise panic** (asked only on those exits).
+7. **The handler was given the fault's own frame**, which the unified exception path always does. The old path (`EXCOLD`) gives none, and every fatal fault there panics as before.
 
-**Condition 5's exits:**
+**Condition 6's exits:**
 - the no-mapping exit, which is door 1's unmapped region and door 2's stack (no mapping covers a stack);
 - inside a mapping: a protection violation on a present page, a shared-object page or backing page that cannot be resolved (no memory, a failed read), and the two CoW failures. `page_fault_in_mapping` returns those as reasons for a ring-0 fault, as it always did for ring 3, and the caller releases the mapping's hold before it recovers or panics.
 
@@ -51,7 +52,7 @@ A page fault resumes at a copy's failure exit when ALL of these hold (`copy_faul
 
 **A fault the handler resolves** (a page the mapping covers but has not populated, which a copy may meet) resolves exactly as before, and the copy carries on.
 
-**The fault's own frame.** The handler edits the frame the fault pushed, passed down from `exception_dispatch`, never the per-CPU slot `exception_current_context()`. A resolve that reads a file page can park and resume on another CPU, and that CPU's slot names whatever it was last doing. The frame lives on the faulting thread's kernel stack and moves with it. A caught SIGSEGV's delivery takes the same frame for the same reason.
+**The fault's own frame.** The handler edits the frame the fault pushed, passed down from `exception_dispatch`, and a fatal fault's report (`page_fault_panic`, `user_fault_kill`) reads it. A resolve that reads a file page can park and resume on another CPU, and a per-CPU slot would name whatever that CPU was last doing. The frame lives on the faulting thread's kernel stack and moves with it. A caught SIGSEGV's delivery takes the same frame for the same reason. The per-CPU slot (`kCurrentCtx`) is left for the debugger, and the dispatcher restores it on the way out only if it still names this fault, so a fault that moved does not overwrite the slot of the CPU it left.
 
 No ring-3 call can make a file-backed mapping (an ELF segment or a shared object) go away while a fault parks on it, because `unmap` takes only `map`'s anonymous regions. So no fixture can make a parked resolve fail under a copy, and passing the frame makes it right by construction.
 
@@ -93,7 +94,7 @@ Outside a program racing its own memory, as `/tests/copyrace` does on purpose, n
 
 ## The proof
 
-- **`/tests/copyrace`** races both doors for thousands of rounds and passes when every call answered a count or -2 and the machine lived. It prints the kernel's recovery count; above zero is what shows it reached the net.
+- **`/tests/copyrace`** races both doors for thousands of rounds and passes when every call answered a count or -2 and the machine lived. It prints each door's recoveries (the kernel's count read before, between and after); a door's count above zero is what shows that door reached the net. A -2 alone does not: the check also refuses memory already gone, with no fault.
 - **A kernel with the recovery off panics on it in QEMU.**
 - **The pure rule** has its host test and mutants.
 - **The whole ring-3 suite (`testrun`)** passes, since every syscall's copy changed.
