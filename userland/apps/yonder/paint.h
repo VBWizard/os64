@@ -306,7 +306,8 @@ bool yonder_paint_from(const flow_tree_t *tree, os64_gui_rect_t viewport, os64_g
 // element starts at the cover; one whose cover is outside it is the
 // backdrop alone, and answers false. An element with no box (display none)
 // leaves the backdrop. NULL clears it; another document's tree is painted
-// as ever.
+// as ever. The element is read at every paint, so the caller keeps it
+// alive while it is named (yonder holds it: fs_name).
 void yonder_paint_set_top(const os64_html_node_t *element);
 
 // How many groups the painter has open now: read by a verb as it draws, so
