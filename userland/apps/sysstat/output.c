@@ -167,7 +167,9 @@ static void json_task(sysstat_output_t *out, const os64_monitor_t *m,
                 if (seen++) emit(out, ",");
                 split = (os64_monitor_split_t){0};
                 os64_monitor_thread_split(m, th->info.pid, th->info.tid, &split);
-                emit(out, "{\"thread_id\":%lu,\"core_id\":%u,\"state\":", th->info.tid, th->info.core);
+                emit(out, "{\"thread_id\":%lu,\"name\":", th->info.tid);
+                string(out, os64_monitor_thread_label(m, th->info.pid, th->info.tid, t->info.name), true);
+                emit(out, ",\"core_id\":%u,\"state\":", th->info.core);
                 string(out, os64_proc_state_name(th->info.state), true);
                 emit(out, ","); json_usage(out, &th->cpu, &split); emit(out, "}");
             }
@@ -268,7 +270,9 @@ static void text_task(sysstat_output_t *out, const os64_monitor_t *m,
         seen++;
         split = (os64_monitor_split_t){0};
         os64_monitor_thread_split(m, th->info.pid, th->info.tid, &split);
-        emit(out, "    thread %lu cpu=", th->info.tid); number(out, th->cpu.valid, th->cpu.percent, false);
+        emit(out, "    thread %lu ", th->info.tid);
+        string(out, os64_monitor_thread_label(m, th->info.pid, th->info.tid, t->info.name), false);
+        emit(out, " cpu="); number(out, th->cpu.valid, th->cpu.percent, false);
         emit(out, "%% user="); number(out, split.user.valid, split.user.percent, false);
         emit(out, "%% system="); number(out, split.system.valid, split.system.percent, false);
         emit(out, "%% core=%u state=%s\n", th->info.core, os64_proc_state_name(th->info.state));

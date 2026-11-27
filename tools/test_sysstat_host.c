@@ -122,6 +122,12 @@ bool os64_monitor_task_split(const os64_monitor_t *m,uint64_t id,os64_monitor_sp
     *out=(os64_monitor_split_t){.idle=id==1,.user={.percent=100,.valid=!no_split},.system={.percent=50,.valid=!no_split}};
     return true;
 }
+// Thread 7 is named, thread 8 is not: its label is the task's own name.
+const char *os64_monitor_thread_label(const os64_monitor_t *m,uint64_t pid,uint64_t tid,const char *task_name)
+{
+    assert(m&&pid==42&&(tid==7||tid==8));
+    return tid==7 ? "decode" : task_name;
+}
 bool os64_monitor_thread_split(const os64_monitor_t *m,uint64_t pid,uint64_t tid,os64_monitor_split_t *out)
 {
     assert(m&&pid==42&&(tid==7||tid==8));
@@ -202,7 +208,8 @@ static void commands(const char *directory)
     setup();write_delay=1500000;assert(!run(simple));save(directory,"slow_output");
     setup();char *text[]={"sysstat","-n","2","-c","--tid","42","--top","3",NULL};
     strcpy(tasks[0].info.name,"bad\033[2J\nname");
-    assert(!run(text)&&!strchr(stdout_text,27)&&strstr(stdout_text,"Summary: 2/2")&&strstr(stdout_text,"thread 7"));
+    assert(!run(text)&&!strchr(stdout_text,27)&&strstr(stdout_text,"Summary: 2/2")&&
+           strstr(stdout_text,"thread 7 decode cpu=")&&strstr(stdout_text,"thread 8 bad?[2J?name cpu="));
     setup();char *one[]={"sysstat","-n","1","-i","250","-j",NULL};
     assert(!run(one)&&calls==2&&sleeps==1);save(directory,"one");
     setup();partial=true;assert(!run(one));save(directory,"unavailable");
