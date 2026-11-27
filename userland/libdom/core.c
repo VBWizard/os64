@@ -1556,6 +1556,7 @@ static void binding_drain(os64_dom_t *dom)
     d_performance_drain(dom);
     /* The media sessions are closed with the host, as the requests below. */
     d_media_elements_drain(dom);
+    d_fullscreen_drain(dom);
     d_media_session_drain(dom);
     /* The requests out are cancelled with the host and forgotten. */
     d_fetch_drain(dom);

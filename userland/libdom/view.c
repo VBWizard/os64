@@ -1447,6 +1447,10 @@ bool os64_dom_view_step(os64_dom_t *dom, os64_js_outcome_t *outcome)
             return true;
         }
     }
+    // The fullscreen steps: one queued fullscreenchange or fullscreenerror
+    // (or a promise settled alone) a call (fullscreen.c).
+    if (d_fullscreen_step(dom, outcome))
+        return true;
     // Every list is judged again when what a query reads moved since the
     // lists were last judged; each one whose answer moved is owed an event,
     // and they are dispatched one a call, in the order the page made them.

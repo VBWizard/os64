@@ -30,6 +30,7 @@
  * may not call out with the tree mid-change. */
 
 #include "internal.h"
+#include "os64/fmt.h"
 #include <dom/fullscreen.h>
 
 typedef struct {
@@ -313,9 +314,10 @@ void d_fullscreen_drain(os64_dom_t *dom)
     promise_release(dom, &f->leave);
     JS_FreeValueRT(dom->engine, f->element_wrapper);
     JS_FreeValueRT(dom->engine, f->pending_wrapper);
-    f->element_wrapper = f->pending_wrapper = JS_UNDEFINED;
-    f->element = f->pending = NULL;
-    f->has_provider = false;
+    /* The record goes with the drain, its mutation consumer inside it, as
+     * media's does (the listener is not called past the drain). */
+    d_free(dom, f);
+    dom->fullscreen = NULL;
 }
 
 /* ── The members ────────────────────────────────────────────────────── */
