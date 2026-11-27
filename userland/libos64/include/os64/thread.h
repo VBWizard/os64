@@ -34,6 +34,9 @@
 #include "os64/thread_name.h"   // OS64_THREAD_NAME_MAX, os64_thread_name_valid
 
 // Start a thread running fn(arg). Returns a HANDLE (>= 0), or negative.
+// Negative means no thread was made and fn never runs: the kernel reserves
+// the handle before it makes the thread, so a full handle table refuses
+// the start rather than running it unanswered.
 int64_t os64_thread(int64_t (*fn)(void *), void *arg);
 
 // The same, naming the thread for its job ("decode", "worker-03"): its
