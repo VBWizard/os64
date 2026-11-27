@@ -342,6 +342,7 @@ bool f_boxless(const flow_env_t *env, const os64_html_node_t *n);
 // plays the page's sounds (flow_env_t.media). It is replaced (f_replaced),
 // its size the face's (replaced_size).
 bool f_audio_controls(const flow_env_t *env, const os64_html_node_t *n);
+bool f_shapeless(const flow_env_t *env, const os64_html_node_t *n);
 // Whether pass 2 draws anything inside element `n`, styled `s`: nothing
 // inside a boxless element, nor inside a replaced one unless it is laid
 // out through `display: contents` (a button's, whose content then flows
