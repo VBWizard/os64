@@ -3579,6 +3579,32 @@ static void select_size(const os64_page_control_t *c, const os64_html_node_t *no
         *w = 48;
 }
 
+static FormKind control_kind(const os64_page_control_t *c);
+static void button_caption(const os64_page_control_t *c, char *out, size_t cap);
+
+// A button's box (a `<button>` the face draws, a submit, reset or button
+// input): as wide as the caption its widget shows (button_caption), as
+// libui measures and insets it for the paint (os64_ui_button_width), in
+// the controls' face (controls_face_at); as tall as that face's row and
+// the three pixels a side other browsers give a button (a pixel of padding,
+// two of border). False when the caption cannot be measured: libflow's
+// guess then stands, and the paint, which cannot place it either, draws
+// the face without it. In CSS pixels, rounded up, as select_size answers.
+#define BUTTON_FRAME_Y 3
+static bool button_size(const os64_page_control_t *c, int32_t *w, int32_t *h)
+{
+    char caption[512];
+    button_caption(c, caption, sizeof(caption));
+    int32_t dw = 0;
+    if (os64_ui_button_width(&g.ui, OS64_UI_FONT_APP, caption, os64_strlen(caption), &dw) != OS64_FONT_OK)
+        return false;
+    int64_t zoom = s_env.zoom > 0 ? s_env.zoom : 1000;
+    int64_t dh = (int64_t)os64_ui_font_row_height(&g.ui, OS64_UI_FONT_APP) + 2 * BUTTON_FRAME_Y;
+    *w = clamp32(((int64_t)dw * 1000 + zoom - 1) / zoom);
+    *h = clamp32((dh * 1000 + zoom - 1) / zoom);
+    return true;
+}
+
 // The <video>s yonder draws (the Videos section, below, says how).
 #define VIDEOS_MAX 32
 #define VIDEO_CONVERT_MAX 4096u
@@ -3759,6 +3785,8 @@ static bool replaced_size(void *ctx, const os64_html_node_t *node, int32_t *w, i
         select_size(c, node, w, h);
         return true;
     }
+    if (c != NULL && control_kind(c) == FW_BUTTON)
+        return button_size(c, w, h);
     // Resolve the hidden model's current URL rather than the shown image map.
     // Even a picture past the kept-memory limit supplies its natural size.
     int32_t i = model != NULL ? os64_page_image_for(model, node) : -1;
