@@ -54,6 +54,10 @@ mutants = [
     ('the-top-layer-never-applies', PAINT, '    if (top_applies(tree)) {', '    if (0 && top_applies(tree)) {'),
     ('no-backdrop', PAINT, '        if (!cover_inside)\n            fill(', '        if (0)\n            fill('),
     ('every-box-painted', PAINT, '    if (in_top(t, b))\n        paint_box(t->p, b);', '    paint_box(t->p, b);'),
+    ('culled-through-an-ancestors-matrix', PAINT, 'group_inside(t->p, b) : FLOW_INSIDE_ALL;',
+     'group_inside(t->p, b) : FLOW_INSIDE_VIEW;'),
+    # A video in the element is a cover whatever groups are round the element.
+    ('an-outside-group-unseats-the-cover', YONDER, '        laid += inside;', '        laid++;'),
     ('a-cover-inside-not-seen', PAINT, '        bool cover_inside = cover != NULL && t.top != NULL && in_top(&t, cover);',
      '        bool cover_inside = false;'),
     # The pointer: kept inside the element.
@@ -87,9 +91,10 @@ mutants = [
 #   full screen is the player widget's slice.
 # - the walk begun at the root rather than at the element: in_top hands
 #   over the same boxes, so the pixels are the same and only the time is not.
-# - the group verbs' in_top guards (top_open, top_close, top_inside): an
-#   open and its close come for the same box, so a guard broken on one
-#   pairs nothing new; the container case has no group outside the element.
+# - top_open's and top_close's in_top guards, one at a time: each alone
+#   leaves the painter's group opens and closes unpaired, a fault of its
+#   own rather than the rule they keep together (top_inside's answer for
+#   a group outside the element is run, above).
 # - flow_box_covered_within's early answer for a box outside `top`: the hit
 #   kept inside `top` gives the same answer wherever the element covers the
 #   view, which its user-agent rules make it do.

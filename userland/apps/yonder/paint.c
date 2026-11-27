@@ -3174,10 +3174,14 @@ static void top_outline(void *ctx, const flow_box_t *b)
         paint_outline(t->p, b);
 }
 
+// A group round the element is not laid (top_open), and the element's boxes
+// are placed in the view's own coordinates whatever its matrix, so nothing
+// inside it is culled through that matrix: a transform that moves the
+// group far from the view would otherwise cull the element it never moves.
 static flow_inside_t top_inside(void *ctx, const flow_box_t *b)
 {
     TopWalk *t = ctx;
-    return in_top(t, b) ? group_inside(t->p, b) : FLOW_INSIDE_VIEW;
+    return in_top(t, b) ? group_inside(t->p, b) : FLOW_INSIDE_ALL;
 }
 
 void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, os64_gui_rect_t whole,

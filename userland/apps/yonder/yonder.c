@@ -5013,7 +5013,7 @@ uint32_t plane_blend(uint32_t content, uint32_t picture);
 
 // `--paint-check[=N]`: every Nth covered paint (10 unless said) is painted
 // the ordinary way too and the two compared to the pixel, with the groups
-// open at the cover's draw held to flow_paint_path's (none, for a cover);
+// open at the cover's draw held to cover_groups' (none, for a cover);
 // the record says how many were compared, the first that differed and how
 // many could not be compared (view_paint_parts).
 static uint32_t s_paint_check, s_paint_checked;
@@ -22849,14 +22849,36 @@ static void timed_pixels(void *ctx, os64_gui_rect_t rect, const uint32_t *argb)
 // a paint: in document coordinates, the pixels its plain copy writes of
 // the frame in hand — the fitted picture met with its content box and its
 // clip, as pane_video cuts them — when that frame is converted at the
-// fitted size, the walk opens no group around its draw (flow_paint_path),
+// fitted size, the walk opens no group around its draw (cover_groups),
 // the page draws videos at all (modern), the box is drawn, no line's
 // ellipsis cuts it, and covers are on (`--cover=off`). False otherwise.
+//
+// The groups the walk opens round `b`'s draw: flow_paint_path's, less those
+// round the full-screen element, which the top layer's walk does not lay
+// (paint.c's top_open). A path past what is kept here counts as more than
+// none.
+#define COVER_PATH_MAX 32
+static int32_t cover_groups(const flow_box_t *b)
+{
+    const flow_box_t *path[COVER_PATH_MAX];
+    int32_t n = flow_paint_path(g.page.tree, b, path, COVER_PATH_MAX);
+    const flow_box_t *top = s_fs.active && s_fs.top != NULL ? flow_box_for(g.page.tree, s_fs.top) : NULL;
+    if (n <= 0 || top == NULL || n > COVER_PATH_MAX)
+        return n;
+    int32_t laid = 0;
+    for (int32_t i = 0; i < n; i++) {
+        bool inside = false;
+        for (const flow_box_t *a = path[i]; a != NULL && !inside; a = a->parent)
+            inside = a == top;
+        laid += inside;
+    }
+    return laid;
+}
+
 static bool video_cover_rect(const Video *v, const flow_box_t *b, os64_gui_rect_t *out)
 {
     if (!s_covers || !g.page.modern || g.page.tree == NULL || b == NULL || !b->replaced || b->unpainted ||
-        b->style->visibility != FLOW_VISIBLE || v->width == 0 || v->height == 0 ||
-        flow_paint_path(g.page.tree, b, NULL, 0) != 0)
+        b->style->visibility != FLOW_VISIBLE || v->width == 0 || v->height == 0 || cover_groups(b) != 0)
         return false;
     flow_cut_memo_t cuts;
     flow_cut_memo_open(&cuts, g.page.tree);

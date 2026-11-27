@@ -992,8 +992,10 @@ static void plane_cases(void)
 
 /* A CONTAINER full screen (the web's common shape: a player's div, not its
  * video), holding the video and the page's own control bar over it, inside
- * a transformed wrapper that clips (which the top layer leaves behind), with
- * a box of the page outside it stacked over everything. The top layer's
+ * a wrapper that clips and is moved far off the view and turned (which the
+ * top layer leaves behind: its matrix neither culls the element's boxes
+ * nor keeps the video off its plane), with a box of the page outside it
+ * stacked over everything. The top layer's
  * paint is the same paint the planes ride on (paint.h's top layer): the
  * video placed with its hole, the bar an overlay in the edit, --plane-check
  * finding nothing wrong, the box outside not painted, hit or uncovered for
@@ -1004,7 +1006,7 @@ static void plane_fullscreen_container(void)
 {
     Video *v = &s_videos[0];
     plane_page("<!doctype html><style>body{margin:0;background:#123}"
-               "#wrap{transform:translateX(5px);overflow:hidden;width:300px;height:200px}"
+               "#wrap{transform:translateX(10000px) rotate(10deg);overflow:hidden;width:300px;height:200px}"
                "#c{position:relative;width:400px;height:300px}"
                "#v{position:absolute;left:40px;top:40px;width:320px;height:180px;background:#456}"
                "#bar{position:absolute;left:40px;top:180px;width:320px;height:40px;background:#0a0}"
