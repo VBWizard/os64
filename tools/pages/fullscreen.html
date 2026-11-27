@@ -54,7 +54,8 @@
   document.addEventListener('fullscreenchange', e => {
     note('fullscreenchange at ' + where(e) + '; fullscreenElement ' +
          (document.fullscreenElement ? '#' + document.fullscreenElement.id : 'null'));
-    document.getElementById('state').textContent = document.fullscreenElement ? 'full screen' : 'windowed';
+    const state = document.getElementById('state');   // gone with the container once it is removed
+    if (state) state.textContent = document.fullscreenElement ? 'full screen' : 'windowed';
   });
   document.addEventListener('fullscreenerror', e => note('fullscreenerror at ' + where(e)));
   document.getElementById('go').onclick = () =>
