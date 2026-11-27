@@ -59,16 +59,22 @@ No ring-3 call can make a file-backed mapping (an ELF segment or a shared object
 
 ## What the program sees
 
-The call answers `BAD_USER_DATA` (-2), as it would for a buffer the check refused:
+The call answers what it answers for a buffer the check refused: `BAD_USER_DATA` (-2) for most calls, `GUI_ERR_BAD_ARGS` for the GUI's, `OS64_MOUNT_BAD_ARGS` for mount's.
 - A chunked write answers the bytes it wrote before the failing chunk, if any.
 - A copy out stops where the page went: what had been copied stays where it landed.
 - A copy in leaves a kernel buffer partly written, which the call does not use.
 
 **A program that takes away its own buffer during a call loses what the call was handing it:**
 - the bytes a read took from a pipe, a socket or the keyboard;
-- the connection an accept took;
+- the connection an accept took (the new handle is closed);
+- a new pipe (both ends are closed);
 - the status a wait reaped;
-- the event a GUI wait took.
+- the event a GUI wait took;
+- the log entries a log read took.
+
+Three calls give it back instead, because each already had a door for an undelivered answer: the audio tap's records, a media key, and a bell's ring.
+
+The hand re-read of every call site (2026-11-27, against "acts on nothing after false") found none that acts on what it failed to copy. sigreturn's two reads each return before any state is touched, the second before the FPU image is taken. spawn's measure pass and its marshal both fail before a task exists, and the marshal's failure frees the one block it allocated.
 
 ## Measured strings
 
