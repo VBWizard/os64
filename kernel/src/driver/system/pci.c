@@ -634,13 +634,13 @@ pci_msix_result_t pci_msix_enable_one(uint8_t bus, uint8_t device, uint8_t funct
 
 	// The table at its upper-half alias. A page the driver has already
 	// mapped there (the table sharing a BAR with its registers) is mapped
-	// again to the same frame, which changes nothing.
+	// again to the same frame with non-executable device-memory permissions.
 	uint64_t table = base + r.offset;
 	uint64_t first = table & ~(uint64_t)(PAGE_SIZE - 1);
 	uint64_t bytes = (table - first) + (uint64_t)r.entries * 16;
 	paging_map_pages((pt_entry_t *)kKernelPML4v, kHHDMOffset + first, first,
 	                 (bytes + PAGE_SIZE - 1) / PAGE_SIZE,
-	                 PAGE_PRESENT | PAGE_WRITE | PAGE_PCD);
+	                 PAGE_PRESENT | PAGE_WRITE | PAGE_PCD | PAGE_NO_EXECUTE);
 	volatile uint32_t *entry = (volatile uint32_t *)(kHHDMOffset + table);
 
 	// Enabled with everything masked while the table is written: enabling

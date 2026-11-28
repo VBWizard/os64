@@ -53,6 +53,7 @@
 #include "driver/net/virtio_net.h"
 #include "driver/net/e1000.h"
 #include "driver/net/r8125.h"
+#include "driver/net/ax210.h"
 #include "driver/net/ethernet.h"   // init_net_stack — the protocol stack over the seam
 #include "driver/net/loopback.h"   // init_loopback — lo, which every networked boot has
 #include "knet.h"                  // the network drainer, minted beside kworker
@@ -396,6 +397,7 @@ void kernel_init()
 		// existed. (It registers nothing with the seam until it can actually
 		// transmit — see the closing comment in r8125_init_device.)
 		init_r8125();
+		ax210_probe();
 		// DHCP by default when a NIC exists and nobody typed IP= — the
 		// lease overwrites the static convention defaults when it lands
 		// (and if no server answers, those defaults keep working; the

@@ -195,6 +195,7 @@
 #include "conf.h"                       // /sys/conf — the config search path and its takers
 #include "driver/net/net_device.h"      // /sys/net — kNetDevices, the registered NICs
 #include "knet.h"                       // /sys/net/knet — the drainer's counters
+#include "driver/net/ax210.h"
 #include "driver/system/usb/xhci.h"
 #include "audio/audio.h"
 #include "audio/media_session.h"   // /sys/mediakeys
@@ -410,6 +411,7 @@ typedef enum
 	SYS_NODE_NETDHCP,    // /net/dhcp — how that address was come by
 	SYS_NODE_NETTCP,     // /net/tcp — the transport, connection by connection
 	SYS_NODE_NETKNET,    // /net/knet — the drainer thread and its doorbell (DOORBELL.md)
+	SYS_NODE_NETWIFI,    // /net/wifi — AX210 bring-up diagnostics
 	SYS_NODE_NETCARD,    // /net/<name> — one registered NIC
 	SYS_NODE_BTDIR,      // /bluetooth — on-demand discovery
 	SYS_NODE_BTSCAN,     // /bluetooth/scan — status, write "scan" to request
@@ -708,7 +710,8 @@ static void sys_parse_path(const char *path, sys_path_t *out)
 		bool is_dhcp = (strcmp(comp, "dhcp") == 0);
 		bool is_tcp  = (strcmp(comp, "tcp") == 0);
 		bool is_knet = (strcmp(comp, "knet") == 0);
-		if (is_ip || is_dhcp || is_tcp || is_knet)
+		bool is_wifi = (strcmp(comp, "wifi") == 0);
+		if (is_ip || is_dhcp || is_tcp || is_knet || is_wifi)
 		{
 			// Decide BEFORE the lookahead: synth_next_component writes into
 			// `comp`, so testing it afterwards would be reading the wrong
@@ -717,7 +720,8 @@ static void sys_parse_path(const char *path, sys_path_t *out)
 				return;   // nothing lives inside a file
 			out->type = is_ip ? SYS_NODE_NETIP
 			          : is_dhcp ? SYS_NODE_NETDHCP
-			          : is_knet ? SYS_NODE_NETKNET : SYS_NODE_NETTCP;
+			          : is_knet ? SYS_NODE_NETKNET
+			          : is_wifi ? SYS_NODE_NETWIFI : SYS_NODE_NETTCP;
 			return;
 		}
 		// A card is addressed by the name the DRIVER registered ("r81250"),
@@ -2901,7 +2905,7 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	         && sp.type != SYS_NODE_CACHEFILE && sp.type != SYS_NODE_LOGFILE
 	         && sp.type != SYS_NODE_GUIFILE && sp.type != SYS_NODE_NETIP
 	         && sp.type != SYS_NODE_NETDHCP && sp.type != SYS_NODE_NETTCP
-	         && sp.type != SYS_NODE_NETKNET
+	         && sp.type != SYS_NODE_NETKNET && sp.type != SYS_NODE_NETWIFI
 	         && sp.type != SYS_NODE_NETCARD
 	         && sp.type != SYS_NODE_SHLIBFILE && sp.type != SYS_NODE_CONFFILE
 	         && sp.type != SYS_NODE_USBFILE && sp.type != SYS_NODE_AUDIOFILE
@@ -2961,6 +2965,8 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 		sys_gen_net_tcp(&text);
 	else if (sp.type == SYS_NODE_NETKNET)
 		sys_gen_net_knet(&text);
+	else if (sp.type == SYS_NODE_NETWIFI)
+		synth_text_addf(&text, "%s", ax210_probe_report());
 	else if (sp.type == SYS_NODE_NETCARD)
 		sys_gen_net_card(&text, sp.net);
 	else if (sp.type == SYS_NODE_CPUCOUNT)
@@ -3347,7 +3353,7 @@ static int sys_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 			// network settings" wants `ip` before a card roster — then one
 			// file per REGISTERED card, in registration order, which is the
 			// order that decides who carries the address.
-			static const char *kSysNetFiles[] = { "ip", "dhcp", "tcp", "knet" };
+			static const char *kSysNetFiles[] = { "ip", "dhcp", "tcp", "knet", "wifi" };
 			const int kNetFileCount = (int)(sizeof(kSysNetFiles) / sizeof(kSysNetFiles[0]));
 			if (h->index < kNetFileCount)
 			{
@@ -3611,6 +3617,10 @@ static int sys_stat(const char *path, os64_dirent_t *entry, vfs_filesystem_t *vf
 
 		case SYS_NODE_NETKNET:
 			strncpy(entry->name, "knet", OS64_DIRENT_NAME_MAX);
+			return 0;
+
+		case SYS_NODE_NETWIFI:
+			strncpy(entry->name, "wifi", OS64_DIRENT_NAME_MAX);
 			return 0;
 
 		case SYS_NODE_NETTCP:

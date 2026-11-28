@@ -17,6 +17,7 @@
 #include "smp_core.h"     // get_core_local_storage — scheduler_trigger wants the CLS
 #include "driver/system/nvme.h"   // nvme_flush_all — the drive's volatile cache
 #include "driver/system/acpi.h"   // acpi_poweroff — the real soft-off, S5
+#include "driver/net/ax210.h"
 
 int usedCount=0;
 extern volatile uint64_t kSystemCurrentTime;
@@ -396,6 +397,7 @@ void shutdown_system(os64_shutdown_mode_t mode)
 	// DEBUG_EXCEPTIONS on, so this line still reaches a log somebody has
 	// quieted. (`nolog` zeroes the level outright and takes it too.)
 	printd(DEBUG_BOOT, "The system is going down NOW!\n");
+	ax210_shutdown_begin();
 	// 2. Ask every program to stop, then insist. Before logd retires, so the
 	//    exits make the log.
 	shutdown_terminate_tasks();
@@ -410,6 +412,16 @@ void shutdown_system(os64_shutdown_mode_t mode)
 		shutdown_wait(2 * TICKS_PER_SECOND, xhci_bluetooth_quiescing);
 		printf("  Bluetooth adapter %s\n", xhci_bluetooth_quiesce_verdict());
 		printd(DEBUG_BOOT, "bluetooth: adapter %s on the way down\n", xhci_bluetooth_quiesce_verdict());
+	}
+
+	// Keep knet and the log alive until the PCI function has stopped DMA.
+	if (ax210_shutdown_waiting())
+		shutdown_wait(2 * TICKS_PER_SECOND, ax210_shutdown_waiting);
+	if (mode == OS64_SHUTDOWN_REBOOT && !ax210_shutdown_safe())
+	{
+		printf("  AX210 DMA shutdown unconfirmed. Powering off instead of rebooting.\n");
+		printd(DEBUG_BOOT, "ax210: DMA shutdown unconfirmed; switching reboot to poweroff\n");
+		mode = OS64_SHUTDOWN_POWEROFF;
 	}
 
 	// 2. Retire the log daemon. Set the flag, then keep yielding so the

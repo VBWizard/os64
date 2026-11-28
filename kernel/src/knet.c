@@ -10,6 +10,7 @@
 #include "doorbell.h"
 #include "random.h"             // the pool's thread-context fold, and the drain's own moment
 #include "driver/net/net_device.h"
+#include "driver/net/ax210.h"
 #include "driver/net/loopback.h"
 #include "driver/net/tcp.h"
 #include "driver/net/dhcp.h"
@@ -173,6 +174,9 @@ void knet_thread(void)
 			kE1000IntxDivorced = false;
 			printf("e1000: INTx wire went hostile (stranger storm) — back to polling\n");
 		}
+
+		// The AX210 needs firmware service before it has a net_device.
+		ax210_service();
 
 		// The protocol clocks. DHCP's is one state compare when the lease is
 		// settled; TCP's walks live connections for retransmission deadlines,

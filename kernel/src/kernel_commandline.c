@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include "printd.h"
 #include "kernel.h"
+#include "driver/net/ax210.h"
 
 extern bool kOverrideFileLogging;
 extern bool kEnableSMP;
@@ -370,6 +371,7 @@ static cmdopt_t cmdopts[] = {
     {"USBPOLL", OPT_BOOL, &kUsbPoll, true, 0},
     {"USBIMOD", OPT_INT, &kUsbImod, 0, 0},
     {"NONET", OPT_BOOL, &kEnableNet, false, 0},
+    {"WIFI", OPT_STRING, kWifiMode, 0, AX210_MODE_SIZE},
     // The RTL8125 flashlight, sibling of NOAHCI/NONVME. UPPERCASE because
     // this table is matched with strcmp and folds no case — the lesson
     // three dead boot entries taught on 2026-08-16 (commit 642eb9f).
