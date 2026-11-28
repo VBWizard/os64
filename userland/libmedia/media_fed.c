@@ -277,7 +277,8 @@ bool os64_media_fed_type_supported(const char *type)
     if (type == 0 || !(lower_prefix(type, "video/mp4") || lower_prefix(type, "audio/mp4")))
         return false;
     // Each codec named is one the fragment parser takes: H.264 (avc1, avc3)
-    // or AAC (mp4a.40.x). libmedia's own answer then says libav decodes it.
+    // or AAC (mp4a.40.1, 2, 4, 5 or 29). libmedia's own answer then says
+    // libav decodes it.
     const char *codecs = type;
     while (*codecs && !lower_prefix(codecs, "codecs="))
         codecs++;
@@ -292,8 +293,17 @@ bool os64_media_fed_type_supported(const char *type)
             p++;
         if (!*p || *p == '"' || *p == ';')
             break;
-        if (!(lower_prefix(p, "avc1") || lower_prefix(p, "avc3") || lower_prefix(p, "mp4a.40")))
+        if (lower_prefix(p, "mp4a.40.")) {
+            // The AAC object types the fragment parser takes (main, LC,
+            // LTP, SBR and PS): 34 is MP3, which libav decodes and the
+            // parser refuses.
+            int type = 0;
+            for (const char *d = p + 8; *d >= '0' && *d <= '9'; d++) type = type * 10 + (*d - '0');
+            if (type != 1 && type != 2 && type != 4 && type != 5 && type != 29)
+                return false;
+        } else if (!(lower_prefix(p, "avc1") || lower_prefix(p, "avc3"))) {
             return false;
+        }
         any = true;
         while (*p && *p != ',' && *p != '"' && *p != ';')
             p++;

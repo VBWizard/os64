@@ -98,8 +98,9 @@ void os64_media_fed_close(os64_media_fed_t *fed);
 
 // Whether a MediaSource buffer of this MIME type, with its codecs, is one
 // this library takes (isTypeSupported): fragmented MP4 ("video/mp4",
-// "audio/mp4") naming codecs libav.so decodes. A type naming no codecs is
-// refused, as other browsers refuse it.
+// "audio/mp4") naming codecs the fragment parser takes and libav.so
+// decodes: H.264 (avc1, avc3) and AAC (mp4a.40.1, 2, 4, 5 or 29). A type
+// naming no codecs is refused, as other browsers refuse it.
 bool os64_media_fed_type_supported(const char *type);
 
 // A buffer for `type` (os64_media_fed_type_supported's), or NULL: a type

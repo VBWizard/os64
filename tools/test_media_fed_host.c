@@ -718,6 +718,11 @@ int main(int argc, char **argv)
     s_n720 = load_crcs(argv[2], "sync-fed-720p", s_crc720, 700);
     s_n480 = load_crcs(argv[2], "sync-fed-480p", s_crc480, 700);
     CHECK(s_n720 == 600 && s_n480 == 600, "the references: %d and %d pictures", s_n720, s_n480);
+    // The types a MediaSource buffer takes: the parser's codecs only.
+    CHECK(os64_media_fed_type_supported("audio/mp4; codecs=\"mp4a.40.2\""), "AAC-LC is taken");
+    CHECK(os64_media_fed_type_supported("audio/mp4; codecs=\"mp4a.40.5\""), "HE-AAC is taken");
+    CHECK(!os64_media_fed_type_supported("audio/mp4; codecs=\"mp4a.40.34\""), "MP3 in MP4 is refused");
+    CHECK(!os64_media_fed_type_supported("audio/mp4"), "no codecs is refused");
     straight();
     quality_switch();
     seek_unbuffered();

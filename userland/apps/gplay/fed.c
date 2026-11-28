@@ -195,9 +195,12 @@ static int64_t feeder(void *arg)
             os64_media_fed_result_t res;
             os64_media_fed_remove(g->fed, g->v, 0, cut, &res);
             os64_media_fed_remove(g->fed, g->a, 0, cut, &res);
+            // Every fragment the cut reached, a sound fragment only partly
+            // (its frames do not end on the picture's keyframes), is to be
+            // appended again if the position comes back to it.
             for (int i = 0; i < FRAGMENTS; i++) {
-                if (i < g->pic[0].count && g->pic[0].start[i] + g->pic[0].duration[i] <= cut) g->appended_v[i] = false;
-                if (i < g->sound.count && g->sound.start[i] + g->sound.duration[i] <= cut) g->appended_a[i] = false;
+                if (i < g->pic[0].count && g->pic[0].start[i] < cut) g->appended_v[i] = false;
+                if (i < g->sound.count && g->sound.start[i] < cut) g->appended_a[i] = false;
             }
             g->removes++;
             g->ended = false;           // a removal reopens an ended source: the end is said again

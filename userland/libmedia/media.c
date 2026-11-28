@@ -612,13 +612,15 @@ static int sound_frame_into_out(os64_media_t *m)
     // A stream may change rate partway (two MP3s joined): what the old
     // resampler holds is drawn out, and a new one starts.
     if (f->sample_rate > 0 && (uint32_t)f->sample_rate != m->rate) {
+        // The placement's next place, as a time, before the rate moves: it
+        // counts the drained tail below, which the position does not yet.
+        int64_t placed_ns = m->fed != NULL && m->rate > 0 ? m->place.count * 1000000000 / (int64_t)m->rate : 0;
         int r = resampler_drain(m);
         if (r < 0) return r;
         m->rate = (uint32_t)f->sample_rate;
         if ((r = resampler_start(m)) < 0) return r;
-        if (m->fed != NULL)   // the placement counts at the new rate, from where the sound is now
-            os64_media_fed_sound_start(&m->place, m->rate, m->join_ns,
-                                       m->position * 62500 / 3);   // output frames as ns (1e9 / 48000)
+        if (m->fed != NULL)   // the placement counts at the new rate, from where the sound has got to
+            os64_media_fed_sound_start(&m->place, m->rate, m->join_ns, placed_ns);
     }
     // The roles come from each frame's own layout, which may change with
     // the rate. A frame that does not name its channels (a plain PCM WAV of
