@@ -697,7 +697,7 @@ static os64_media_fragment_rule_t parse_traf(os64_media_fragment_t *p, box_t tra
         if (trun.type != BOX_TRUN)
             continue;
         rd_t r = trun.body;
-        uint8_t trun_version = (uint8_t)rd_n(&r, 1);
+        rd_skip(&r, 1);                 // version: v0 and v1 read alike, below
         uint32_t trun_flags = (uint32_t)rd_n(&r, 3);
         uint64_t count = rd_n(&r, 4);
         if (r.bad)
@@ -734,7 +734,11 @@ static os64_media_fragment_rule_t parse_traf(os64_media_fragment_t *p, box_t tra
             if (trun_flags & TRUN_FLAGS)
                 f = (uint32_t)rd_n(&r, 4);
             if (trun_flags & TRUN_CTO)
-                cto = trun_version == 0 ? (int64_t)rd_n(&r, 4) : (int64_t)(int32_t)(uint32_t)rd_n(&r, 4);
+                // Signed in both versions. ISO 14496-12 § 8.8.8 makes a v0
+                // offset unsigned, but encoders write negative ones into v0
+                // boxes and FFmpeg and other browsers read them signed; an
+                // offset past 2^31 ticks means nothing as a real one.
+                cto = (int64_t)(int32_t)(uint32_t)rd_n(&r, 4);
             if (r.bad)
                 return OS64_MEDIA_FRAGMENT_MALFORMED;
             if (position < 0)

@@ -122,7 +122,10 @@
 // relative addressing, MEDIA_SOURCE.md § 3 says why this is accepted); a
 // track of another kind (a text or metadata track), whose trafs are read
 // for their length (with trex's default size where they give none) and
-// whose frames are not handed out.
+// whose frames are not handed out; and a negative composition offset in a
+// v0 trun, which ISO 14496-12 § 8.8.8 makes unsigned, read signed as
+// FFmpeg and other browsers read it (encoders write them, and an offset
+// past 2^31 ticks means nothing as a real one).
 //
 // THE EDIT LIST. The first edit with a media time places the media: its
 // media time is subtracted from every time, and the durations of any empty

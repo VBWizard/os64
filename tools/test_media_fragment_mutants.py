@@ -135,6 +135,8 @@ mutants = [
     ('trex-size-is-not-kept', F, '                next.track[i].trex_size = size;\n', '                next.track[i].trex_size = size * 0;\n'),
     ('the-first-sample-flags-are-ignored', F,
      'f = (i == 0 && have_first) ? first_flags : sample_flags;', 'f = (i == 0 && have_first && 0) ? first_flags : sample_flags;'),
+    ('composition-offsets-read-unsigned', F,
+     'cto = (int64_t)(int32_t)(uint32_t)rd_n(&r, 4);', 'cto = (int64_t)(uint32_t)rd_n(&r, 4);'),
     ('depends-on-alone-is-a-random-access-point', F,
      '.rap = !(f & SAMPLE_NON_SYNC) && SAMPLE_DEPENDS_ON(f) != 1,', '.rap = !(f & SAMPLE_NON_SYNC),'),
     ('non-sync-alone-is-a-random-access-point', F,

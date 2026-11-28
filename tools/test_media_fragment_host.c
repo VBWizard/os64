@@ -616,7 +616,7 @@ static void write_segment(model_t *m, const dseg_t *d)
             int index_in_trun = per ? (i - r_first) % per : 0;
             uint32_t dur = eff_dur(m, f, &f->s[i]);
             uint32_t flags = eff_flags(m, f, &f->s[i], index_in_trun);
-            int64_t cto = (f->trun_fields & 0x800) ? (f->trun_version ? (int64_t)f->s[i].cto : (int64_t)(uint32_t)f->s[i].cto) : 0;
+            int64_t cto = (f->trun_fields & 0x800) ? (int64_t)f->s[i].cto : 0;    // signed in v0 too
             uint32_t sdi = (f->tfhd_flags & 0x2) ? f->sdi : (tr->trex_entry ? tr->trex_entry : 1);
             frames[nf++] = (event_t){
                 .kind = 2, .generation = m->generation, .track = f->track_id, .entry = sdi - 1,
@@ -1050,8 +1050,8 @@ static void streams(void)
         model_free(&m);
     }
 
-    // A v0 trun's composition offsets are unsigned (ISO 14496-12 § 8.8.8):
-    // the writer's negative ones read as large positive ones.
+    // A v0 trun's negative composition offsets read as negative, as FFmpeg
+    // and other browsers read them (ISO 14496-12 § 8.8.8 says unsigned).
     {
         dinit_t d = av_init();
         write_init(&m, &d);
@@ -1059,7 +1059,7 @@ static void streams(void)
         s.f[0] = full_traf(1, 0, 6, 512);
         s.f[0].trun_version = 0;
         write_segment(&m, &s);
-        expect_stream("a v0 trun's offsets", &m);
+        expect_stream("a v0 trun's negative offsets", &m);
         model_free(&m);
     }
 

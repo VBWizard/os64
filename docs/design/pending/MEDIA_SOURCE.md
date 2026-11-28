@@ -147,6 +147,12 @@ fragmented output (`frag_keyframe+empty_moov` without
 `default_base_moof`) writes one, so it is refused; DASH, CMAF and the
 streaming players' own output use default-base-is-moof.
 
+**A v0 `trun`'s composition offset is read signed.** ISO 14496-12 § 8.8.8
+makes it unsigned in v0 and signed only in v1, but encoders write negative
+offsets into v0 boxes, FFmpeg and other browsers read them signed, and an
+offset past 2^31 ticks means nothing as a real one. yonder plays what they
+play.
+
 **What a real stream needs that the spike lacked**, built in MS.1.1:
 several `mdat`s after one `moof`; `stsd` with more than one entry, the
 frame naming which; `avc3` (parameter sets in the frames: the parser does
@@ -157,8 +163,9 @@ whose data begins where the previous `traf`'s ended (ISO 14496-12
 § 8.8.7). **That last is a choice, not the format's rule:** the byte stream
 format counts as relative addressing only every `traf` with
 default-base-is-moof or a single `traf` without it, so a strict reading
-refuses a second chained `traf`. The parser accepts it, because the
-addressing is unambiguous and ISO defines it; refusing it is one line.
+refuses a second chained `traf`. The parser accepts it (ruled): real
+packagers write it, other browsers play it, and the addressing is
+unambiguous because ISO defines it.
 
 **Memory.** Appended bytes are copied once, and nothing is moved as boxes
 are consumed:
