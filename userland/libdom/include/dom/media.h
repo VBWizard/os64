@@ -118,6 +118,14 @@ typedef enum {
 
 typedef enum { OS64_DOM_FED_SEGMENTS, OS64_DOM_FED_SEQUENCE } os64_dom_fed_mode_t;
 
+/* Where sequence mode's next coded frame group starts, as the page's last
+ * assignment says (MSE § 5.1); in segments mode the host ignores it. */
+typedef enum {
+    OS64_DOM_FED_GROUP_KEEP,        /* no assignment says: as the frames already decided */
+    OS64_DOM_FED_GROUP_AT_OFFSET,   /* timestampOffset was assigned (the same value too): at it */
+    OS64_DOM_FED_GROUP_AT_END,      /* mode was assigned "sequence" (the same mode too): at the last group's end */
+} os64_dom_fed_group_t;
+
 /* What a parse (or a reset, or a removal) did to a buffer. */
 typedef struct {
     os64_dom_fed_status_t status;
@@ -162,13 +170,10 @@ typedef struct {
     /* Coded frame removal of [start, end). */
     void (*remove)(void *opaque, void *session, void *buffer, double start, double end, os64_dom_fed_result_t *out);
     /* The buffer's mode, timestampOffset and append window, for the frames
-     * that follow. `offset_assigned` says the page assigned timestampOffset
-     * (at any value, the same one included): in sequence mode the next
-     * coded frame group starts at it. A change of mode to sequence starts
-     * the next group at the last group's end; libdom says nothing more
-     * of it than the mode. */
+     * that follow, and `group`: where sequence mode's next coded frame group
+     * starts, when the assignment that made this call says. */
     void (*set)(void *opaque, void *session, void *buffer, os64_dom_fed_mode_t mode, double timestamp_offset,
-                bool offset_assigned, double window_start, double window_end);
+                os64_dom_fed_group_t group, double window_start, double window_end);
     /* The buffer's ranges, up to `cap`, and their count: its tracks'
      * ranges intersected, and with `ended` (the MediaSource has ended) each
      * track's last range first reaching the largest end of any of its

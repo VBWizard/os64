@@ -235,15 +235,16 @@ static DMediaSource *parent_of(os64_dom_t *dom, DSourceBuffer *b)
     return JS_IsUndefined(b->parent) ? NULL : source_of(dom, b->parent);
 }
 
-/* The buffer's values to the host, for the frames that follow; with
- * `offset_assigned` when the page assigned timestampOffset, which in
- * sequence mode starts the next coded frame group there even at the same
- * value (MSE § 5.1). A host gone inactive is not told. */
-static void push_settings(os64_dom_t *dom, DSourceBuffer *b, bool offset_assigned)
+/* The buffer's values to the host, for the frames that follow, with where
+ * sequence mode's next coded frame group starts when an assignment says
+ * (MSE § 5.1: assigning timestampOffset starts it there, assigning mode
+ * "sequence" at the last group's end, each even at the same value). A
+ * host gone inactive is not told. */
+static void push_settings(os64_dom_t *dom, DSourceBuffer *b, os64_dom_fed_group_t group)
 {
     DMediaSource *s = parent_of(dom, b);
     if (s == NULL || b->handle == NULL || host(dom)->set == NULL || !d_provider_enter(dom)) return;
-    host(dom)->set(host(dom)->opaque, s->session, b->handle, b->mode, b->offset, offset_assigned, b->window_start,
+    host(dom)->set(host(dom)->opaque, s->session, b->handle, b->mode, b->offset, group, b->window_start,
                    b->window_end);
     d_provider_leave(dom);
 }
@@ -838,7 +839,7 @@ static JSValue buffer_abort(os64_dom_t *dom, JSContext *ctx, DSourceBuffer *b)
     b->window_start = 0;
     b->window_end = INFINITY;
     d_provider_leave(dom);
-    push_settings(dom, b, false);
+    push_settings(dom, b, OS64_DOM_FED_GROUP_KEEP);
     return JS_UNDEFINED;
 }
 
@@ -903,7 +904,7 @@ static JSValue buffer_member(JSContext *ctx, JSValueConst self, int argc, JSValu
         reopen(dom, s);
         if (b->parsing_media) return d_error(ctx, "InvalidStateError", "A media segment is being parsed");
         b->mode = (os64_dom_fed_mode_t)mode;
-        push_settings(dom, b, false);
+        push_settings(dom, b, b->mode == OS64_DOM_FED_SEQUENCE ? OS64_DOM_FED_GROUP_AT_END : OS64_DOM_FED_GROUP_KEEP);
         return JS_UNDEFINED;
     }
     case B_UPDATING: return JS_NewBool(ctx, b->updating);
@@ -938,7 +939,7 @@ static JSValue buffer_member(JSContext *ctx, JSValueConst self, int argc, JSValu
         reopen(dom, s);
         if (b->parsing_media) return d_error(ctx, "InvalidStateError", "A media segment is being parsed");
         b->offset = v;
-        push_settings(dom, b, true);
+        push_settings(dom, b, OS64_DOM_FED_GROUP_AT_OFFSET);
         return JS_UNDEFINED;
     }
     case B_WINDOW_START:
@@ -956,7 +957,7 @@ static JSValue buffer_member(JSContext *ctx, JSValueConst self, int argc, JSValu
             return JS_ThrowTypeError(ctx, "The window's end is not after its start");
         if (start) b->window_start = v;
         else b->window_end = v;
-        push_settings(dom, b, false);
+        push_settings(dom, b, OS64_DOM_FED_GROUP_KEEP);
         return JS_UNDEFINED;
     }
     case B_APPEND: return buffer_append(dom, ctx, b, argc, argv);

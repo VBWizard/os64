@@ -1625,8 +1625,10 @@ DMediaTask *d_media_queue_work(os64_dom_t *dom, JSValueConst object, void (*run)
 void d_media_task_cancel(DMediaTask *task);
 /* The element `media` (a DMediaElement, opaque to mse.c) of an attached
  * MediaSource: its duration set and durationchange queued (and a position
- * past it sought back); the end of
- * stream's error steps (a decode error, else a network one); HAVE_METADATA
+ * past it sought back); the end of stream's error steps (a decode error,
+ * else a network one), which at HAVE_NOTHING detach the MediaSource (so a
+ * caller holds it across the call) and may select the next <source>
+ * before returning; HAVE_METADATA
  * reached (every SourceBuffer's first initialization segment); readyState
  * back to HAVE_METADATA when above HAVE_CURRENT_DATA (a SourceBuffer's
  * first initialization segment arriving while playing); the coded frame removal's drop when the

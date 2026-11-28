@@ -32,6 +32,7 @@ typedef struct {
     size_t input_len;
     os64_dom_fed_mode_t mode;
     double offset, window_start, window_end, group_end;
+    double group_start;             /* sequence mode's next group start an assignment set; NaN: the group end */
     os64_dom_fed_range_t ranges[16];
     uint32_t count;
     double highest;
@@ -86,6 +87,7 @@ static void *fed_add(void *opaque, void *session, const char *type)
     snprintf(b->type, sizeof(b->type), "%s", type);
     b->window_end = INFINITY;
     b->highest = NAN;
+    b->group_start = NAN;
     return b;
 }
 static void fed_remove_buffer(void *opaque, void *session, void *buffer)
@@ -159,9 +161,11 @@ static void fed_parse(void *opaque, void *session, void *buffer, os64_dom_fed_re
         } else if (sscanf(word, "frames:%lf:%lf", &x, &y) == 2) {
             double start = x + b->offset, end = y + b->offset;
             if (b->mode == OS64_DOM_FED_SEQUENCE) {
-                b->offset = b->group_end - x;
-                start = b->group_end;
-                end = b->group_end + (y - x);
+                double at = isnan(b->group_start) ? b->group_end : b->group_start;
+                b->group_start = NAN;
+                b->offset = at - x;
+                start = at;
+                end = at + (y - x);
             }
             fed_add_range(b, start, end);
             b->group_end = end;
@@ -227,13 +231,15 @@ static void fed_remove(void *opaque, void *session, void *buffer, double start, 
     fed_result_of(b, out);
 }
 static void fed_set(void *opaque, void *session, void *buffer, os64_dom_fed_mode_t mode, double offset,
-                    bool offset_assigned, double window_start, double window_end)
+                    os64_dom_fed_group_t group, double window_start, double window_end)
 {
     (void)opaque; (void)session;
     FedBuffer *b = buffer;
     /* Sequence mode's next group: at the assigned offset, or at the last
-     * group's end when the mode becomes sequence. */
-    if (mode == OS64_DOM_FED_SEQUENCE && offset_assigned) b->group_end = offset, b->assigned++;
+     * group's end when "sequence" is assigned. */
+    if (group == OS64_DOM_FED_GROUP_AT_OFFSET) b->assigned++;
+    if (mode == OS64_DOM_FED_SEQUENCE && group == OS64_DOM_FED_GROUP_AT_OFFSET) b->group_start = offset;
+    if (mode == OS64_DOM_FED_SEQUENCE && group == OS64_DOM_FED_GROUP_AT_END) b->group_start = NAN;
     b->mode = mode;
     b->offset = offset;
     b->window_start = window_start;
@@ -532,8 +538,20 @@ static void dom_mse_sequence_cases(void)
                "mse: an assigned offset");
     check(fed_sessions[0].buffers[0].assigned == assigned + 2, "mse: each assignment reaches the host");
     media_turn(&f, "mse: assigned offset turn");
-    mse_script(&f, "assert(R(sb.buffered)==='0-4,10-12'&&sb.timestampOffset===5,R(sb.buffered)+' '+sb.timestampOffset);",
+    mse_script(&f, "assert(R(sb.buffered)==='0-4,10-12'&&sb.timestampOffset===5,R(sb.buffered)+' '+sb.timestampOffset);"
+                   "sb.timestampOffset=20;sb.mode='sequence';sb.appendBuffer(B('frames:5:6'));",
                "mse: the next group starts at the assigned offset");
+    media_turn(&f, "mse: mode assigned turn");
+    mse_script(&f, "assert(R(sb.buffered)==='0-4,10-13',"
+                   "'assigning sequence again starts the group at the last end, not the offset: '+R(sb.buffered));",
+               "mse: assigning sequence returns the group to its end");
+    /* A fed element's seek is held to the MediaSource's seekable range,
+     * whatever the session's own seekable fact says. */
+    fed_sessions[0].media.facts.probed = true;
+    mse_script(&f, "v.currentTime=50;assert(v.currentTime===13&&v.seeking,'clamped to seekable: '+v.currentTime);",
+               "mse: a fed seek is held to the seekable range");
+    media_turn(&f, "mse: seek turn");
+    mse_script(&f, "heard();", "mse: seek clear");
     /* Inside a media segment the mode and offset cannot change. */
     mse_script(&f, "sb.appendBuffer(B('media'));", "mse: into a media segment");
     media_turn(&f, "mse: media turn");
@@ -601,10 +619,10 @@ static void dom_mse_end_cases(void)
     mse_with_buffer(&f, "mse: early error");
     mse_script(&f, "heard();sb.appendBuffer(B('error'));", "mse: early broken segment");
     media_turn(&f, "mse: early error turn");
-    mse_script(&f, "const h=heard();assert(h==='sb:updatestart sb:error sb:updateend ms:sourceended "
-                   "active:removesourcebuffer list:removesourcebuffer ms:sourceclose v:error',h);"
+    mse_script(&f, "const h=heard();assert(h==='sb:updatestart sb:error sb:updateend ms:sourceended v:error "
+                   "active:removesourcebuffer list:removesourcebuffer ms:sourceclose',h);"
                    "assert(v.error.code===4&&v.networkState===3&&ms.readyState==='closed','not supported, detached');",
-               "mse: append error with nothing yet detaches (Chromium's NoneSupported)");
+               "mse: append error with nothing yet: the error, then the detach (Chromium's NoneSupported)");
     fixture_free(&f);
 
     /* From a <source> child, the next child is tried. */

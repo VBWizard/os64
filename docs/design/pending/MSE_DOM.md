@@ -28,7 +28,8 @@ saying why.**
 5. **libdom owns MediaSource's duration and the element's while attached**;
    the session's `facts.duration` is not read for a fed element, and nor is
    `facts.probed`: HAVE_METADATA is every SourceBuffer's first
-   initialization segment, which libdom saw.
+   initialization segment, which libdom saw. Nor is `facts.seekable`: a fed
+   element's seek is held to the MediaSource's seekable range.
 6. **`buffered` is computed in libdom** from each SourceBuffer's ranges (the
    provider's), by § 10.2's intersection; `DTimeRanges` grows to N ranges.
 7. **`isTypeSupported` parses the whole type and reads only `codecs`**, as
@@ -123,7 +124,7 @@ activeSourceBuffers). Every add/remove event on them is QUEUED (§ 6).
 | open or ended | attach attempted again (another element, the same URL) | unchanged | the OTHER element runs "cannot be fetched at all" (§ 3.15.1 step 1.4: readyState not "closed") |
 | open | `endOfStream()` / `endOfStream("network"/"decode")`; or append error (decode) | ended | table 2.3 |
 | ended | appendBuffer, remove, `mode`/`timestampOffset` set, changeType | open | S: readyState "open"; Q: `sourceopen` — before the operation's own checks that may still throw (§ 5's quirk, kept) |
-| open or ended | detach: the element's load algorithm, a new `src`, `removeAttribute('src')` + load, a failure that empties the element, page teardown (no events then) | closed | S: readyState "closed"; S: duration NaN; S: activeSourceBuffers emptied, Q: `removesourcebuffer` at it; S: sourceBuffers emptied, Q: `removesourcebuffer` at it; Q: `sourceclose`. Each SourceBuffer becomes "removed" (every member that checks throws). Each SB with an APPEND in flight: Q `abort`, Q `updateend` at it FIRST (§ 9.1), then the lists' events and `sourceclose` as listed; a REMOVE in flight: cancelled, no events. Last, S: provider `fed_close` |
+| open or ended | detach: the element's load algorithm, a new `src`, `removeAttribute('src')` + load, the dedicated media source failure steps (an end of stream with an error at HAVE_NOTHING, table 2.3; Chromium's choice, which neither standard makes), page teardown (no events then) | closed | S: readyState "closed"; S: duration NaN; S: activeSourceBuffers emptied, Q: `removesourcebuffer` at it; S: sourceBuffers emptied, Q: `removesourcebuffer` at it; Q: `sourceclose`. Each SourceBuffer becomes "removed" (every member that checks throws). Each SB with an APPEND in flight: Q `abort`, Q `updateend` at it FIRST (§ 9.1), then the lists' events and `sourceclose` as listed; a REMOVE in flight: cancelled, no events. Last, S: provider `fed_close` |
 
 The element's own events at attach are the media element's as today for a
 local resource (`loadstart` from the load algorithm; no `suspend`, MSE §
@@ -136,7 +137,7 @@ local resource (`loadstart` from the load algorithm; no `suspend`, MSE §
 | false | `appendBuffer(d)` passes prepare append | true | S: bytes copied into the parser's input (provider `take`); S: updating true; Q: `updatestart`; Q: the APPEND task |
 | true | the APPEND task runs, parse DONE, no error | false | (inside the task) S: updating false; Q: `update`; Q: `updateend` |
 | true | APPEND task: parse PENDING (only if the parse ever moves off-thread) | true | the turn polls (`fed_poll`); on DONE as the row above |
-| true | APPEND task: parse ERROR | false | append error (§ 5.5.3): S: reset parser state (provider `reset`); S: updating false; Q: `error`; Q: `updateend`; then end of stream "decode" (table 2.3: S readyState "ended", Q `sourceended`, element error) |
+| true | APPEND task: parse ERROR | false | append error (§ 5.5.3): S: reset parser state (provider `reset`); S: updating false; Q: `error`; Q: `updateend`; then end of stream "decode" (table 2.3: S readyState "ended", Q `sourceended`, the element's error; at HAVE_NOTHING the detach follows, and readyState ends "closed") |
 | true | `abort()` while the APPEND task is queued | false | S: the task CANCELLED (it never runs); S: updating false; Q: `abort`; Q: `updateend`; then (always, updating or not) S: reset parser state; S: appendWindowStart 0, End +∞ |
 | false | `remove(s, e)` passes | true | S: updating true; Q: `updatestart`; Q: the REMOVE task |
 | true | REMOVE task runs | false | S: provider `remove`; element readyState may drop to HAVE_METADATA (§ 5.5.9 3.5); S: updating false; Q: `update`; Q: `updateend` |
@@ -155,8 +156,8 @@ segment being parsed are processed, the rest discarded (§ 5.5.2).
 | Error | Steps, in order |
 |---|---|
 | none | S: readyState "ended"; Q: `sourceended`; S: duration change to the highest end over all track buffers (Q: element `durationchange` if it changed, AFTER `sourceended`); S: provider `fed_end` (the session knows nothing more is coming: playing to the highest end is `ended`, not `waiting`) |
-| "network" | S: "ended"; Q: `sourceended`; element at HAVE_NOTHING: the "cannot be fetched at all" steps (MediaError 4, `error` at the element); above it: "connection is interrupted" (MediaError 2, `error`) |
-| "decode" | S: "ended"; Q: `sourceended`; element at HAVE_NOTHING: "unsupported format" (MediaError 4); above it: "media data is corrupted" (MediaError 3, `error`) |
+| "network" | S: "ended"; Q: `sourceended`; element at HAVE_NOTHING: from `src`, MediaError 4 and `error` at the element, then the detach (table 2.1: `removesourcebuffer` at both lists, `sourceclose`, "closed"), as Chromium's NoneSupported then CloseMediaSource; from a `<source>` child, the detach and the next child, no element error; above it: "connection is interrupted" (MediaError 2, `error`) |
+| "decode" | S: "ended"; Q: `sourceended`; element at HAVE_NOTHING: from `src`, MediaError 4 and `error` at the element, then the detach (table 2.1: `removesourcebuffer` at both lists, `sourceclose`, "closed"), as Chromium's NoneSupported then CloseMediaSource; from a `<source>` child, the detach and the next child, no element error; above it: "media data is corrupted" (MediaError 3, `error`) |
 
 ### 2.4 Duration change (§ 3.15.6)
 
@@ -165,7 +166,7 @@ segment being parsed are processed, the rest discarded (§ 5.5.2).
 | equal | nothing |
 | new < highest buffered pts (any SB) | InvalidStateError (from the setter) |
 | new < highest end time | raised to it |
-| set | MediaSource duration; element duration; Q: element `durationchange`; S: provider `fed_duration` |
+| set | MediaSource duration; element duration; Q: element `durationchange`; a position past the new duration sought to it (HTML's duration change); S: provider `fed_duration` |
 
 Init segment received with duration NaN: the init's duration, or +∞ if it has
 none (the provider's result carries it).
@@ -231,12 +232,12 @@ holds a lock of the session's.
 | `fed_poll` | session, sb, `out *` | as `parse` | only when the parse runs elsewhere |
 | `reset` | session, sb, `out *` | the result's offset, highest pts and parsing flag after it | reset parser state (§ 5.5.2) |
 | `remove` | session, sb, start, end (seconds), `out *` | as `reset` | coded frame removal |
-| `set` | session, sb, mode, timestampOffset, offset assigned, window start, window end | — | the SourceBuffer's values, applied at the next frame; `offset assigned` when the page assigned timestampOffset (any value, the same one too), which in sequence mode starts the next coded frame group there; a change of mode to sequence starts it at the last group's end |
+| `set` | session, sb, mode, timestampOffset, group, window start, window end | — | the SourceBuffer's values, applied at the next frame; `group` says where sequence mode's next coded frame group starts when the assignment that made the call says: AT_OFFSET when timestampOffset was assigned (any value, the same one too), AT_END when mode was assigned "sequence" (the same mode too: the last group's end), else KEEP (MSE § 5.1) |
 | `ranges` | session, sb, ended, `out[]`, max, `*highest_end` | count (seconds, the round trip exact), and the largest end of any of the SB's tracks (the duration's floor) | the SB's ranges: with `ended`, each track's last range first reaching that largest end, then the tracks intersected (MS § 4) |
 | `fed_duration` | session, seconds | — | the player's end |
 | `fed_end` | session | — | no more frames: the end of the highest range is `ended` |
 | `fed_close` | session | — | detach: the session and every SB freed |
-| (existing) `play`, `pause`, `seek`, `settings`, `facts` | session | as today | as today; `facts` fills current/future/enough from the ranges and the play position (MS § 5), the two playback-quality counters (`frames_shown`, `frames_dropped`), and `error` = `OS64_DOM_MEDIA_ERR_DECODE` when the decoder refuses a frame; `probed` and `duration` are not read |
+| (existing) `play`, `pause`, `seek`, `settings`, `facts` | session | as today | as today; `facts` fills current/future/enough from the ranges and the play position (MS § 5), the two playback-quality counters (`frames_shown`, `frames_dropped`), and `error` = `OS64_DOM_MEDIA_ERR_DECODE` when the decoder refuses a frame; `probed`, `duration` and `seekable` are not read |
 
 | Kept by | What |
 |---|---|
@@ -251,7 +252,7 @@ holds a lock of the session's.
 | a SourceBuffer's first init with the element above HAVE_CURRENT_DATA (step 9 is under the active track flag, which only a first init sets) | § 5.5.7 9: back to HAVE_METADATA | the facts' current flag drops until a frame is decoded |
 | HAVE_CURRENT/FUTURE/ENOUGH, `loadeddata`, `canplay`, `canplaythrough`, `playing` | `facts.current/future/enough` (the session judges the ranges against the position, MS § 5); libdom's existing `ready_to` | thresholds in yonder, reported |
 | `waiting` | the play position leaving the buffered range (facts drop to HAVE_METADATA or CURRENT while playing) | existing `ready_to` |
-| seeking into a gap | `seek` as today; the session holds `seeked` until frames arrive there; § 3.15.3 drops readyState to HAVE_METADATA | `seeking` S as today; `seeked` when `facts.seeked` matches |
+| seeking into a gap | `seek` as today, the target held to the MediaSource's seekable range (§ 1's table; none: no seek), never the session's seekable fact; the session holds `seeked` until frames arrive there; § 3.15.3 drops readyState to HAVE_METADATA | `seeking` S as today; `seeked` when `facts.seeked` matches |
 | `buffered` / `seekable` | § 1's table, from `ranges` | `DTimeRanges` grows to N ranges (decision 6) |
 | `duration`, `durationchange` | MediaSource (table 2.4) | `fold_facts`' duration path is skipped for a fed record |
 | `ended` | after `fed_end`, the position reaching the highest end (`facts.ended`) | as today: `timeupdate`, `pause`, `ended` |

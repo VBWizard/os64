@@ -387,12 +387,18 @@ static void session_wake(os64_dom_t *dom, DMediaElement *m);
 
 /* HTML's seek steps; a resource the host says cannot seek is not sought
  * (HTML aborts a seek outside the seekable ranges). A fed element's
- * seekable range is its MediaSource's, which the host's fact does not
- * describe. */
+ * seekable range is its MediaSource's (d_mse_seekable), not the host's
+ * fact: with none the seek is not made, and a target outside it is moved
+ * to its nearest end. */
 static void seek(os64_dom_t *dom, DMediaElement *m, double t)
 {
     session_wake(dom, m);
-    if (m->session != NULL && JS_IsUndefined(m->fed) && dom->media_provider.facts != NULL) {
+    if (!JS_IsUndefined(m->fed)) {
+        os64_dom_fed_range_t range;
+        if (d_mse_seekable(dom, m->fed, &range) == 0) return;
+        if (t < range.start) t = range.start;
+        if (t > range.end) t = range.end;
+    } else if (m->session != NULL && dom->media_provider.facts != NULL) {
         os64_dom_media_facts_t f = {0};
         dom->media_provider.facts(dom->media_provider.opaque, m->session, &f);
         if (f.probed && !f.seekable) return;
@@ -1701,11 +1707,15 @@ void d_media_fed_duration(os64_dom_t *dom, void *media, double duration)
 /* The end of stream algorithm's element steps (MSE § 3.15.7). With
  * nothing yet (HAVE_NOTHING), the dedicated media source failure steps,
  * which a network error ("cannot be fetched at all") and a decode error
- * ("unsupported format") both are: source_failed, which detaches the
- * source and goes on to the next <source> child, as Chromium's
- * NoneSupported closes its MediaSource. After that, a network error is the
- * connection interrupted and a decode error the media data corrupted, and
- * the source stays attached until the element lets its resource go. */
+ * ("unsupported format") both are, and the source detached as Chromium
+ * does: from src, MediaError 4 and `error` queued and then the detach
+ * (its NoneSupported, then CloseMediaSource); from a <source> child, the
+ * detach and the next child (source_failed; Chromium closes the source
+ * as the next child loads). After that, a network error is the connection
+ * interrupted and a decode error the media data corrupted, and the source
+ * stays attached until the element lets its resource go. Either detach
+ * may drop the last reference to the MediaSource and its SourceBuffers'
+ * parents, and the next child is selected before this returns. */
 void d_media_fed_failed(os64_dom_t *dom, void *media, bool decode)
 {
     DMediaElement *m = media;
@@ -1716,7 +1726,15 @@ void d_media_fed_failed(os64_dom_t *dom, void *media, bool decode)
         if (dom->media_provider.failed != NULL)
             dom->media_provider.failed(dom->media_provider.opaque, m->node, m->session, m->current_src,
                                        OS64_DOM_MEDIA_ERR_SRC_NOT_SUPPORTED, why);
-        source_failed(dom, m, why);
+        if (m->from_children) {
+            source_failed(dom, m, why);
+            return;
+        }
+        m->error = OS64_DOM_MEDIA_ERR_SRC_NOT_SUPPORTED;
+        set_message(m, why);
+        m->network = N_NO_SOURCE;
+        queue(dom, m, "error", SETTLE_NOT_SUPPORTED);
+        session_close(dom, m);
         return;
     }
     m->error = decode ? OS64_DOM_MEDIA_ERR_DECODE : OS64_DOM_MEDIA_ERR_NETWORK;

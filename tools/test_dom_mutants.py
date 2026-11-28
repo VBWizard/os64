@@ -377,17 +377,24 @@ mutants = [
     ('mse-sb-buffered-new-object', 'mse', 'mse', '    if (!JS_IsUndefined(b->buffered) && n == b->cached_count &&', '    if (false && n == b->cached_count &&'),
     ('mse-url-never-revoked', 'mse', 'blob_url', '    if (os64_strlen(url) == length) d_mse_url_revoke(dom, url);', '    (void)0;'),
     ('mse-event-target-unheld', 'mse', 'media', '    t->object = JS_DupValueRT(dom->engine, object);\n    t->plain = target;', '    t->object = JS_UNDEFINED;\n    (void)object;\n    t->plain = target;'),
-    ('mse-work-target-unheld', 'mse', 'media', '    t->object = JS_DupValueRT(dom->engine, object);\n    t->run = run;', '    t->object = JS_UNDEFINED;\n    (void)object;\n    t->run = run;'),
+    # (Not run: a work task left unheld (d_media_queue_work's dup). Its SourceBuffer
+    # is held by its MediaSource's list until a removal or detach, and both cancel
+    # the task and queue abort and updateend behind it, which hold the buffer past
+    # the cancelled task's turn: no case can make the work task the last holder.)
     ('mse-cancelled-work-runs', 'mse', 'media', '= t->cancelled ? NULL : t->run;', '= t->run;'),
     ('mse-fed-goes-dormant', 'mse', 'media', 'JS_IsUndefined(m->fed) && m->paused', 'm->paused'),
+    ('mse-mode-assignment-unsaid', 'mse', 'mse', 'push_settings(dom, b, b->mode == OS64_DOM_FED_SEQUENCE ? OS64_DOM_FED_GROUP_AT_END : OS64_DOM_FED_GROUP_KEEP);', 'push_settings(dom, b, OS64_DOM_FED_GROUP_KEEP);'),
+    ('mse-early-detach-before-error', 'mse', 'media', '        queue(dom, m, "error", SETTLE_NOT_SUPPORTED);\n        session_close(dom, m);\n        return;\n    }', '        session_close(dom, m);\n        queue(dom, m, "error", SETTLE_NOT_SUPPORTED);\n        return;\n    }'),
+    ('mse-early-children-error', 'mse', 'media', '        if (m->from_children) {\n            source_failed(dom, m, why);\n            return;\n        }', '        (void)source_failed;'),
+    ('mse-fed-seek-unclamped', 'mse', 'media', '        if (t > range.end) t = range.end;\n    } else if', '        (void)0;\n    } else if'),
     ('mse-quality-total-shown', 'mse', 'media', '    *shown = f.frames_shown + f.frames_dropped;', '    *shown = f.frames_shown;'),
     ('mse-switch-ignored', 'mse', 'media', '    if (dom->options.media_source && d_mse_install(dom, ctx, global) < 0) return -1;', '    if (d_mse_install(dom, ctx, global) < 0) return -1;'),
     ('mse-quality-without-switch', 'mse', 'video', '    if (dom->options.media_source &&\n        (d_method_named', '    if (true &&\n        (d_method_named'),
-    ('mse-early-failure-attached', 'mse', 'media', '        source_failed(dom, m, why);\n        return;\n    }\n    m->error = decode', '        m->error = OS64_DOM_MEDIA_ERR_SRC_NOT_SUPPORTED;\n        set_message(m, why);\n        m->network = N_NO_SOURCE;\n        queue(dom, m, "error", SETTLE_NOT_SUPPORTED);\n        return;\n    }\n    m->error = decode'),
+    ('mse-early-failure-attached', 'mse', 'media', '        queue(dom, m, "error", SETTLE_NOT_SUPPORTED);\n        session_close(dom, m);\n        return;\n    }', '        queue(dom, m, "error", SETTLE_NOT_SUPPORTED);\n        return;\n    }'),
     ('mse-shrink-keeps-position', 'mse', 'media', '    if (m->ready >= R_METADATA && (m->seeking ? m->seek_to : m->position) > duration) seek(dom, m, duration);', '    (void)0;'),
-    ('mse-fed-seek-asks-session', 'mse', 'media', '    if (m->session != NULL && JS_IsUndefined(m->fed) && dom->media_provider.facts != NULL) {', '    if (m->session != NULL && dom->media_provider.facts != NULL) {'),
+    ('mse-fed-seek-asks-session', 'mse', 'media', '    if (!JS_IsUndefined(m->fed)) {\n        os64_dom_fed_range_t range;\n        if (d_mse_seekable(dom, m->fed, &range) == 0) return;\n        if (t < range.start) t = range.start;\n        if (t > range.end) t = range.end;\n    } else if (m->session != NULL && dom->media_provider.facts != NULL) {', '    if (m->session != NULL && dom->media_provider.facts != NULL) {'),
     ('mse-ranges-never-ended', 'mse', 'mse', 'b->handle, s->ready == MS_ENDED, out, cap, &top);', 'b->handle, false, out, cap, &top);'),
-    ('mse-offset-assignment-unsaid', 'mse', 'mse', '        b->offset = v;\n        push_settings(dom, b, true);', '        b->offset = v;\n        push_settings(dom, b, false);'),
+    ('mse-offset-assignment-unsaid', 'mse', 'mse', '        push_settings(dom, b, OS64_DOM_FED_GROUP_AT_OFFSET);', '        push_settings(dom, b, OS64_DOM_FED_GROUP_KEEP);'),
     ('mse-parent-before-conversion', 'mse', 'mse', '        double v;\n        if (JS_ToFloat64(ctx, &v, value) < 0) return JS_EXCEPTION;\n        if (!isfinite(v)) return JS_ThrowTypeError(ctx, "The offset is not finite");\n        if ((s = parent_of(dom, b)) == NULL) return removed_error(ctx);', '        double v;\n        s = parent_of(dom, b);\n        if (JS_ToFloat64(ctx, &v, value) < 0) return JS_EXCEPTION;\n        if (!isfinite(v)) return JS_ThrowTypeError(ctx, "The offset is not finite");\n        if (s == NULL) return removed_error(ctx);'),
 ]
 
