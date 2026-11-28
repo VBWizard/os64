@@ -306,7 +306,8 @@ static void m_frame(model_t *m, uint32_t id, int64_t pts0, int64_t dts0, int64_t
         t->group = ++t->groups;
         t->run = ++t->runs;
     }
-    if (t->have_preload && (t->preload.pts + t->preload.dur < pts - 1000 || t->preload.pts + t->preload.dur > pts + 1000))
+    if (t->have_preload && (t->preload.pts + t->preload.dur < pts - 1000 || t->preload.pts + t->preload.dur > pts + 1000 ||
+                            t->preload.dts > dts || (t->last_dts != NONE && t->preload.dts < t->last_dts)))
         t->have_preload = false;
     if (t->have_preload) {
         t->preload.serial = ++t->next_serial;
@@ -641,6 +642,18 @@ static void compare(os64_media_buffer_t *b, model_t *m)
         }
         free(got);
         free(want);
+    }
+    // The highest end any track holds, and the group end, against the model.
+    {
+        int64_t want = OS64_MEDIA_NO_TIME;
+        for (int k = 0; k < m->nt; k++)
+            for (int i = 0; i < m->t[k].n; i++) {
+                const mf_t *f = &m->t[k].f[i];
+                if (!(f->flags & OS64_MEDIA_FRAME_PRELOAD) && f->dur > 0 && f->pts + f->dur > want) want = f->pts + f->dur;
+            }
+        check(os64_media_buffer_highest_end(b) == want, "%s: highest end %lld, the model %lld", s_case,
+              (long long)os64_media_buffer_highest_end(b), (long long)want);
+        check(b->group_end == m->ge && b->offset == m->offset, "%s: group end or offset differs from the model", s_case);
     }
     // The SourceBuffer's intersection, of the tracks' reported ranges.
     if (m->nt == 2) {
@@ -1169,6 +1182,28 @@ static void scripted(void)
     pair_init_segment(&p, 1000000000, 0);
     n = make_group(f, 0, 33333333 + 500, 1, 1000000, 10, 0, 100);
     pair_frames(&p, 0, f, n);
+    END();
+
+    // A preload goes in decode order or not at all (the fuzzer's find): a
+    // sound frame dropped before the window but decoded after the next kept
+    // frame is nobody's preroll, however its end meets that frame.
+    START("a preload out of decode order", 2, 90000, 1000000000);
+    {
+        tf_t g[3] = { { 0, 0, 1157, true, 10 }, { 664, -664, 1157, true, 10 }, { 0, 664, 1157, true, 10 } };
+        pair_frames(&p, 1, g, 3);
+    }
+    END();
+
+    // A preload is the preroll only of the frame it ends at: sound dropped
+    // before a window that starts at 1 s, then a group at 4 s with the
+    // window back at 0, gets no preroll from a frame that ended at 1 s.
+    START("a preload far from its frame", 2, 90000, 48000);
+    p.b.window_start = p.m.ws = MS(1000);
+    n = make_group(f, 1, 0, 47, 1024, 1, 0, 30);
+    pair_frames(&p, 1, f, n);
+    p.b.window_start = p.m.ws = 0;
+    n = make_group(f, 1, 4 * 48000, 47, 1024, 1, 0, 30);
+    pair_frames(&p, 1, f, n);
     END();
 
     // A muxed append's bytes shared by the tracks' quotas.

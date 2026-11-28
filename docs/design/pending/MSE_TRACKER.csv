@@ -1,6 +1,6 @@
 id,task,depends_on,status,done_in,notes
 MS.1,"The two pure cores: the fragment parser and the track buffer, with models, mutants and a fuzzer",,review,,"MEDIA_SOURCE.md sections 3 and 4. Two PRs: MS.1.1 and MS.1.2, stacked"
-MS.1.1,"The fragment parser: os64/media_fragment.h, its model, mutants, fuzzer and decode check",,doing,,"Section 3. Bit-exact decode against the host ffmpeg across a switch and an out-of-order append"
+MS.1.1,"The fragment parser: os64/media_fragment.h, its model, mutants, fuzzer and decode check",,done,#768,"Section 3. Bit-exact decode against the host ffmpeg across a switch and an out-of-order append"
 MS.1.2,"The track buffer: the spec's coded frame processing, its model and mutants",MS.1.1,doing,,"Section 4. Bit-exact decode through it; the cursor reads a switch ahead without a resync"
 
 MS.2,"libmedia's fed media, /tests/msetest, gplay --fed, and a P5 run",MS.1,todo,,"Section 5 and 6. 1080p60 fed in pieces with a quality switch, a seek and eviction, before any browser code"

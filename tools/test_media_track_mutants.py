@@ -60,7 +60,7 @@ mutants = [
     ('window-end-ignored', F, 'if (pts < b->window_start || end > b->window_end) {', 'if (pts < b->window_start) {'),
     ('pictures-get-a-preload', F, 'if (pts < b->window_start && t->kind == OS64_MEDIA_FRAGMENT_AUDIO) {', 'if (pts < b->window_start) {'),
     ('the-preload-is-never-kept', F, '        preload_clear(t);\n    if (t->have_preload) {', '        preload_clear(t);\n    if (0 && t->have_preload) {'),
-    ('a-preload-from-anywhere-is-kept', F, '    if (t->have_preload && (t->preload.pts + t->preload.duration < sat_sub(pts, ONE_MICROSECOND) ||\n                            t->preload.pts + t->preload.duration > sat_add(pts, ONE_MICROSECOND)))\n        preload_clear(t);\n', ''),
+    ('a-preload-from-anywhere-is-kept', F, '    if (t->have_preload && (t->preload.pts + t->preload.duration < sat_sub(pts, ONE_MICROSECOND) ||\n                            t->preload.pts + t->preload.duration > sat_add(pts, ONE_MICROSECOND) ||', '    if (t->have_preload && (0 ||'),
     ('need-rap-ignored', F, '    if (t->need_rap) {\n        if (!rap) {', '    if (t->need_rap) {\n        if (0) {'),
     ('sound-must-be-flagged-sync', F, 'bool rap = f->rap || t->kind == OS64_MEDIA_FRAGMENT_AUDIO;', 'bool rap = f->rap;'),
     ('a-group-start-removes-nothing', F, '    if (t->highest_end == OS64_MEDIA_NO_TIME)\n        cut_presented(t, pts, end);\n    else', '    if (t->highest_end == OS64_MEDIA_NO_TIME)\n        (void)0;\n    else'),
@@ -84,6 +84,7 @@ mutants = [
     ('the-quota-is-never-exceeded', F, '        if (t->bytes + share > t->quota)\n            fits = false;', '        (void)0;'),
     ('each-track-takes-the-whole-append', F, '        uint64_t share = total_quota == 0 ? incoming', '        uint64_t share = 1 ? incoming'),
     # Reading.
+    ('the-highest-end-is-the-first-range-s', F, 'if (b->track[k].range[ri].start < b->track[k].range[ri].end && b->track[k].range[ri].end > end)', 'if (b->track[k].range[ri].start < b->track[k].range[ri].end && end == OS64_MEDIA_NO_TIME)'),
     ('buffered-joins-only-touching', F, 'r->start <= sat_add(out->end, join_of(t)) && r->end > out->end', 'r->start <= out->end && r->end > out->end'),
     ('buffered-is-the-union', F, 'int64_t s = a.start > c.start ? a.start : c.start, e = a.end < c.end ? a.end : c.end;', 'int64_t s = a.start < c.start ? a.start : c.start, e = a.end > c.end ? a.end : c.end;'),
     ('a-joined-gap-is-not-held', F, '        if (r->start > time && sat_sub(r->start, time) <= join_of(t) && (next == 0 || r->start < next->start)) {', '        if (0) {'),

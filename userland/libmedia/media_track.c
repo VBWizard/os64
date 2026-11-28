@@ -513,6 +513,16 @@ void os64_media_buffer_destroy(os64_media_buffer_t *b)
     b->track_count = 0;
 }
 
+int64_t os64_media_buffer_highest_end(const os64_media_buffer_t *b)
+{
+    int64_t end = OS64_MEDIA_NO_TIME;
+    for (uint32_t k = 0; k < b->track_count; k++)
+        for (uint32_t ri = 0; ri < b->track[k].range_count; ri++)
+            if (b->track[k].range[ri].start < b->track[k].range[ri].end && b->track[k].range[ri].end > end)
+                end = b->track[k].range[ri].end;
+    return end;
+}
+
 os64_media_track_t *os64_media_buffer_track(os64_media_buffer_t *b, int kind)
 {
     for (uint32_t k = 0; k < b->track_count; k++)
@@ -750,9 +760,11 @@ static os64_media_track_rule_t buffer_frame(os64_media_buffer_t *b, const os64_m
     t->append_range = r->id;
     // The preload is the preroll of the frame it ends at: one that ends
     // anywhere else (a frame dropped long ago, before other appends) is
-    // nobody's (Chromium's rule for its preroll buffer).
+    // nobody's (Chromium's rule for its preroll buffer). And it goes in
+    // decode order: not after its frame, not before the range's last.
     if (t->have_preload && (t->preload.pts + t->preload.duration < sat_sub(pts, ONE_MICROSECOND) ||
-                            t->preload.pts + t->preload.duration > sat_add(pts, ONE_MICROSECOND)))
+                            t->preload.pts + t->preload.duration > sat_add(pts, ONE_MICROSECOND) ||
+                            t->preload.dts > dts || (r->count && t->preload.dts < r->frame[r->count - 1].dts)))
         preload_clear(t);
     if (t->have_preload) {
         t->preload.serial = ++t->next_serial;

@@ -63,6 +63,7 @@ static void fail(const char *why)
     abort();
 }
 
+static bool s_trace;                // FUZZ_TRACE=1: say each operation and each frame's fate (a replay)
 static long s_live;
 static void *f_alloc(void *c, size_t n) { (void)c; s_live++; return malloc(n); }
 static void f_release(void *c, void *b) { (void)c; s_live--; free(b); }
@@ -100,7 +101,14 @@ static void check(os64_media_buffer_t *b)
             if (ri > 0 && r->frame[0].dts < t->range[ri - 1].frame[0].dts) fail("ranges out of order");
             for (uint32_t i = 0; i < r->count; i++) {
                 const os64_media_track_frame_t *f = &r->frame[i];
-                if (i > 0 && f->dts < r->frame[i - 1].dts) fail("decode order broken in a range");
+                if (i > 0 && f->dts < r->frame[i - 1].dts) {
+                    if (s_trace)
+                        for (uint32_t j = 0; j < r->count; j++)
+                            printf("  BROKEN t%u r%u #%u serial %llu dts %lld pts %lld dur %lld f%u\n", k, ri, j,
+                                   (unsigned long long)r->frame[j].serial, (long long)r->frame[j].dts,
+                                   (long long)r->frame[j].pts, (long long)r->frame[j].duration, r->frame[j].flags);
+                    fail("decode order broken in a range");
+                }
                 bytes += f->size;
                 bool have = false;
                 for (uint32_t g = 0; g < t->gen_count; g++) have |= t->gen[g].generation == f->generation;
@@ -132,6 +140,18 @@ static void run(const uint8_t *data, size_t size)
     while (in.at < in.n) {
         uint8_t op = (uint8_t)take(&in, 1);
         s_ops++;
+        if (s_trace) {
+            printf("op %u (kind %u) offset %lld window %lld..%lld mode %d\n", op, op % 12, (long long)b.offset,
+                   (long long)b.window_start, (long long)b.window_end, b.mode);
+            for (uint32_t k = 0; k < b.track_count; k++)
+                for (uint32_t ri = 0; ri < b.track[k].range_count; ri++)
+                    for (uint32_t i = 0; i < b.track[k].range[ri].count; i++) {
+                        const os64_media_track_frame_t *x = &b.track[k].range[ri].frame[i];
+                        printf("    t%u r%u #%u serial %llu dts %lld pts %lld dur %lld f%u\n", k, ri, i,
+                               (unsigned long long)x->serial, (long long)x->dts, (long long)x->pts,
+                               (long long)x->duration, x->flags);
+                    }
+        }
         switch (op % 12) {
         case 0: {                                   // an init segment
             os64_media_fragment_init_t init = { .generation = ++gen, .track_count = tracks ? (uint32_t)tracks : 1u + (uint32_t)(op >> 7) };
@@ -174,7 +194,10 @@ static void run(const uint8_t *data, size_t size)
                     .timescale = timescale[track], .dts = dts, .pts = pts, .duration = (uint32_t)dur,
                     .rap = (i % (1 + pattern % 16)) == 0 || (pattern & 4), .slab = slab, .offset = i * 4, .size = 4,
                 };
-                os64_media_buffer_frame(&b, &f);
+                os64_media_track_rule_t fr = os64_media_buffer_frame(&b, &f);
+                if (s_trace)
+                    printf("  frame track %d dts %lld pts %lld dur %u rap %d gen %u -> %s\n", track, (long long)dts,
+                           (long long)pts, (unsigned)dur, f.rap, gen, os64_media_track_rule_name(fr));
             }
             os64_media_fragment_slab_drop(slab);
             break;
@@ -272,6 +295,9 @@ int main(int argc, char **argv)
     if (argc < 3) { fprintf(stderr, "usage: fuzz_media_track <seconds> <crash file> [seeds...]\n"); return 2; }
     double seconds = atof(argv[1]);
     s_crash_path = argv[2];
+    s_trace = getenv("FUZZ_TRACE") != 0;
+    if (s_trace)
+        setvbuf(stdout, 0, _IONBF, 0);
     signal(SIGABRT, on_abort);
     for (int i = 3; i < argc; i++) {
         FILE *f = fopen(argv[i], "rb");
