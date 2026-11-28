@@ -122,7 +122,8 @@ typedef enum { OS64_DOM_FED_SEGMENTS, OS64_DOM_FED_SEQUENCE } os64_dom_fed_mode_
 typedef struct {
     os64_dom_fed_status_t status;
     uint32_t inits;         /* initialization segments completed by this parse */
-    double init_duration;   /* the last one's duration; NaN when it gives none */
+    double init_duration;   /* the last one's duration; NaN when it gives none (an mvhd
+                             * duration of 0 means unknown: NaN) */
     bool audio, video;      /* the tracks the buffer's first initialization segment holds */
     bool frames;            /* coded frames were added */
     bool parsing_media;     /* the parser stopped inside a media segment (PARSING_MEDIA_SEGMENT) */
@@ -161,13 +162,20 @@ typedef struct {
     /* Coded frame removal of [start, end). */
     void (*remove)(void *opaque, void *session, void *buffer, double start, double end, os64_dom_fed_result_t *out);
     /* The buffer's mode, timestampOffset and append window, for the frames
-     * that follow. */
+     * that follow. `offset_assigned` says the page assigned timestampOffset
+     * (at any value, the same one included): in sequence mode the next
+     * coded frame group starts at it. A change of mode to sequence starts
+     * the next group at the last group's end; libdom says nothing more
+     * of it than the mode. */
     void (*set)(void *opaque, void *session, void *buffer, os64_dom_fed_mode_t mode, double timestamp_offset,
-                double window_start, double window_end);
-    /* The buffer's ranges (its tracks' intersected), up to `cap`; their
-     * count; and in *highest_end the largest end of any of its tracks. */
-    uint32_t (*ranges)(void *opaque, void *session, void *buffer, os64_dom_fed_range_t *out, uint32_t cap,
-                       double *highest_end);
+                bool offset_assigned, double window_start, double window_end);
+    /* The buffer's ranges, up to `cap`, and their count: its tracks'
+     * ranges intersected, and with `ended` (the MediaSource has ended) each
+     * track's last range first reaching the largest end of any of its
+     * tracks (the buffered attribute's steps); and in *highest_end that
+     * largest end. */
+    uint32_t (*ranges)(void *opaque, void *session, void *buffer, bool ended, os64_dom_fed_range_t *out,
+                       uint32_t cap, double *highest_end);
     /* The MediaSource's duration, after each change. */
     void (*duration)(void *opaque, void *session, double seconds);
     /* endOfStream() without an error: nothing more is coming. */

@@ -82,14 +82,14 @@ saying why.**
 | `mode` get | last set value; initial from the registry | — |
 | `mode` set | § 5.1: ended→open (+`sourceopen` queued) BEFORE the parsing check; "sequence": group start = group end | InvalidStateError (removed); InvalidStateError (updating); TypeError (generate-timestamps flag and "segments": never for MP4); InvalidStateError (append state PARSING_MEDIA_SEGMENT) |
 | `updating` | true from appendBuffer/remove until their end | — |
-| `buffered` | § 5 getter: highest end over tracks; intersect audio and video track ranges; if parent "ended", the last range of each extends to the highest end; cached, a new object only when the ranges change | InvalidStateError (removed) |
+| `buffered` | § 5 getter: highest end over tracks; if parent "ended", the last range of each track extends to the highest end, then the tracks' ranges intersect (the host does both: `ranges` with `ended`, § 4); cached, a new object only when the ranges change | InvalidStateError (removed) |
 | `timestampOffset` get/set | get: libdom's stored value, which every DONE `parse` result overwrites with the SB's offset after the append (sequence mode moves it in coded frame processing, CFP 1.3); set: ended→open before the parsing check; "sequence": group start = the new offset; pushed with `set` | InvalidStateError (removed); InvalidStateError (updating); InvalidStateError (PARSING_MEDIA_SEGMENT) |
 | `appendWindowStart` set | stored | InvalidStateError (removed); InvalidStateError (updating); TypeError (< 0 or ≥ end) |
 | `appendWindowEnd` set | stored | InvalidStateError (removed); InvalidStateError (updating); TypeError (NaN); TypeError (≤ start) |
 | `appendBuffer(data)` | table 3.1 | from prepare append: InvalidStateError (removed; updating; the element has an error); QuotaExceededError (still full after eviction); TypeError (detached buffer: WebIDL) |
 | `abort()` | table 3.2 | InvalidStateError (removed); InvalidStateError (parent not "open"); InvalidStateError (range removal running) |
 | `remove(start, end)` | table 3.3 | InvalidStateError (removed); InvalidStateError (updating); TypeError (duration NaN); TypeError (start < 0 or > duration); TypeError (end ≤ start or NaN) |
-| `changeType(type)` | § 5: reset parser state, pending-init flag set; ended→open | TypeError (empty); InvalidStateError (removed); InvalidStateError (updating); NotSupportedError. **v1 answers only MP4→MP4** (`avc1`↔`avc3`, a level change): MS M5 owns the rest |
+| `changeType(type)` | § 5: reset parser state, pending-init flag set; ended→open | TypeError (empty); InvalidStateError (removed); InvalidStateError (updating); NotSupportedError. **v1 refuses every type** (NotSupportedError after the checks); MS.5 owns the switch (a DEBTS row) |
 | `audioTracks` `videoTracks` `textTracks` | absent in v1 (decision 8) | — |
 | `onupdatestart` `onupdate` `onupdateend` `onerror` `onabort` | handler attributes | — |
 
@@ -104,10 +104,10 @@ activeSourceBuffers). Every add/remove event on them is QUEUED (§ 6).
 | Member | Behaviour |
 |---|---|
 | `src` = a MediaSource object URL | attach (table 2.1) |
-| `buffered` (attached) | § 10.2: activeSourceBuffers' ranges intersected from [0, highest end]; "ended" extends each last range; a new object only when it changes |
+| `buffered` (attached) | § 10.2: activeSourceBuffers' ranges intersected from [0, highest end]; "ended" extends each one's last range to the highest end among them first; a new object at every read (HTML's rule for the element) |
 | `seekable` (attached) | § 10.1: NaN → empty; +∞ → live range ∪ buffered as one range, else empty if buffered empty, else [0, highest buffered end]; finite → [0, duration] |
 | `duration` (attached) | MediaSource's (decision 5) |
-| `HTMLVideoElement.getVideoPlaybackQuality()` | a new VideoPlaybackQuality: `creationTime` = performance.now(), `totalVideoFrames`, `droppedVideoFrames`, `corruptedVideoFrames` (0 in v1; deprecated). Counters reset at the element's load algorithm; total counts dropped frames too |
+| `HTMLVideoElement.getVideoPlaybackQuality()` | a new VideoPlaybackQuality: `creationTime` = performance.now(), `totalVideoFrames`, `droppedVideoFrames`, `corruptedVideoFrames` (0 in v1; deprecated). The counters are the session's, since it opened (a load opens a new one); total counts dropped frames too; 0 with no session |
 | `srcObject` = MediaSourceHandle | not in v1 (worker MSE) |
 
 ## 2. The state machines
@@ -123,7 +123,7 @@ activeSourceBuffers). Every add/remove event on them is QUEUED (§ 6).
 | open or ended | attach attempted again (another element, the same URL) | unchanged | the OTHER element runs "cannot be fetched at all" (§ 3.15.1 step 1.4: readyState not "closed") |
 | open | `endOfStream()` / `endOfStream("network"/"decode")`; or append error (decode) | ended | table 2.3 |
 | ended | appendBuffer, remove, `mode`/`timestampOffset` set, changeType | open | S: readyState "open"; Q: `sourceopen` — before the operation's own checks that may still throw (§ 5's quirk, kept) |
-| open or ended | detach: the element's load algorithm, a new `src`, `removeAttribute('src')` + load, a failure that empties the element, page teardown (no events then) | closed | S: provider `fed_close`; S: readyState "closed"; S: duration NaN; S: activeSourceBuffers emptied, Q: `removesourcebuffer` at it; S: sourceBuffers emptied, Q: `removesourcebuffer` at it; Q: `sourceclose`. Each SourceBuffer becomes "removed" (every member that checks throws). Each SB with an APPEND in flight: Q `abort`, Q `updateend` at it FIRST (§ 9.1), then the lists' events and `sourceclose` as listed; a REMOVE in flight: cancelled, no events |
+| open or ended | detach: the element's load algorithm, a new `src`, `removeAttribute('src')` + load, a failure that empties the element, page teardown (no events then) | closed | S: readyState "closed"; S: duration NaN; S: activeSourceBuffers emptied, Q: `removesourcebuffer` at it; S: sourceBuffers emptied, Q: `removesourcebuffer` at it; Q: `sourceclose`. Each SourceBuffer becomes "removed" (every member that checks throws). Each SB with an APPEND in flight: Q `abort`, Q `updateend` at it FIRST (§ 9.1), then the lists' events and `sourceclose` as listed; a REMOVE in flight: cancelled, no events. Last, S: provider `fed_close` |
 
 The element's own events at attach are the media element's as today for a
 local resource (`loadstart` from the load algorithm; no `suspend`, MSE §
@@ -227,12 +227,12 @@ holds a lock of the session's.
 | `fed_remove_buffer` | session, sb | — | frees them (§ 3.4) |
 | `evict` | session, sb, incoming bytes | true / false (FULL: QuotaExceededError, also for an append no buffer could ever hold) | MS § 4's eviction |
 | `take` | session, sb, bytes, length | true / false (no memory) | copies into the parser's input |
-| `parse` | session, sb, `out *` | DONE / PENDING / ERROR + INIT facts (duration, tracks of each kind) + group end + highest pts + the SB's `timestampOffset` as it stands after the append | the segment parser loop and coded frame processing |
+| `parse` | session, sb, `out *` (an init segment whose duration is unknown, an mvhd duration of 0 included, reports NaN, which libdom takes as +Infinity) | DONE / PENDING / ERROR + INIT facts (duration, tracks of each kind) + group end + highest pts + the SB's `timestampOffset` as it stands after the append | the segment parser loop and coded frame processing |
 | `fed_poll` | session, sb, `out *` | as `parse` | only when the parse runs elsewhere |
 | `reset` | session, sb, `out *` | the result's offset, highest pts and parsing flag after it | reset parser state (§ 5.5.2) |
 | `remove` | session, sb, start, end (seconds), `out *` | as `reset` | coded frame removal |
-| `set` | session, sb, mode, timestampOffset, window start, window end | — | the SourceBuffer's values, applied at the next frame |
-| `ranges` | session, sb, `out[]`, max, `*highest_end` | count (seconds, the round trip exact), and the largest end of any of the SB's tracks (the buffered getter's ended step, the duration's floor) | the SB's intersected ranges (MS § 4) |
+| `set` | session, sb, mode, timestampOffset, offset assigned, window start, window end | — | the SourceBuffer's values, applied at the next frame; `offset assigned` when the page assigned timestampOffset (any value, the same one too), which in sequence mode starts the next coded frame group there; a change of mode to sequence starts it at the last group's end |
+| `ranges` | session, sb, ended, `out[]`, max, `*highest_end` | count (seconds, the round trip exact), and the largest end of any of the SB's tracks (the duration's floor) | the SB's ranges: with `ended`, each track's last range first reaching that largest end, then the tracks intersected (MS § 4) |
 | `fed_duration` | session, seconds | — | the player's end |
 | `fed_end` | session | — | no more frames: the end of the highest range is `ended` |
 | `fed_close` | session | — | detach: the session and every SB freed |
@@ -248,7 +248,7 @@ holds a lock of the session's.
 | State or event | Comes from | Notes |
 |---|---|---|
 | HAVE_METADATA, `loadedmetadata`, `durationchange`, `resize` | every SB's first init (§ 5.5.7 10), as libdom saw them (`d_mse_probed`) | `videoWidth`/`Height` from the init's picture size |
-| a new init with the element above HAVE_CURRENT_DATA | § 5.5.7 9: back to HAVE_METADATA | the facts' current flag drops until a frame is decoded |
+| a SourceBuffer's first init with the element above HAVE_CURRENT_DATA (step 9 is under the active track flag, which only a first init sets) | § 5.5.7 9: back to HAVE_METADATA | the facts' current flag drops until a frame is decoded |
 | HAVE_CURRENT/FUTURE/ENOUGH, `loadeddata`, `canplay`, `canplaythrough`, `playing` | `facts.current/future/enough` (the session judges the ranges against the position, MS § 5); libdom's existing `ready_to` | thresholds in yonder, reported |
 | `waiting` | the play position leaving the buffered range (facts drop to HAVE_METADATA or CURRENT while playing) | existing `ready_to` |
 | seeking into a gap | `seek` as today; the session holds `seeked` until frames arrive there; § 3.15.3 drops readyState to HAVE_METADATA | `seeking` S as today; `seeked` when `facts.seeked` matches |

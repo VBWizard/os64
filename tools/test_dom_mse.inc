@@ -38,7 +38,8 @@ typedef struct {
     bool parsing_media;
     int pending_polls;
     os64_dom_fed_result_t held;     /* what the poll answers once the parse is done */
-    int parses, polls, resets, removes, takes, evicts;
+    int parses, polls, resets, removes, takes, evicts, assigned;
+    bool asked_ended;               /* the last ranges call's `ended` */
 } FedBuffer;
 
 typedef struct {
@@ -226,23 +227,28 @@ static void fed_remove(void *opaque, void *session, void *buffer, double start, 
     fed_result_of(b, out);
 }
 static void fed_set(void *opaque, void *session, void *buffer, os64_dom_fed_mode_t mode, double offset,
-                    double window_start, double window_end)
+                    bool offset_assigned, double window_start, double window_end)
 {
     (void)opaque; (void)session;
     FedBuffer *b = buffer;
+    /* Sequence mode's next group: at the assigned offset, or at the last
+     * group's end when the mode becomes sequence. */
+    if (mode == OS64_DOM_FED_SEQUENCE && offset_assigned) b->group_end = offset, b->assigned++;
     b->mode = mode;
     b->offset = offset;
     b->window_start = window_start;
     b->window_end = window_end;
 }
-static uint32_t fed_ranges(void *opaque, void *session, void *buffer, os64_dom_fed_range_t *out, uint32_t cap,
-                           double *highest_end)
+/* One track a buffer, so ended's extension is the buffer's own end. */
+static uint32_t fed_ranges(void *opaque, void *session, void *buffer, bool ended, os64_dom_fed_range_t *out,
+                           uint32_t cap, double *highest_end)
 {
     (void)opaque; (void)session;
     FedBuffer *b = buffer;
     uint32_t n = b->count < cap ? b->count : cap;
     memcpy(out, b->ranges, sizeof(out[0]) * n);
     *highest_end = b->count > 0 ? b->ranges[b->count - 1].end : 0;
+    b->asked_ended = ended;
     return n;
 }
 static void fed_duration(void *opaque, void *session, double seconds)
@@ -475,6 +481,15 @@ static void dom_mse_buffer_cases(void)
     check(b->removes == 1, "mse: the host removed");
     mse_script(&f, "assert(heard()==='sb:updatestart sb:update sb:updateend'&&R(sb.buffered)==='0-1,2-4',R(sb.buffered));",
                "mse: removed");
+    /* A conversion that runs page script is made before the removed check:
+     * a valueOf that removes the buffer leaves the assignment refused. */
+    mse_script(&f, "globalThis.sb2=ms.addSourceBuffer('audio/mp4; codecs=\"mp4a.40.2\"');heard();"
+                   "throws('InvalidStateError',()=>{sb2.timestampOffset={valueOf(){ms.removeSourceBuffer(sb2);return 1}}});"
+                   "assert(sb2.timestampOffset===0&&ms.sourceBuffers.length===1,'refused after the conversion removed it');"
+                   "heard();",
+               "mse: the removed check follows the conversion");
+    media_turn(&f, "mse: sb2's list events");
+    mse_script(&f, "heard();", "mse: sb2 clear");
     /* abort() cancels a queued append: abort, updateend, and no parse. */
     mse_script(&f, "sb.appendWindowStart=1;sb.appendBuffer(B('frames:4:6'));sb.abort();"
                    "assert(!sb.updating&&sb.appendWindowStart===0&&sb.appendWindowEnd===Infinity,'the window reset');",
@@ -510,6 +525,15 @@ static void dom_mse_sequence_cases(void)
                    "ms.setLiveSeekableRange(1,9);assert(R(v.seekable)==='0-9',R(v.seekable));"
                    "ms.clearLiveSeekableRange();assert(R(v.seekable)==='0-4');",
                "mse: the offset moved again; live seekable");
+    /* An assigned offset, the same value included, starts sequence mode's
+     * next group there (the host is told it was assigned). */
+    int assigned = fed_sessions[0].buffers[0].assigned;
+    mse_script(&f, "sb.timestampOffset=sb.timestampOffset;sb.timestampOffset=10;sb.appendBuffer(B('frames:5:7'));",
+               "mse: an assigned offset");
+    check(fed_sessions[0].buffers[0].assigned == assigned + 2, "mse: each assignment reaches the host");
+    media_turn(&f, "mse: assigned offset turn");
+    mse_script(&f, "assert(R(sb.buffered)==='0-4,10-12'&&sb.timestampOffset===5,R(sb.buffered)+' '+sb.timestampOffset);",
+               "mse: the next group starts at the assigned offset");
     /* Inside a media segment the mode and offset cannot change. */
     mse_script(&f, "sb.appendBuffer(B('media'));", "mse: into a media segment");
     media_turn(&f, "mse: media turn");
@@ -542,18 +566,30 @@ static void dom_mse_end_cases(void)
                "mse: endOfStream");
     media_turn(&f, "mse: endOfStream turn");
     check(fed_sessions[0].ends == 1, "mse: the host heard the end");
+    mse_script(&f, "sb.buffered;", "mse: buffered when ended");
+    check(fed_sessions[0].buffers[0].asked_ended, "mse: the host is asked for the ended ranges");
     mse_script(&f, "const h=heard();assert(h==='ms:sourceended v:durationchange','ended: '+h);"
                    "sb.appendBuffer(B('frames:4:5'));assert(ms.readyState==='open');",
                "mse: sourceended; an append reopens");
+    /* (A shrinking duration seeks: below, after the reopen.) */
     media_turn(&f, "mse: reopen turn");
     mse_script(&f, "const h=heard();assert(h==='ms:sourceopen sb:updatestart v:durationchange sb:update sb:updateend',h);"
                    "assert(ms.duration===5,'past the group end: '+ms.duration);",
                "mse: reopened");
+    /* A duration that drops below the position seeks back to the new end. */
+    mse_script(&f, "v.currentTime=4.8;sb.remove(4.5,5);", "mse: a position near the end");
+    media_turn(&f, "mse: removal turn");
+    mse_script(&f, "heard();ms.endOfStream();assert(ms.duration===4.5&&v.currentTime===4.5&&v.seeking,"
+                   "'sought to the end: '+ms.duration+' '+v.currentTime);",
+               "mse: a shrinking duration seeks");
+    media_turn(&f, "mse: shrink turn");
+    mse_script(&f, "heard();", "mse: shrink clear");
     /* The append error: error, updateend, then the end of stream with a
      * decode error; after metadata, the element's MEDIA_ERR_DECODE. */
     mse_script(&f, "sb.appendBuffer(B('error'));", "mse: a broken segment");
     media_turn(&f, "mse: the append error");
-    mse_script(&f, "const h=heard();assert(h==='sb:updatestart sb:error sb:updateend ms:sourceended v:error','error: '+h);"
+    mse_script(&f, "const h=heard();assert(h==='ms:sourceopen sb:updatestart sb:error sb:updateend ms:sourceended v:error',"
+                   "'error: '+h);"
                    "assert(ms.readyState==='ended'&&v.error.code===3,'decode error: '+(v.error&&v.error.code));"
                    "throws('InvalidStateError',()=>sb.appendBuffer(B('frames:5:6')));",
                "mse: append error");
@@ -565,9 +601,28 @@ static void dom_mse_end_cases(void)
     mse_with_buffer(&f, "mse: early error");
     mse_script(&f, "heard();sb.appendBuffer(B('error'));", "mse: early broken segment");
     media_turn(&f, "mse: early error turn");
-    mse_script(&f, "const h=heard();assert(h==='sb:updatestart sb:error sb:updateend ms:sourceended v:error',h);"
-                   "assert(v.error.code===4&&v.networkState===3,'not supported');",
-               "mse: append error with nothing yet");
+    mse_script(&f, "const h=heard();assert(h==='sb:updatestart sb:error sb:updateend ms:sourceended "
+                   "active:removesourcebuffer list:removesourcebuffer ms:sourceclose v:error',h);"
+                   "assert(v.error.code===4&&v.networkState===3&&ms.readyState==='closed','not supported, detached');",
+               "mse: append error with nothing yet detaches (Chromium's NoneSupported)");
+    fixture_free(&f);
+
+    /* From a <source> child, the next child is tried. */
+    mse_fixture(&f);
+    if (!fixture_ready(&f)) return;
+    mse_script(&f, "globalThis.ms=new MediaSource();watch(ms,'ms',MS_EVENTS);const d=document.createElement('div');"
+                   "d.innerHTML='<video><source src=\"'+URL.createObjectURL(ms)+'\"><source src=\"b.mp4\"></video>';"
+                   "globalThis.v=d.firstChild;watch(v,'v',V_EVENTS);v.load();",
+               "mse: from a source child");
+    media_turn(&f, "mse: source child attach");
+    mse_script(&f, "assert(ms.readyState==='open','attached: '+heard());ms.addSourceBuffer('video/mp4; codecs=\"avc1.64001f\"');"
+                   "ms.endOfStream('network');",
+               "mse: the source child fails");
+    media_turn(&f, "mse: the next child");
+    check(media_opened == 1 && strcmp(media_sessions[0].url, "https://example.test/dir/b.mp4") == 0,
+          "mse: the next <source> is opened");
+    mse_script(&f, "assert(ms.readyState==='closed'&&v.error===null,'detached, no error: '+heard());",
+               "mse: no error while a child remains");
     fixture_free(&f);
 
     /* A decode error in play, long after its append succeeded, ends the

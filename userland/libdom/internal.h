@@ -1624,11 +1624,12 @@ DMediaTask *d_media_queue_work(os64_dom_t *dom, JSValueConst object, void (*run)
                                void (*left)(void *work, DMediaTask *task), void *work);
 void d_media_task_cancel(DMediaTask *task);
 /* The element `media` (a DMediaElement, opaque to mse.c) of an attached
- * MediaSource: its duration set and durationchange queued; the end of
+ * MediaSource: its duration set and durationchange queued (and a position
+ * past it sought back); the end of
  * stream's error steps (a decode error, else a network one); HAVE_METADATA
  * reached (every SourceBuffer's first initialization segment); readyState
- * back to HAVE_METADATA when above HAVE_CURRENT_DATA (an initialization
- * segment while playing); the coded frame removal's drop when the
+ * back to HAVE_METADATA when above HAVE_CURRENT_DATA (a SourceBuffer's
+ * first initialization segment arriving while playing); the coded frame removal's drop when the
  * position is inside [start, end); whether it has a MediaError (prepare
  * append's "recent element error"). */
 void d_media_fed_duration(os64_dom_t *dom, void *media, double duration);

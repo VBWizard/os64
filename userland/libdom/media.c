@@ -195,7 +195,8 @@ static void tell_settings(os64_dom_t *dom, DMediaElement *m)
 
 /* The session given back. An attached MediaSource's is the fed
  * source's to end: the detach (mse.c), which closes it, runs whenever the
- * element lets its resource go (a load, a failure, the page leaving). */
+ * element lets its resource go (a load, the dedicated media source failure
+ * steps, the page leaving). */
 static void session_close(os64_dom_t *dom, DMediaElement *m)
 {
     if (!JS_IsUndefined(m->fed)) {
@@ -385,11 +386,13 @@ static bool allowed(os64_dom_t *dom, const DMediaElement *m)
 static void session_wake(os64_dom_t *dom, DMediaElement *m);
 
 /* HTML's seek steps; a resource the host says cannot seek is not sought
- * (HTML aborts a seek outside the seekable ranges). */
+ * (HTML aborts a seek outside the seekable ranges). A fed element's
+ * seekable range is its MediaSource's, which the host's fact does not
+ * describe. */
 static void seek(os64_dom_t *dom, DMediaElement *m, double t)
 {
     session_wake(dom, m);
-    if (m->session != NULL && dom->media_provider.facts != NULL) {
+    if (m->session != NULL && JS_IsUndefined(m->fed) && dom->media_provider.facts != NULL) {
         os64_dom_media_facts_t f = {0};
         dom->media_provider.facts(dom->media_provider.opaque, m->session, &f);
         if (f.probed && !f.seekable) return;
@@ -1684,37 +1687,42 @@ void d_media_quality(os64_dom_t *dom, const os64_html_node_t *node, uint64_t *sh
 
 /* ── For Media Source Extensions (mse.c) ────────────────────────────── */
 
+/* HTML's duration change: durationchange, and a position past the new end
+ * sought back to it. */
 void d_media_fed_duration(os64_dom_t *dom, void *media, double duration)
 {
     DMediaElement *m = media;
     if (m == NULL || duration == m->duration || (isnan(duration) && isnan(m->duration))) return;
     m->duration = duration;
     queue(dom, m, "durationchange", SETTLE_NONE);
+    if (m->ready >= R_METADATA && (m->seeking ? m->seek_to : m->position) > duration) seek(dom, m, duration);
 }
 
-/* The end of stream algorithm's element steps (MSE § 3.15.7): with
- * nothing yet (HAVE_NOTHING) the dedicated media source failure steps,
+/* The end of stream algorithm's element steps (MSE § 3.15.7). With
+ * nothing yet (HAVE_NOTHING), the dedicated media source failure steps,
  * which a network error ("cannot be fetched at all") and a decode error
- * ("unsupported format") both are; after that, a network error is the
- * connection interrupted and a decode error the media data corrupted.
- * The session stays: the source is detached when the element lets its
- * resource go. */
+ * ("unsupported format") both are: source_failed, which detaches the
+ * source and goes on to the next <source> child, as Chromium's
+ * NoneSupported closes its MediaSource. After that, a network error is the
+ * connection interrupted and a decode error the media data corrupted, and
+ * the source stays attached until the element lets its resource go. */
 void d_media_fed_failed(os64_dom_t *dom, void *media, bool decode)
 {
     DMediaElement *m = media;
     if (m == NULL || m->error != 0) return;
     m->error_seen = true;
     if (m->ready == R_NOTHING) {
-        m->error = OS64_DOM_MEDIA_ERR_SRC_NOT_SUPPORTED;
-        set_message(m, decode ? "The media data is not in a supported format" : "The media data could not be fetched");
-        m->network = N_NO_SOURCE;
-        queue(dom, m, "error", SETTLE_NOT_SUPPORTED);
-    } else {
-        m->error = decode ? OS64_DOM_MEDIA_ERR_DECODE : OS64_DOM_MEDIA_ERR_NETWORK;
-        set_message(m, decode ? "The media data is corrupted" : "The connection was interrupted");
-        m->network = N_IDLE;
-        queue(dom, m, "error", SETTLE_NONE);
+        const char *why = decode ? "The media data is not in a supported format" : "The media data could not be fetched";
+        if (dom->media_provider.failed != NULL)
+            dom->media_provider.failed(dom->media_provider.opaque, m->node, m->session, m->current_src,
+                                       OS64_DOM_MEDIA_ERR_SRC_NOT_SUPPORTED, why);
+        source_failed(dom, m, why);
+        return;
     }
+    m->error = decode ? OS64_DOM_MEDIA_ERR_DECODE : OS64_DOM_MEDIA_ERR_NETWORK;
+    set_message(m, decode ? "The media data is corrupted" : "The connection was interrupted");
+    m->network = N_IDLE;
+    queue(dom, m, "error", SETTLE_NONE);
     if (dom->media_provider.failed != NULL)
         dom->media_provider.failed(dom->media_provider.opaque, m->node, m->session, m->current_src, m->error,
                                    m->message);

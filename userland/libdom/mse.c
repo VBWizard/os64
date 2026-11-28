@@ -51,6 +51,7 @@ enum { END_NONE, END_NETWORK, END_DECODE };
 typedef struct {
     DValue target;                  /* first: the plain target's entry, in the object */
     JSValue self;                   /* the object (not held: the struct is its opaque) */
+    os64_dom_t *dom;                /* the binding that made it */
     uint8_t ready;
     double duration;
     bool live;                      /* a live seekable range is set */
@@ -66,6 +67,7 @@ typedef struct {
 typedef struct {
     DValue target;
     JSValue self;
+    os64_dom_t *dom;                /* the binding that made it */
     JSValue parent;                 /* the MediaSource while in its sourceBuffers (held); JS_UNDEFINED removed */
     void *handle;                   /* the host's buffer; NULL once removed */
     os64_dom_fed_mode_t mode;
@@ -102,14 +104,19 @@ struct DMseState {
 
 static JSClassID media_source_slot, source_buffer_slot, source_buffer_list_slot;
 
+/* The class ids are the process's, so another document's object (a
+ * frame's) has the class too: it is not this binding's, and its host and
+ * its session are not this one's. */
 static DMediaSource *source_of(os64_dom_t *dom, JSValueConst value)
 {
-    return dom->mse != NULL ? JS_GetOpaque(value, dom->mse->source_class) : NULL;
+    DMediaSource *s = dom->mse != NULL ? JS_GetOpaque(value, dom->mse->source_class) : NULL;
+    return s != NULL && s->dom == dom ? s : NULL;
 }
 
 static DSourceBuffer *buffer_of(os64_dom_t *dom, JSValueConst value)
 {
-    return dom->mse != NULL ? JS_GetOpaque(value, dom->mse->buffer_class) : NULL;
+    DSourceBuffer *b = dom->mse != NULL ? JS_GetOpaque(value, dom->mse->buffer_class) : NULL;
+    return b != NULL && b->dom == dom ? b : NULL;
 }
 
 /* ── isTypeSupported (MSE § 3.12; MSE_DOM.md § 7) ─────────────────── */
@@ -228,26 +235,32 @@ static DMediaSource *parent_of(os64_dom_t *dom, DSourceBuffer *b)
     return JS_IsUndefined(b->parent) ? NULL : source_of(dom, b->parent);
 }
 
-static void push_settings(os64_dom_t *dom, DSourceBuffer *b)
+/* The buffer's values to the host, for the frames that follow; with
+ * `offset_assigned` when the page assigned timestampOffset, which in
+ * sequence mode starts the next coded frame group there even at the same
+ * value (MSE § 5.1). A host gone inactive is not told. */
+static void push_settings(os64_dom_t *dom, DSourceBuffer *b, bool offset_assigned)
 {
     DMediaSource *s = parent_of(dom, b);
-    if (s != NULL && b->handle != NULL && host(dom)->set != NULL)
-        host(dom)->set(host(dom)->opaque, s->session, b->handle, b->mode, b->offset, b->window_start, b->window_end);
+    if (s == NULL || b->handle == NULL || host(dom)->set == NULL || !d_provider_enter(dom)) return;
+    host(dom)->set(host(dom)->opaque, s->session, b->handle, b->mode, b->offset, offset_assigned, b->window_start,
+                   b->window_end);
+    d_provider_leave(dom);
 }
 
-/* The buffer's ranges (its tracks' intersected, as the host answers
- * them), the last one reaching the highest end when its source has ended
- * (the buffered getter's step 4); their count, and in *highest that end. */
+/* The buffer's ranges, as the host answers them (its tracks' intersected,
+ * each track's last range reaching the highest end first when the source
+ * has ended: the buffered getter's steps); their count, and in *highest
+ * that end. */
 static uint32_t buffer_ranges(os64_dom_t *dom, DMediaSource *s, DSourceBuffer *b, os64_dom_fed_range_t *out,
                               uint32_t cap, double *highest)
 {
     *highest = 0;
     if (s == NULL || b->handle == NULL || host(dom)->ranges == NULL) return 0;
     double top = 0;
-    uint32_t n = host(dom)->ranges(host(dom)->opaque, s->session, b->handle, out, cap, &top);
+    uint32_t n = host(dom)->ranges(host(dom)->opaque, s->session, b->handle, s->ready == MS_ENDED, out, cap, &top);
     if (n > cap) n = cap;
     if (isfinite(top) && top > 0) *highest = top;
-    if (s->ready == MS_ENDED && n > 0 && *highest > out[n - 1].end) out[n - 1].end = *highest;
     return n;
 }
 
@@ -358,7 +371,11 @@ static void end_of_stream(os64_dom_t *dom, DMediaSource *s, int error)
         if (s->session != NULL && host(dom)->end != NULL) host(dom)->end(host(dom)->opaque, s->session);
         return;
     }
+    /* With nothing yet the element detaches this source, which may let go
+     * of its last reference: it is held across the call. */
+    JSValue held = JS_DupValueRT(dom->engine, s->self);
     d_media_fed_failed(dom, s->media, error == END_DECODE);
+    JS_FreeValueRT(dom->engine, held);
 }
 
 static void take_result(DSourceBuffer *b, const os64_dom_fed_result_t *r)
@@ -400,6 +417,10 @@ static void parsed(os64_dom_t *dom, DSourceBuffer *b, const os64_dom_fed_result_
     if (r->status == OS64_DOM_FED_PENDING) {
         struct DMseState *m = dom->mse;
         if (b->polling) return;
+        if (host(dom)->poll == NULL) {
+            append_error(dom, s, b);    /* nothing would ever end the wait */
+            return;
+        }
         if (m->poll_count == m->poll_cap) {
             uint32_t cap = m->poll_cap != 0 ? m->poll_cap * 2 : 4;
             DMsePoll *grown = d_alloc(dom, sizeof(*grown) * cap);
@@ -456,9 +477,12 @@ static void append_run(os64_dom_t *dom, void *work)
     DSourceBuffer *b = work;
     b->pending = NULL;
     DMediaSource *s = parent_of(dom, b);
-    if (s == NULL || b->handle == NULL || host(dom)->parse == NULL) return;
-    os64_dom_fed_result_t r = {.timestamp_offset = NAN, .highest_pts = NAN, .group_end = NAN, .init_duration = NAN};
-    host(dom)->parse(host(dom)->opaque, s->session, b->handle, &r);
+    if (s == NULL || b->handle == NULL) return;
+    /* A host that cannot parse fails the append rather than leave it
+     * updating forever. */
+    os64_dom_fed_result_t r = {.status = OS64_DOM_FED_ERROR, .timestamp_offset = NAN, .highest_pts = NAN,
+                               .group_end = NAN, .init_duration = NAN};
+    if (host(dom)->parse != NULL) host(dom)->parse(host(dom)->opaque, s->session, b->handle, &r);
     parsed(dom, b, &r);
 }
 
@@ -536,6 +560,7 @@ static JSValue source_add(os64_dom_t *dom, JSContext *ctx, DMediaSource *s, int 
             } else {
                 d_event_target_init(dom, &b->target, result);
                 b->self = result;
+                b->dom = dom;
                 b->parent = JS_DupValue(ctx, s->self);
                 b->handle = handle;
                 b->mode = OS64_DOM_FED_SEGMENTS;
@@ -580,7 +605,7 @@ static JSValue source_remove(os64_dom_t *dom, JSContext *ctx, DMediaSource *s, i
     }
     s->count--;
     list_event(dom, s->list, "removesourcebuffer");
-    if (b->handle != NULL && host(dom)->remove_buffer != NULL && d_provider_begin(dom, ctx)) {
+    if (b->handle != NULL && host(dom)->remove_buffer != NULL && d_provider_enter(dom)) {
         host(dom)->remove_buffer(host(dom)->opaque, s->session, b->handle);
         d_provider_leave(dom);
     }
@@ -707,6 +732,7 @@ static JSValue source_constructor(JSContext *ctx, JSValueConst new_target, int a
     }
     d_event_target_init(dom, &s->target, object);
     s->self = object;
+    s->dom = dom;
     s->ready = MS_CLOSED;
     s->duration = NAN;
     s->list = s->active_list = JS_UNDEFINED;
@@ -782,7 +808,7 @@ static JSValue buffer_append(os64_dom_t *dom, JSContext *ctx, DSourceBuffer *b, 
     if (b->pending == NULL) {
         /* No memory for the task: the append ends as an error would, its
          * bytes reset away. */
-        if (d_provider_begin(dom, ctx)) {
+        if (d_provider_enter(dom)) {
             append_error(dom, s, b);
             d_provider_leave(dom);
         }
@@ -811,8 +837,8 @@ static JSValue buffer_abort(os64_dom_t *dom, JSContext *ctx, DSourceBuffer *b)
     }
     b->window_start = 0;
     b->window_end = INFINITY;
-    push_settings(dom, b);
     d_provider_leave(dom);
+    push_settings(dom, b, false);
     return JS_UNDEFINED;
 }
 
@@ -839,8 +865,11 @@ static JSValue buffer_remove(os64_dom_t *dom, JSContext *ctx, DSourceBuffer *b, 
     buffer_event(dom, b, "updatestart");
     b->pending = d_media_queue_work(dom, b->self, remove_run, work_left, b);
     if (b->pending == NULL) {
+        /* No memory for the task: the removal ends undone, and the
+         * updatestart already queued still has its updateend. */
         b->updating = false;
         b->removing = false;
+        buffer_event(dom, b, "updateend");
         return JS_ThrowOutOfMemory(ctx);
     }
     return JS_UNDEFINED;
@@ -855,7 +884,10 @@ static JSValue buffer_member(JSContext *ctx, JSValueConst self, int argc, JSValu
     DSourceBuffer *b = buffer_of(dom, self);
     if (b == NULL) return JS_ThrowTypeError(ctx, "Illegal invocation");
     JSValueConst value = argc > 0 ? argv[0] : JS_UNDEFINED;
-    DMediaSource *s = parent_of(dom, b);
+    /* Each member reads the parent (parent_of) only after its argument's
+     * conversion: a conversion runs the page's valueOf or toString, which
+     * may remove this SourceBuffer, and the removed check must see that. */
+    DMediaSource *s;
     switch (magic) {
     case B_MODE: {
         if (!set) return JS_NewString(ctx, b->mode == OS64_DOM_FED_SEQUENCE ? "sequence" : "segments");
@@ -866,24 +898,21 @@ static JSValue buffer_member(JSContext *ctx, JSValueConst self, int argc, JSValu
         JS_FreeCString(ctx, text);
         /* An enumeration's unknown value is no assignment (WebIDL § 3.2.9). */
         if (mode < 0) return JS_UNDEFINED;
-        if (s == NULL) return removed_error(ctx);
+        if ((s = parent_of(dom, b)) == NULL) return removed_error(ctx);
         if (b->updating) return d_error(ctx, "InvalidStateError", "The SourceBuffer is updating");
         reopen(dom, s);
         if (b->parsing_media) return d_error(ctx, "InvalidStateError", "A media segment is being parsed");
         b->mode = (os64_dom_fed_mode_t)mode;
-        if (d_provider_begin(dom, ctx)) {
-            push_settings(dom, b);
-            d_provider_leave(dom);
-        }
+        push_settings(dom, b, false);
         return JS_UNDEFINED;
     }
     case B_UPDATING: return JS_NewBool(ctx, b->updating);
     case B_BUFFERED: {
-        if (s == NULL) return removed_error(ctx);
+        if ((s = parent_of(dom, b)) == NULL) return removed_error(ctx);
         os64_dom_fed_range_t r[D_RANGES_MAX];
         double highest;
         uint32_t n = 0;
-        if (d_provider_begin(dom, ctx)) {
+        if (d_provider_enter(dom)) {
             n = buffer_ranges(dom, s, b, r, D_RANGES_MAX, &highest);
             d_provider_leave(dom);
         }
@@ -904,15 +933,12 @@ static JSValue buffer_member(JSContext *ctx, JSValueConst self, int argc, JSValu
         double v;
         if (JS_ToFloat64(ctx, &v, value) < 0) return JS_EXCEPTION;
         if (!isfinite(v)) return JS_ThrowTypeError(ctx, "The offset is not finite");
-        if (s == NULL) return removed_error(ctx);
+        if ((s = parent_of(dom, b)) == NULL) return removed_error(ctx);
         if (b->updating) return d_error(ctx, "InvalidStateError", "The SourceBuffer is updating");
         reopen(dom, s);
         if (b->parsing_media) return d_error(ctx, "InvalidStateError", "A media segment is being parsed");
         b->offset = v;
-        if (d_provider_begin(dom, ctx)) {
-            push_settings(dom, b);
-            d_provider_leave(dom);
-        }
+        push_settings(dom, b, true);
         return JS_UNDEFINED;
     }
     case B_WINDOW_START:
@@ -922,7 +948,7 @@ static JSValue buffer_member(JSContext *ctx, JSValueConst self, int argc, JSValu
         double v;
         if (JS_ToFloat64(ctx, &v, value) < 0) return JS_EXCEPTION;
         if (start && !isfinite(v)) return JS_ThrowTypeError(ctx, "The window's start is not finite");
-        if (s == NULL) return removed_error(ctx);
+        if (parent_of(dom, b) == NULL) return removed_error(ctx);
         if (b->updating) return d_error(ctx, "InvalidStateError", "The SourceBuffer is updating");
         if (start && (v < 0 || v >= b->window_end))
             return JS_ThrowTypeError(ctx, "The window's start is negative or not before its end");
@@ -930,10 +956,7 @@ static JSValue buffer_member(JSContext *ctx, JSValueConst self, int argc, JSValu
             return JS_ThrowTypeError(ctx, "The window's end is not after its start");
         if (start) b->window_start = v;
         else b->window_end = v;
-        if (d_provider_begin(dom, ctx)) {
-            push_settings(dom, b);
-            d_provider_leave(dom);
-        }
+        push_settings(dom, b, false);
         return JS_UNDEFINED;
     }
     case B_APPEND: return buffer_append(dom, ctx, b, argc, argv);
@@ -944,7 +967,7 @@ static JSValue buffer_member(JSContext *ctx, JSValueConst self, int argc, JSValu
         bool empty = type[0] == '\0';
         JS_FreeCString(ctx, type);
         if (empty) return JS_ThrowTypeError(ctx, "The type is empty");
-        if (s == NULL) return removed_error(ctx);
+        if (parent_of(dom, b) == NULL) return removed_error(ctx);
         if (b->updating) return d_error(ctx, "InvalidStateError", "The SourceBuffer is updating");
         return d_error(ctx, "NotSupportedError", "This SourceBuffer cannot change its type");
     }
