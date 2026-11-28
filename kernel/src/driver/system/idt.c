@@ -1,4 +1,5 @@
 #include "driver/system/idt.h"
+#include "driver/net/ax210.h"
 #include "smp_core.h"
 
 extern void vector123();
@@ -21,6 +22,7 @@ extern void handler_irq12_asm();
 extern void handler_e1000_intx_asm();
 extern void handler_r8125_msi_asm();
 extern void handler_xhci_irq_asm();
+extern void handler_ax210_msix_asm();
 // The unified exception path (2026-08-11): one prologue for all 32 vectors
 // (exception_entry.S), one reporter (exception_report.c). The table holds the
 // 32 stub addresses so the wiring below is a loop, not thirty-two lines each
@@ -162,6 +164,7 @@ void initialize_idt() {
     set_idt_entry(0x45, (uint64_t)&handler_e1000_intx_asm, 0x28, 0x8E); // e1000 INTx via IOAPIC (≥0x40, same TPR bar)
     set_idt_entry(0x46, (uint64_t)&handler_r8125_msi_asm, 0x28, 0x8E);  // RTL8125 MSI (same class as its neighbour)
     set_idt_entry(0x47, (uint64_t)&handler_xhci_irq_asm, 0x28, 0x8E);   // xHCI, every controller (same class again)
+    set_idt_entry(AX210_MSIX_VECTOR, (uint64_t)&handler_ax210_msix_asm, 0x28, 0x8E);
 
 	// SET MP handlers
 	set_idt_entry(IPI_INVALIDATE_TLB_VECTOR, (uint64_t)&vector123, 0x28, 0x8E);		// Invalidate TLB IPI

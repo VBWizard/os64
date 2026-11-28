@@ -294,6 +294,7 @@ KERNEL_FIXTURES := $(addprefix kernel/bin/,test_elf arg_echo dyn_consumer \
                      syscall_smoke exit_by_return file_io redirect_io dir_list map_unmap cwd_test stat_test sleep_test memory_test nosyscall env_fill glutton libtest.so)
 KERNEL_BIN      := kernel/bin/$(IMAGE_NAME)
 BT_FIRMWARE_LICENSE := firmware/intel/LICENCE.ibt_firmware
+WIFI_FIRMWARE_LICENSE := firmware/intel/ax210-wifi/LICENCE.iwlwifi_firmware
 
 # The linker outputs stay under kernel/bin and userland/bin for GDB. Image
 # recipes share the staged full kernel and stripped-debug ring-3 ELFs.
@@ -557,7 +558,8 @@ SYSTEM_CONFIG := $(addprefix etc/,husk.rc logd.conf os64get.conf hosts crontab \
 BOOT_MODULES := $(wildcard external/*)
 SYSTEM_LICENSES := $(foreach n,libjpeg-turbo libwebp libpage-numeric freetype unicode \
                      libmath speexdsp ffmpeg big-buck-bunny android-sbc,$(n).txt:license/$(n)-LICENSE) \
-                   intel-bluetooth.txt:$(BT_FIRMWARE_LICENSE) quickjs.txt:$(QUICKJS_LICENSE) \
+                   intel-bluetooth.txt:$(BT_FIRMWARE_LICENSE) intel-wifi.txt:$(WIFI_FIRMWARE_LICENSE) \
+                   quickjs.txt:$(QUICKJS_LICENSE) \
                    DejaVu.txt:$(FONT_FIXTURE_DIR)/LICENSE-DejaVu.txt
 license_name = $(word 1,$(subst :, ,$(1)))
 license_source = $(word 2,$(subst :, ,$(1)))
@@ -915,10 +917,10 @@ vbox-sync: $(DISK_IMAGE)
 # guaranteed a full repack on every single make). Nearly all of the ISO's bulk
 # is $(DISK_IMAGE) riding along as a Limine module for the RAMDISK entries —
 # sparse on disk here, dense once xorriso writes it out.
-$(IMAGE_NAME).iso: $(BT_FIRMWARE_LICENSE) limine/limine $(DEPLOY_KERNEL) $(DISK_IMAGE) limine.conf tools/p5-refresh.sh
+$(IMAGE_NAME).iso: $(BT_FIRMWARE_LICENSE) $(WIFI_FIRMWARE_LICENSE) limine/limine $(DEPLOY_KERNEL) $(DISK_IMAGE) limine.conf tools/p5-refresh.sh
 	@mkdir -p iso_root/boot
 	cp $(DEPLOY_KERNEL) iso_root/boot/
-	cp $(BT_FIRMWARE_LICENSE) iso_root/
+	cp $(BT_FIRMWARE_LICENSE) $(WIFI_FIRMWARE_LICENSE) iso_root/
 	# The P5 refresh script rides at the ISO root: boot the target machine's
 	# Linux, mount the stick, `sudo bash <stick>/p5-refresh.sh <stick>` — the
 	# ISO carries its own installer (one-time setup lives in its header).
@@ -982,7 +984,7 @@ copy: $(IMAGE_NAME).iso
 	cp $(IMAGE_NAME).iso /mnt/c/temp/
 	@echo "copy: C:/temp/$(IMAGE_NAME).iso updated ($$(du -h $(IMAGE_NAME).iso | cut -f1))"
 
-$(IMAGE_NAME).hdd: limine/limine $(DEPLOY_KERNEL) $(BT_FIRMWARE_LICENSE)
+$(IMAGE_NAME).hdd: limine/limine $(DEPLOY_KERNEL) $(BT_FIRMWARE_LICENSE) $(WIFI_FIRMWARE_LICENSE)
 #	@rm -f $(IMAGE_NAME).hdd
 #	@dd if=/dev/zero bs=1M count=0 seek=1024 of=$(IMAGE_NAME).hdd
 #	# Create the EFI partition
@@ -1002,6 +1004,7 @@ $(IMAGE_NAME).hdd: limine/limine $(DEPLOY_KERNEL) $(BT_FIRMWARE_LICENSE)
 	# Copy bootloader and kernel files to the EFI partition
 	@mcopy -i $(IMAGE_NAME).hdd@@1048576 $(DEPLOY_KERNEL) ::/boot
 	@mcopy -o -i $(IMAGE_NAME).hdd@@1048576 $(BT_FIRMWARE_LICENSE) ::/boot/LICENCE.ibt_firmware
+	@mcopy -o -i $(IMAGE_NAME).hdd@@1048576 $(WIFI_FIRMWARE_LICENSE) ::/boot/LICENCE.iwlwifi_firmware
 #	@mcopy -i $(IMAGE_NAME).hdd@@1048576 limine.conf limine/limine-bios.sys ::/boot/limine
 #	@mcopy -i $(IMAGE_NAME).hdd@@1048576 limine/BOOTX64.EFI ::/EFI/BOOT
 #	@mcopy -i $(IMAGE_NAME).hdd@@1048576 limine/BOOTIA32.EFI ::/EFI/BOOT

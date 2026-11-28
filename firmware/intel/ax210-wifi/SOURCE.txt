@@ -1,0 +1,22 @@
+Intel AX210 Typhoon Peak Wi-Fi firmware, unchanged upstream binaries.
+Source package: OpenBSD 7.7 iwx-firmware-20240513p0.tgz
+https://firmware.openbsd.org/firmware/7.7/iwx-firmware-20240513p0.tgz
+Archive SHA-256:
+f52f749492ec5a7b96c1e4e15e6ffbd2071cacf6ee9f45799b9a47709cd4e97d
+The archive hash was checked against OpenBSD's signed 7.7 firmware manifest.
+
+Package member firmware/iwx-ty-a0-gf-a0-77 ships here as
+iwlwifi-ty-a0-gf-a0-77.ucode (Intel build 77.f92b5fed.0).
+Package member firmware/iwx-ty-a0-gf-a0.pnvm ships here as
+iwlwifi-ty-a0-gf-a0.pnvm (PNVM version ce1a5094).
+Package member firmware/iwx-license ships here as LICENCE.iwlwifi_firmware.
+The kernel embeds the paired images and license so kernel-only updates
+and rollbacks retain the same firmware inputs.
+
+Reference driver: openbsd/src f133b38f0e87720f82ec740eb05264298ecab82a
+https://github.com/openbsd/src/tree/f133b38f0e87720f82ec740eb05264298ecab82a/sys/dev/pci
+
+SHA-256:
+fd8977dbfacfe50b8a6601479aa9ffd21d01e274e4a9efd13935dd9d667fd45b  iwlwifi-ty-a0-gf-a0-77.ucode
+c991f0a3d346b554cae77561ae9b1f47d59a7fe506d6f808c0a0259fbcdd0a66  iwlwifi-ty-a0-gf-a0.pnvm
+16d5040c7cf851fc693b7542e20870935b99802533ea1bfd231c377a2305e5c5  LICENCE.iwlwifi_firmware

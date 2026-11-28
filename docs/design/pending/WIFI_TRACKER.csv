@@ -1,0 +1,26 @@
+id,task,depends_on,status,done_in,notes
+W.1,Cold and warm boot with a firmware command round trip,,review,,P5 boot and shutdown checks passed with wired and Bluetooth input verified. Earlier kernel fault remains open
+W.1.1,Pin and package the firmware and PNVM with reference revisions,,doing,,Authenticated OpenBSD package pinned and embedded with its license
+W.1.2,Bring up the PCIe transport and prove command and notification delivery,W.1.1,doing,,P5 ALIVE verified on warm and cold boots and one NVM command sequence confirmed
+W.1.3,Quiesce Wi-Fi DMA on reboot and shutdown,W.1.2,doing,,ADDED 2026-11-28 for warm-reset safety. Safe stops verified across the P5 warm reboot run and orderly shutdown
+W.1.4,Send the firmware Bluetooth coexistence configuration,W.1.2,doing,,ADDED 2026-11-28 so arbitration is configured before the first scan. BT_CONFIG and both Bluetooth input devices verified on the MSI-X diagnostic bundle
+W.1.5,Validate PNVM completion handling on the P5,W.1.1,doing,,ADDED 2026-11-28 after the zero-status check stopped initialization. Corrected build reached nvm-ready on the P5
+W.1.6,Show the AX210 initialization result on the system console,W.1.2,doing,,ADDED 2026-11-28 to match the wired NIC boot summary
+W.1.7,Deliver AX210 firmware notifications over a single MSI-X vector,W.1.2,doing,,ADDED 2026-11-28 to track interrupt routing. P5 recorded 8 MSI-X interrupts with 7 RX causes and four replies
+W.1.8,Investigate the kernel fault during the P5 warm reboot check,W.1.7,doing,,ADDED 2026-11-28 after kworker faulted on the third MSI-X warm boot. Ten MSI-X warm reboots completed with the diagnostic kernel
+
+W.2,Scan and associate on 2.4 GHz,W.1,todo,,Associate at legacy rates with Wi-Fi data gated and concurrent Bluetooth checked
+W.2.1,Implement scan and association for one legacy-rate AP,,todo,,Fuzz beacon and probe input and exercise the station transition model
+W.2.2,Measure Bluetooth coexistence during scan and association,W.2.1,todo,,ADDED 2026-11-28 to catch input or headphone regressions once the Wi-Fi radio is active
+
+W.3,Authorize a WPA2-Personal link,W.2,todo,,Protected unicast and group traffic with failure and rejoin evidence and concurrent Bluetooth checked
+W.3.1,Choose supplicant code and specify station control ownership and credential storage,,todo,,Bind control to the kernel-launched task and define EAPOL delivery and key ownership
+W.3.2,Complete the handshake and enforce the controlled data port,W.3.1,todo,,Fuzz EAPOL and exercise wrong credentials and duplicate handshake messages
+
+W.4,Run IPv4 and Yonder over Wi-Fi,W.3,todo,,P5 Wi-Fi works with Ethernet disconnected and static Ethernet still boots
+W.4.1,Integrate station frame translation and explicit uplink selection,,todo,,Keep legacy Ethernet and loopback behavior while selecting Wi-Fi independently of NIC order
+W.4.2,Bind DHCP and address lifetime to the authorized Wi-Fi link,W.4.1,todo,,Prove lease and DNS setup and discard old network state on loss or expiry
+W.4.3,Collect Wi-Fi-only acceptance evidence,W.4.2,todo,,ADDED 2026-11-28 to verify offline log recovery and Bluetooth coexistence during a Yonder fetch
+W.4.4,Report Wi-Fi DHCP readiness in boot logging,W.4.2,todo,,ADDED 2026-11-28 to keep address and route details in live DHCP status and show lease success or failure at boot
+
+W.5,Prove non-DFS 5 GHz station operation,W.4,todo,,Repeat protected join and Yonder fetch on an allowed 20 MHz 5 GHz channel
