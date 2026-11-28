@@ -3673,6 +3673,7 @@ typedef struct {
     uint32_t width, height;             // the picture's size as shown, CSS pixels; 0 not yet known
     bool playing;                       // its clock runs
     bool played;                        // its clock has run at least once: only then is its plane asked for
+    bool poster_painted;                // the last paint of its box drew its poster (video_frame_mark)
     bool poked;                         // its facts moved: one frame is asked for even while paused
     uint32_t sizing;                    // a new size was told: frames are asked for until the picture
                                         // at it comes (counted down, so a size never answered ends)
@@ -13364,13 +13365,13 @@ static void video_remove(const yonder_media_t *session)
 // ── Posters (VIDEO.md § 8, V.6.2) ───────────────────────────────────────
 
 // `node`'s poster slot on page `p`. On the shown page it is made the first
-// time the box is laid out, published (posters_register) or painted with a
-// `poster`, and the attribute
+// time anything asks for the box with a `poster` (its layout, its publish,
+// posters_register, its paint, whether it is a cover), and the attribute
 // read as it stands: a changed one is resolved again and its picture asked
 // for at the next turn (posters_turn). Any other page (a copy laid out for a
 // rebuild or a measurement, which shares the shown page's strings) only
 // finds a slot. The picture table is not touched here, since layout and
-// paint call it. NULL with no poster, or with every slot taken (the poster
+// paint ask. NULL with no poster, or with every slot taken (the poster
 // is not shown).
 static PosterSlot *poster_seen(Page *p, const os64_html_node_t *node)
 {
@@ -13816,12 +13817,14 @@ static bool video_fitted(const Video *v, const flow_box_t *b, os64_gui_rect_t c,
 
 // What a new frame of `v` marks, its box's visible part being `part`: only
 // the pixels its copy writes when it is a cover, since nothing else
-// changed — unless a backdrop reader may read the box's part, which reads
+// changed — unless the last paint drew its poster, fitted by the poster's
+// own size, which the box's background must now replace wherever it lay
+// past the picture; or a backdrop reader may read the box's part, which reads
 // the frame there too (VIDEO.md § 5, The paint beneath the picture).
 static os64_gui_rect_t video_frame_mark(const Video *v, os64_gui_rect_t part)
 {
     os64_gui_rect_t covered;
-    if (g.page.tree != NULL && video_cover_rect(v, flow_box_for(g.page.tree, v->node), &covered) &&
+    if (!v->poster_painted && g.page.tree != NULL && video_cover_rect(v, flow_box_for(g.page.tree, v->node), &covered) &&
         os64_rect_intersect(covered, part, &covered) && !backdrop_read_meets(part))
         return covered;
     return part;
@@ -13830,8 +13833,9 @@ static os64_gui_rect_t video_frame_mark(const Video *v, os64_gui_rect_t part)
 // In an open frame of the display: each video that wants it is asked for
 // the picture shown at the blank a publish now is seen at (the answer's
 // blank plus one period), and its box marked when the picture changed —
-// only the part its copy writes, when the video is a cover and no backdrop
-// reader may read the box (backdrop_read_meets).
+// only the part its copy writes, when the video is a cover, its poster was
+// not what the box last painted, and no backdrop reader may read the box
+// (video_frame_mark).
 static bool planes_placed_any(void);
 
 static void videos_glass_watch(void);
@@ -22484,6 +22488,8 @@ static void pane_video(GlassPane *gp, const flow_box_t *b, os64_gui_rect_t c, os
             plane_closed_paint(gp, b, clip);
         return;
     }
+    if (s_layer.video == NULL)
+        v->poster_painted = showing_poster;
     // The player is told its size whatever is shown, so the first picture
     // comes converted to fit.
     if (v->width == 0 || v->height == 0)

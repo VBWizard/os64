@@ -989,10 +989,27 @@ static void plane_cases(void)
     plane_page(kPlanePage);
     fake_plane.facts.plane_state = OS64_MEDIA_PLANE_NONE;
     v->frame = (os64_media_player_frame_t){plane_pic, 320, 180, 1, true};
+    v->played = true;
     s_planes = false;
     planes_prepare();
     s_planes = true;
     check(fake_plane.asks == 0, "planes: off, never asked");
+    plane_drop();
+    /* A new picture of a cover marks only what its copy writes, unless the
+     * box's last paint drew the poster, which is fitted by its own size and
+     * may lie past the picture: then the whole box (an autoplay's first
+     * picture after its poster). The box is wider than the picture. */
+    plane_page("<!doctype html><style>body{margin:0;background:#123}"
+               "#v{position:absolute;left:40px;top:40px;width:400px;height:180px}</style><video id=v></video>");
+    v->frame = (os64_media_player_frame_t){plane_pic, 320, 180, 1, true};
+    {
+        os64_gui_rect_t part = {0, 0, 2000, 2000};
+        os64_gui_rect_t only = video_frame_mark(v, part);
+        v->poster_painted = true;
+        os64_gui_rect_t whole = video_frame_mark(v, part);
+        check(only.w == 320 && only.h == 180, "planes: a cover's new picture marks what its copy writes");
+        check(os64_memcmp(&whole, &part, sizeof(part)) == 0, "planes: after its poster was painted, the whole box");
+    }
     plane_drop();
     plane_fullscreen_container();
 }
