@@ -26,8 +26,8 @@ args.logs.mkdir(parents=True, exist_ok=True)
 F = 'userland/libmedia/media_track.c'
 CASES = 'bash tools/test_media_track_host.sh 3'
 
-# Two are left out: the group's own-cut check (reached only when a split
-# cannot get memory) and "a group removes its own" (equivalent: the cuts of
+# Two are left out: the group's own-cut check (reached only when a cut has
+# no memory for a kept stretch's range) and "a group removes its own" (equivalent: the cuts of
 # [highest end, end) already cover the group's span).
 mutants = [
     # Times.
@@ -40,7 +40,15 @@ mutants = [
     ('unknown-track-taken', F, '    os64_media_track_t *t = track_by_id(b, f->track_id);\n    if (t == 0)\n        return OS64_MEDIA_TRACK_UNKNOWN_TRACK;', '    os64_media_track_t *t = track_by_id(b, f->track_id);\n    if (t == 0)\n        t = &b->track[0];'),
     ('unknown-generation-taken', F, '    if (gen_find(t, f->generation, 0) == 0)\n        return OS64_MEDIA_TRACK_UNKNOWN_GENERATION;', '    if (0)\n        return OS64_MEDIA_TRACK_UNKNOWN_GENERATION;'),
     # Coded frame processing.
-    ('sequence-offset-ignores-pts', F, 'if (__builtin_sub_overflow(b->group_start, pts0, &b->offset))', 'if (__builtin_sub_overflow(b->group_start, 0, &b->offset))'),
+    ('sequence-offset-ignores-pts', F, 'if (__builtin_sub_overflow(b->group_start, pts0, &offset))', 'if (__builtin_sub_overflow(b->group_start, 0, &offset))'),
+    ('the-microsecond-is-wider', F, 'pts < sat_add(at, ONE_MICROSECOND)))', 'pts < sat_add(at, 20000)))'),
+    ('sound-starting-inside-a-frame-is-no-cut', F, 'if (found && (t->kind == OS64_MEDIA_FRAGMENT_AUDIO || pts < sat_add(', 'if (found && (pts < sat_add('),
+    ('cfp-1-13-for-every-frame', F, '    if (t->last_dts == OS64_MEDIA_NO_TIME) {\n        // Every range', '    if (1) {\n        // Every range'),
+    ('cfp-1-13-looks-in-one-range', F, '        for (uint32_t ri = 0; ri < t->range_count && !found; ri++) {\n            const os64_media_track_range_t *r = &t->range[ri];\n            if (pts < r->start || pts >= r->end)\n                continue;', '        for (uint32_t ri = 0; ri < t->range_count && !found; ri++) {\n            const os64_media_track_range_t *r = &t->range[ri];\n            if (pts < r->start || pts >= r->end)\n                continue;\n            ri = t->range_count;'),
+    ('a-group-joins-a-range-behind-it-in-decode', F, 'if (last->dts <= dts && dts <= sat_add(sat_add(', 'if (dts <= sat_add(sat_add('),
+    ('a-group-joins-across-a-hole-on-screen', F, ' && pts <= sat_add(p->end, join_of(t))) {', ' && (pts | 1)) {'),
+    ('a-group-joins-a-range-presented-after-it', F, '            pts >= sat_sub(p->end, join_of(t)) && pts <= sat_add(p->end, join_of(t))) {', '            pts <= sat_add(p->end, join_of(t))) {'),
+    ('no-memory-leaves-the-group-running', F, '    if (rule == OS64_MEDIA_TRACK_NO_MEMORY) {\n        os64_media_track_t *t = track_by_id(b, f->track_id);', '    if (0) {\n        os64_media_track_t *t = track_by_id(b, f->track_id);'),
     ('sequence-needs-no-rap', F, '            b->group_end = b->group_start;\n            for (uint32_t k = 0; k < b->track_count; k++)\n                b->track[k].need_rap = true;', '            b->group_end = b->group_start;'),
     ('offset-not-added', F, '__builtin_add_overflow(pts0, b->offset, &pts)', '__builtin_add_overflow(pts0, 0, &pts)'),
     ('a-step-back-is-no-discontinuity', F, '(dts < t->last_dts || sat_sub(dts, t->last_dts)', '(sat_sub(dts, t->last_dts)'),
@@ -55,19 +63,13 @@ mutants = [
     ('a-preload-from-anywhere-is-kept', F, '    if (t->have_preload && (t->preload.pts + t->preload.duration < sat_sub(pts, ONE_MICROSECOND) ||\n                            t->preload.pts + t->preload.duration > sat_add(pts, ONE_MICROSECOND)))\n        preload_clear(t);\n', ''),
     ('need-rap-ignored', F, '    if (t->need_rap) {\n        if (!rap) {', '    if (t->need_rap) {\n        if (0) {'),
     ('sound-must-be-flagged-sync', F, 'bool rap = f->rap || t->kind == OS64_MEDIA_FRAGMENT_AUDIO;', 'bool rap = f->rap;'),
-    ('the-microsecond-is-wider', F, 'pts < sat_add(o->pts, ONE_MICROSECOND))', 'pts < sat_add(o->pts, 20000))'),
-    ('sound-starting-inside-a-frame-is-no-cut', F, 'if (t->kind == OS64_MEDIA_FRAGMENT_AUDIO || pts < sat_add(', 'if (pts < sat_add('),
-    ('cfp-1-13-for-every-frame', F, '    if (t->last_dts == OS64_MEDIA_NO_TIME) {\n        for (uint32_t ri = 0; ri < t->range_count; ri++) {', '    if (1) {\n        for (uint32_t ri = 0; ri < t->range_count; ri++) {'),
     ('a-group-start-removes-nothing', F, '    if (t->highest_end == OS64_MEDIA_NO_TIME)\n        cut_presented(t, pts, end);\n    else', '    if (t->highest_end == OS64_MEDIA_NO_TIME)\n        (void)0;\n    else'),
     ('dependents-left', F, '            } else if (is_unit_start(r, i)) {\n                removing = false;', '            } else if (1) {\n                removing = false;'),
     ('a-preload-outlives-its-frame', F, 'if (i > 0 && (r->frame[i - 1].flags & OS64_MEDIA_FRAME_PRELOAD) && !(r->frame[i - 1].flags & FRAME_CUT)) {', 'if (0) {'),
     ('a-cut-keeps-its-ranges-unsorted', F, '        range_extent(&t->range[ri]);\n        ri++;\n    }\n    ranges_sort(t);', '        range_extent(&t->range[ri]);\n        ri++;\n    }'),
     ('a-group-goes-on-after-its-last-was-removed', F, '        if (ar == 0 || !group_intact(t, ar)) {', '        if (ar == 0) {'),
-    ('a-group-joins-a-range-behind-it-in-decode', F, 'if (last->dts <= dts && dts <= sat_add(last->dts', 'if (dts <= sat_add(last->dts'),
-    ('a-group-joins-across-a-hole-on-screen', F, '            pts <= sat_add(p->end, join_of(t))) {', '            (pts | 1)) {'),
     ('the-join-is-one-step', F, '    return sat_add(t->interbuffer, t->interbuffer);', '    return t->interbuffer;'),
     ('the-join-ignores-decode-steps', F, '    if (step > t->interbuffer)\n        t->interbuffer = step;\n', '    (void)step;\n'),
-    ('a-split-loses-the-group', F, '            if (t->append_range == r->id && tail->frame[tail->count - 1].serial == t->last_kept)\n                t->append_range = tail->id;\n', ''),
     ('ranges-not-resorted', F, 'for (uint32_t j = i; j > 0 && t->range[j].frame[0].dts < t->range[j - 1].frame[0].dts; j--) {', 'for (uint32_t j = i; 0; j--) {'),
     # Counting and generations.
     ('bytes-not-uncounted', F, '    t->bytes -= f->size;\n    uint32_t gi;', '    uint32_t gi;'),

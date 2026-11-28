@@ -163,6 +163,8 @@ static void run(const uint8_t *data, size_t size)
             for (uint32_t i = 0; i < count; i++) {
                 int64_t dts = start + (int64_t)i * step;
                 int64_t pts = dts + ((pattern & 1) ? (int64_t)((i * 7) % 3) * step : 0);
+                if (pattern & 0x20) pts = dts - (int64_t)((i * 5) % 3) * step;     // decoded after presented
+                if (pattern & 0x10) dts += INT64_MAX / 2;                          // decode times near the top
                 if (pattern & 2) dts -= (int64_t)(take(&in, 1) % 4) * step;   // steps back
                 os64_media_fragment_frame_t f = {
                     .track_id = (uint32_t)track + 1 + ((pattern & 0x40) ? 5 : 0), .kind = track + 1, .generation = gen,

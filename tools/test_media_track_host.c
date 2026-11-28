@@ -1130,6 +1130,47 @@ static void scripted(void)
     pair_frames(&p, 0, f, n);
     END();
 
+    // A group presented before the range it continues in decode starts a
+    // range of its own: the range's random access points stay in the order
+    // they are presented, and the one for a time is in that time's chain.
+    START("a group presented earlier", 1, 90000, 0);
+    n = make_group(f, 0, 0, 120, 3000, 30, 0, 100);           // 4 s, an I frame a second
+    pair_frames(&p, 0, f, n);
+    os64_media_buffer_reset_parser(&p.b);
+    m_unset(&p.m.t[0]);
+    n = make_group(f, 0, 120 * 3000, 30, 3000, 30, 0, 100);   // decode goes on, ...
+    for (int i = 0; i < n; i++) f[i].pts -= 105 * 3000;      // ... the screen goes back to 0.5 s
+    pair_frames(&p, 0, f, n);
+    {
+        os64_media_track_frame_t rap;
+        os64_media_track_t *v = &p.b.track[0];
+        check(os64_media_track_rap_at_or_before(v, 3000000000ll, &rap) == OS64_MEDIA_TRACK_FRAME &&
+              rap.pts == 3000000000ll, "the random access point for 3 s is the one at 3 s (%lld)", (long long)rap.pts);
+    }
+    END();
+
+    // CFP 1.13 looks in every range whose extent holds the time: the first
+    // may hold it only across a hole. A cut inside a GOP leaves I at 0 and
+    // P at 100 ms; a lone I frame at 33.3 ms is a range of its own (it is
+    // presented before the first range's end); a group 500 ns into that
+    // frame (a nanosecond timescale) removes it.
+    START("CFP 1.13 past a range's hole", 1, 90000, 0);
+    n = make_group(f, 0, 0, 10, 3000, 10, 2, 100);
+    pair_frames(&p, 0, f, n);
+    os64_media_buffer_remove(&p.b, 33333333, 33333334);
+    m_cut(&p.m.t[0], 33333333, 33333334);
+    os64_media_buffer_reset_parser(&p.b);
+    m_unset(&p.m.t[0]);
+    n = make_group(f, 0, 3000, 1, 3000, 10, 0, 100);
+    pair_frames(&p, 0, f, n);
+    check(p.b.track[0].range_count == 2, "two ranges, the second inside the first's hole (%u)", p.b.track[0].range_count);
+    os64_media_buffer_reset_parser(&p.b);
+    m_unset(&p.m.t[0]);
+    pair_init_segment(&p, 1000000000, 0);
+    n = make_group(f, 0, 33333333 + 500, 1, 1000000, 10, 0, 100);
+    pair_frames(&p, 0, f, n);
+    END();
+
     // A muxed append's bytes shared by the tracks' quotas.
     START("muxed quota shares", 2, 90000, 48000);
     p.b.track[0].quota = p.m.t[0].quota = 30000;
@@ -1352,6 +1393,11 @@ static void out_of_memory(void)
             os64_media_track_rule_t r = os64_media_buffer_frame(&b, &ff);
             check(r == OS64_MEDIA_TRACK_OK || r == OS64_MEDIA_TRACK_NO_MEMORY || r == OS64_MEDIA_TRACK_UNKNOWN_TRACK,
                   "out of memory at %ld: %s", k, os64_media_track_rule_name(r));
+            // Whatever failed, every range still begins where a decode can.
+            for (uint32_t t = 0; t < b.track_count; t++)
+                for (uint32_t ri = 0; ri < b.track[t].range_count; ri++)
+                    check(b.track[t].range[ri].count && (b.track[t].range[ri].frame[0].flags & OS64_MEDIA_FRAME_RAP),
+                          "out of memory at %ld, frame %d: a range begins at no random access point", k, i);
         }
         os64_media_buffer_remove(&b, MS(300), MS(600));
         s_fail_countdown = 0;
@@ -1493,8 +1539,6 @@ static void random_script(void)
                 os64_media_track_frame_t fr;
                 int r = os64_media_track_next(t, &c, &fr);
                 if (r == OS64_MEDIA_TRACK_RESYNC) {
-                    check((had_last && !last_present) || !next_present || c.edits != t->edits || true,
-                          "random: a RESYNC with nothing gone");
                     // Strict: something the cursor knew must be gone, or the frame after it changed.
                     m_sort(mt);
                     bool gone = (had_last && !last_present) || !next_present;

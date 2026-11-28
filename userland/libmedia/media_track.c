@@ -10,10 +10,10 @@
 // would let the group's later frames interleave in decode time with the
 // next range's (a rendition without B-frames ending where one with them
 // begins), and a cut of one chain would then run on through the other.
-// Instead the join is applied when ranges are READ: `buffered` joins ranges
-// whose presentation gap is within the join, and a cursor at a range's end
-// goes on into the range that begins within the join. So the two agree by
-// construction, appending costs nothing per frame beyond its record, and
+// Instead the join is applied when ranges are READ: `buffered` joins a range
+// that begins no later than the join past another's end, and a cursor at a
+// range's end goes on into the earliest range that begins after its own by
+// that same rule. So the two agree by construction, appending costs nothing per frame beyond its record, and
 // an out-of-order segment costs nothing at all.
 //
 // A UNIT is what is never split: a random access point and what decodes
@@ -79,8 +79,9 @@ double os64_media_ns_to_seconds(int64_t ns)
 
 // Sums and differences of times saturate: a page's times are any double it
 // likes and a frame's may sit anywhere in int64, so a join or a distance
-// between two of them must not wrap. (A kept frame's own end was checked
-// as it entered: pts + duration never needs this.)
+// between two of them must not wrap. (A kept frame's presentation end was
+// checked as it entered: pts + duration never needs this; its dts was not,
+// since hostile bytes may put decode times after presentation.)
 static int64_t sat_add(int64_t a, int64_t b)
 {
     int64_t r;
@@ -269,57 +270,31 @@ static void ranges_sort(os64_media_track_t *t)
         }
 }
 
-// Frames [a, b) of range `ri` go (b a unit boundary or the end). What is
-// before them stays the range; what is after them becomes a range of its
-// own, unless there is no memory for one: then it goes too, which a cut
-// may always do (it is eviction ahead of time). Answers true when the range
-// is still at `ri`; false when it went, or a cut from its front may have
-// moved it on (look it up again).
-static bool range_cut(os64_media_track_t *t, uint32_t ri, uint32_t a, uint32_t b)
+// Eviction's cut: frames [a, b) of range `ri` go, from its front (a == 0,
+// b a unit boundary) or to its end (b == count). The range goes when
+// nothing is left; a front cut can move it on in the order.
+static void range_cut(os64_media_track_t *t, uint32_t ri, uint32_t a, uint32_t b)
 {
     if (a >= b)
-        return true;
+        return;
     t->edits++;
     os64_media_track_range_t *r = &t->range[ri];
-    if (a > 0 && b < r->count) {
-        uint32_t tail_count = r->count - b;
-        os64_media_track_range_t *tail = range_insert(t, ri + 1);
-        r = &t->range[ri];
-        if (tail != 0 && range_reserve(t, tail, tail_count)) {
-            for (uint32_t i = b; i < r->count; i++)
-                tail->frame[tail->count++] = r->frame[i];
-            range_extent(tail);
-            r->count = b;
-            // A coded frame group still arriving goes on where its last frame went.
-            if (t->append_range == r->id && tail->frame[tail->count - 1].serial == t->last_kept)
-                t->append_range = tail->id;
-            ranges_sort(t);
-        } else {
-            if (tail != 0)
-                range_delete(t, ri + 1);
-            r = &t->range[ri];
-            b = r->count;               // no room for the tail: it goes too
-        }
-    }
     for (uint32_t i = a; i < b; i++)
         frame_forget(t, &r->frame[i]);
     if (a == 0 && b >= r->count) {
         range_delete(t, ri);
-        return false;
+        return;
     }
     if (b >= r->count) {
         r->count = a;
-    } else {                            // a == 0: the front goes
+    } else {
         for (uint32_t i = b; i < r->count; i++)
             r->frame[i - b] = r->frame[i];
         r->count -= b;
     }
     range_extent(r);
-    if (a == 0) {
+    if (a == 0)
         ranges_sort(t);
-        return false;                   // it may have moved on: the caller looks it up again
-    }
-    return true;
 }
 
 // A kept frame marked for the cut below (a bit of `flags` the cut alone
@@ -436,9 +411,11 @@ static int64_t join_of(const os64_media_track_t *t)
 }
 
 // Where a coded frame group's first frame goes: the range it continues
-// within the join in decode order AND in presentation (B-frames put decode
-// times ahead of presentation, so a decode gap within the join can be a
-// wider hole on the screen), or a new one in its sorted place.
+// within the join in decode order AND on the screen, before or after the
+// range's end (B-frames put decode times ahead of presentation, so a
+// decode gap within the join can be a wider hole on the screen; a group
+// presented earlier would break the order of random access points that
+// `unit_for` and eviction rely on), or a new one in its sorted place.
 static os64_media_track_range_t *range_for_group(os64_media_track_t *t, int64_t dts, int64_t pts, uint32_t *index)
 {
     uint32_t at = 0;
@@ -447,8 +424,8 @@ static os64_media_track_range_t *range_for_group(os64_media_track_t *t, int64_t 
     if (at > 0) {
         os64_media_track_range_t *p = &t->range[at - 1];
         const os64_media_track_frame_t *last = &p->frame[p->count - 1];
-        if (last->dts <= dts && dts <= sat_add(last->dts + last->duration, join_of(t)) &&
-            pts <= sat_add(p->end, join_of(t))) {
+        if (last->dts <= dts && dts <= sat_add(sat_add(last->dts, last->duration), join_of(t)) &&
+            pts >= sat_sub(p->end, join_of(t)) && pts <= sat_add(p->end, join_of(t))) {
             *index = at - 1;
             return p;
         }
@@ -610,7 +587,25 @@ static os64_media_track_t *track_by_id(os64_media_buffer_t *b, uint32_t id)
     return 0;
 }
 
+static os64_media_track_rule_t buffer_frame(os64_media_buffer_t *b, const os64_media_fragment_frame_t *f);
+
+// A frame that could not be kept for want of memory leaves its track
+// needing a random access point: the frames after it depended on it.
 os64_media_track_rule_t os64_media_buffer_frame(os64_media_buffer_t *b, const os64_media_fragment_frame_t *f)
+{
+    os64_media_track_rule_t rule = buffer_frame(b, f);
+    if (rule == OS64_MEDIA_TRACK_NO_MEMORY) {
+        os64_media_track_t *t = track_by_id(b, f->track_id);
+        if (t) {
+            t->need_rap = true;
+            t->append_range = 0;
+            t->last_kept = 0;
+        }
+    }
+    return rule;
+}
+
+static os64_media_track_rule_t buffer_frame(os64_media_buffer_t *b, const os64_media_fragment_frame_t *f)
 {
     os64_media_track_t *t = track_by_id(b, f->track_id);
     if (t == 0)
@@ -634,8 +629,10 @@ os64_media_track_rule_t os64_media_buffer_frame(os64_media_buffer_t *b, const os
     for (;;) {
         // CFP 1.3: sequence mode, a group's first frame lands on the group start.
         if (b->mode == OS64_MEDIA_SEQUENCE && b->group_start != OS64_MEDIA_NO_TIME) {
-            if (__builtin_sub_overflow(b->group_start, pts0, &b->offset))
-                return OS64_MEDIA_TRACK_TIME_OVERFLOW;  // before anything changed but the offset
+            int64_t offset;
+            if (__builtin_sub_overflow(b->group_start, pts0, &offset))
+                return OS64_MEDIA_TRACK_TIME_OVERFLOW;  // the offset, group start and end as they were
+            b->offset = offset;
             b->group_end = b->group_start;
             for (uint32_t k = 0; k < b->track_count; k++)
                 b->track[k].need_rap = true;
@@ -697,20 +694,24 @@ os64_media_track_rule_t os64_media_buffer_frame(os64_media_buffer_t *b, const os
     // picture removes it when it starts within a microsecond of it; a sound
     // frame always does (no splice in v1: a cut).
     if (t->last_dts == OS64_MEDIA_NO_TIME) {
-        for (uint32_t ri = 0; ri < t->range_count; ri++) {
-            os64_media_track_range_t *r = &t->range[ri];
+        // Every range whose extent holds pts is looked in: an extent spans
+        // holes, so the first may not have the frame.
+        bool found = false;
+        int64_t at = 0;
+        for (uint32_t ri = 0; ri < t->range_count && !found; ri++) {
+            const os64_media_track_range_t *r = &t->range[ri];
             if (pts < r->start || pts >= r->end)
                 continue;
-            for (uint32_t i = 0; i < r->count; i++) {
+            for (uint32_t i = 0; i < r->count && !found; i++) {
                 const os64_media_track_frame_t *o = &r->frame[i];
-                if ((o->flags & OS64_MEDIA_FRAME_PRELOAD) || pts < o->pts || pts >= o->pts + o->duration)
-                    continue;
-                if (t->kind == OS64_MEDIA_FRAGMENT_AUDIO || pts < sat_add(o->pts, ONE_MICROSECOND))
-                    cut_presented(t, o->pts, sat_add(o->pts, 1));
-                break;
+                if (!(o->flags & OS64_MEDIA_FRAME_PRELOAD) && pts >= o->pts && pts < o->pts + o->duration) {
+                    found = true;
+                    at = o->pts;
+                }
             }
-            break;
         }
+        if (found && (t->kind == OS64_MEDIA_FRAGMENT_AUDIO || pts < sat_add(at, ONE_MICROSECOND)))
+            cut_presented(t, at, sat_add(at, 1));
     }
     // CFP 1.14-1.15
     if (t->highest_end == OS64_MEDIA_NO_TIME)
@@ -851,9 +852,9 @@ static void evict(os64_media_track_t *t, uint64_t need, int64_t play)
         }
         if (cut == 0)
             break;
-        bool left = range_cut(t, 0, 0, cut);
-        if (is_play || left)
-            break;                      // at the play position, or enough freed inside this range
+        range_cut(t, 0, 0, cut);
+        if (is_play)
+            break;                      // at the play position
     }
     // Then far ahead (with no play position nothing is protected-end bound:
     // protect_end is the end of time, and this takes nothing): the latest ranges' backs, unit by unit, down to the
@@ -871,9 +872,10 @@ static void evict(os64_media_track_t *t, uint64_t need, int64_t play)
                 freed += r->frame[i].size;
             keep = u;
         }
-        if (keep < r->count)
+        bool cut_any = keep < r->count;
+        if (cut_any)
             range_cut(t, ri, keep, r->count);
-        if (is_play || keep == r->count)
+        if (is_play || !cut_any)
             break;                      // the play position's range, or a protected unit: earlier ones are too
     }
 }
@@ -904,7 +906,8 @@ os64_media_track_rule_t os64_media_buffer_make_room(os64_media_buffer_t *b, uint
 // ── Ranges, as a page sees them ────────────────────────────────────────────
 
 // The next presentation interval of a track's ranges at or after `from`
-// (ranges whose gap is within the join joined): false when there is none.
+// (a range that begins no later than the join past the interval's end
+// joined, overlapping or not): false when there is none.
 // Ranges are few; this is quadratic in them and allocates nothing.
 static bool next_union(const os64_media_track_t *t, int64_t from, os64_media_time_range_t *out)
 {
@@ -1006,9 +1009,10 @@ static const os64_media_track_range_t *range_holding(const os64_media_track_t *t
     return 0;
 }
 
-// The range a cursor goes on into from range `r`'s end: the one beginning
-// within the join of where `r`'s presentation ends (each begins at a random
-// access point), the earliest if several.
+// The range a cursor goes on into from range `r`'s end: the earliest that
+// begins after `r` does and no later than the join past its end, the
+// condition `buffered` joins two ranges by (each begins at a random access
+// point).
 static const os64_media_track_range_t *range_after(const os64_media_track_t *t, const os64_media_track_range_t *r)
 {
     const os64_media_track_range_t *best = 0;
@@ -1016,7 +1020,7 @@ static const os64_media_track_range_t *range_after(const os64_media_track_t *t, 
         const os64_media_track_range_t *n = &t->range[i];
         if (n == r || n->count == 0 || n->start <= r->start)
             continue;
-        if (n->start < sat_sub(r->end, join_of(t)) || n->start > sat_add(r->end, join_of(t)))
+        if (n->start > sat_add(r->end, join_of(t)))
             continue;
         if (best == 0 || n->start < best->start)
             best = n;

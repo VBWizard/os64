@@ -41,8 +41,9 @@
 // nanoseconds to seconds and back is exact below 2^51 ns (26 days).
 //
 // MEMORY. Frame records live in arrays a range grows by doubling; a
-// generation's configurations are copied once, at its init segment;
-// nothing is allocated a frame. The buffer keeps one hold on a frame's
+// generation's configurations are copied once, at its init segment, and
+// kept while a kept frame or a decoder's hold (not a frame the player has
+// taken) uses them; nothing is allocated a frame. The buffer keeps one hold on a frame's
 // slab (os64/media_fragment.h § A SLAB'S LIFE) for every frame it keeps,
 // and a player keeps one more for every frame it has taken and not yet
 // given back (os64_media_track_frame_done).
@@ -202,7 +203,9 @@ void os64_media_buffer_destroy(os64_media_buffer_t *b);
 // MSE § 5.5.7 for the buffer: the first makes the tracks, each later one
 // adds a generation; every one sets need-random-access-point on all tracks.
 os64_media_track_rule_t os64_media_buffer_init_segment(os64_media_buffer_t *b, const os64_media_fragment_init_t *init);
-// Coded frame processing for one frame (MSE § 5.5.8, step 1).
+// Coded frame processing for one frame (MSE § 5.5.8, step 1). A frame
+// refused for want of memory (NO_MEMORY) leaves its track needing a random
+// access point, as the frames after it depended on it.
 os64_media_track_rule_t os64_media_buffer_frame(os64_media_buffer_t *b, const os64_media_fragment_frame_t *frame);
 // The buffer's half of reset parser state (MSE § 5.5.2): in sequence mode
 // the group start becomes the group end; every track's last decode time,
@@ -236,7 +239,10 @@ int os64_media_track_next(const os64_media_track_t *t, os64_media_track_cursor_t
 // A frame taken by next() is done with: the player's hold on its slab is dropped.
 void os64_media_track_frame_done(os64_media_track_frame_t *frame);
 // A generation's configurations, copied out and held while a decoder uses
-// them (the configuration bytes stay put until the drop); false if it is gone.
+// them (the configuration bytes stay put until the drop, or destroy, which
+// frees everything); false if it is gone. A frame the player holds does
+// not keep its generation: a player takes the hold for a frame of a new
+// generation in the same lock section as the next() that returned it.
 bool os64_media_track_generation_hold(os64_media_track_t *t, uint32_t generation,
                                       os64_media_track_generation_t *out);
 void os64_media_track_generation_drop(os64_media_track_t *t, uint32_t generation);

@@ -207,7 +207,7 @@ processing, list item n of step 1.
 | the sound frame just before the window's start is kept as the PRELOAD of the next kept frame it ends at (decoded, output discarded): AAC overlaps each frame's transform with the one before, and dropping the priming frame unread changed 291 of the next 563 frames in MS.1.1's decode check | Chromium's preroll buffer | `os64_media_buffer_frame` | the window and the preroll; the decode check |
 | frames are dropped until a random access point; every sound frame is one whatever its flags (Chromium `frame_processor.cc`, Firefox `MoofParser.cpp`) | CFP 1.10 | `os64_media_buffer_frame` | sound flagged non-sync |
 | a group's first frame starting inside a kept frame removes it: a picture's within a microsecond of its start, a sound frame's always (no splice: a cut, DEBTS) | CFP 1.13 | `os64_media_buffer_frame` | a group 0 and 1 tick into a frame |
-| frames presented in [pts, end) (group start) or [highest end, end) go, and from the first of them in decode order to the next random access point (what depended on them) | CFP 1.14–1.15 | `cut_presented` | a quality switch over 2–4 s; an overlap inside a GOP |
+| frames presented in [pts, end) (group start) or [highest end, end) go, and from each of them in decode order to the next random access point (what depended on them); a kept stretch after a removed one is a range of its own | CFP 1.14–1.15 | `cut_presented` | a quality switch over 2–4 s; an overlap inside a GOP; random scripts |
 | a group whose last kept frame was removed goes on only from a random access point | — | `os64_media_buffer_frame` | a group after its last frame went |
 | kept; last decode time, last duration, highest end, group end | CFP 1.16–1.20 | `os64_media_buffer_frame` | every case |
 | `remove(start, end)`: frames presented in it and what depended on them | range removal | `os64_media_buffer_remove` | remove |
@@ -219,17 +219,19 @@ processing, list item n of step 1.
 starting at a random access point, made of coded frame groups or what a
 cut left of them. A group goes on the end of the range it continues
 within the JOIN, in decode time and on the screen; otherwise it starts a
-range. The join is twice the longest frame duration or decode step the
-track has seen: Chromium's fudge room (`SourceBufferRange::GetFudgeRoom`).
+range: it continues one when its first frame is within the join of the
+range's decode end and of its presentation end, before or after. The join
+is twice the longest frame duration or decode step the track has seen: Chromium's fudge room (`SourceBufferRange::GetFudgeRoom`).
 Firefox fuzzes only its report, by half the longest frame each side, and
 WebKit snaps gaps under a fixed 2002/24000 s as frames go in. **Ranges
 never merge.** A merge while a group is still arriving lets the group's
 later frames interleave in decode time with the next range's (a rendition
 without B-frames ending where one with them begins), and a cut of one
 chain then runs on through the other. The join is applied when ranges are
-READ instead: `buffered` joins ranges whose gap on the screen is within the
-join, and a cursor at a range's end goes on into the range beginning within
-it. So `buffered` and what plays agree by construction. A range's extent
+READ instead: `buffered` joins a range that begins no later than the join
+past another's end, and a cursor at a range's end goes on into the earliest
+range beginning after its own by that same rule. So `buffered` and what
+plays agree by construction. A range's extent
 runs from its earliest presentation to its latest end, so a hole a cut
 leaves inside it counts as held, as Chromium counts it (DEBTS).
 
@@ -263,7 +265,10 @@ player's included.
   the packet).
 - **Generations.** A generation's configurations are copied at its init
   segment, since the parser's go at its next one. They are kept while a
-  frame of it or a decoder (`os64_media_track_generation_hold`) uses them.
+  kept frame of it or a decoder (`os64_media_track_generation_hold`) uses
+  them. A frame the player has taken does not count, so the player takes
+  the hold for a new generation in the same lock section as the `next`
+  that returned its first frame.
 - **Nothing is freed by the buffer itself, in its own time.** A slab's last
   drop calls the slab's own release, and the buffer's blocks go to its
   release, so both may be a queue the caller empties after the lock is let
