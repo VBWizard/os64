@@ -26,7 +26,7 @@ V.5.4,"<audio> on the player too: yonder's own decoder loop retired",V.5.3,done,
 V.6,"V6. Poster, controls over the picture, the video page, a file whose index is at the end",V.5,code,,"Brief BRIEF_VIDEO_V6.md (Fable); the before-code tables VIDEO_V6_DESIGN.md, accepted 2026-11-20 with Fable's changes"
 V.6.1,"A file from the network, whole: the length that reaches the element, an index at the end, the opener thread gone, the thread starts against a close",V.6,doing,,"VIDEO.md § 5 as built (V.6.1); the record's media lines; tools/pages/tail-index.mp4, video-tail.html, video-tail-whole.html; /tests/playertest steps 5 to 9"
 V.6.2,"The poster",V.6.1,doing,,"VIDEO_V6_DESIGN.md § 3; VIDEO.md § 8 (poster, as built); /tests/pages/video-poster.html; tools/test_dom_media.inc poster cases"
-V.6.3,"Controls over the picture, hiding when idle",V.6.2,todo,,"VIDEO_V6_DESIGN.md § 2; Chris: the P5"
+V.6.3,"Controls over the picture, hiding when idle",V.6.2,doing,,"VIDEO_V6_DESIGN.md § 2; VIDEO.md § 8 (controls, as built); apps/yonder/strip.c + tools/test_strip_host.sh + mutants; /tests/pages/video-strip.html; Chris: the P5"
 V.6.4,"The video page: a link straight to a video plays it on a page of its own",V.6.3,todo,,"Chris: the P5, short"
 V.7,"V7. Visibility, the budget for many videos, the muted-clip debt",V.5 Q5 Q6 Q7,todo,,
 V.7.1,"A frame paints from the picture up: a paint wholly inside an opaque video picture drawn plain draws nothing beneath it",V.5,done,#698,"VIDEO.md § 5, The paint beneath the picture. Measured on the P5 2026-11-21: 157 of 183 paints were the video box, ~270 ms each, ~1 ms of it the frame. Before it, in the same branch: the record's paint effects, and the blur's columns in strips (bit-identical, 2.4x on the host)"

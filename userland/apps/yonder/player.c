@@ -11,6 +11,12 @@
 #include "os64/mem.h"
 #include "os64/str.h"
 
+// A video's band: black at this alpha over the picture, light ink, and a
+// paper near what the band makes of a mid-grey picture for the text's pills.
+#define BAND_ALPHA 160
+#define BAND_INK 0xfff2f2f2u
+#define BAND_PAPER 0xff2a2a2au
+
 // How far an arrow key moves: seconds along the bar, a tenth of the volume.
 #define SEEK_STEP 5.0
 #define VOLUME_STEP 0.1
@@ -214,14 +220,24 @@ static void player_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_u
         return;
     os64_gui_surface_t *s = &ctx->surf;
     const os64_dom_media_view_t *v = &p->view;
-    int32_t radius = w->bounds.h / 2;
-    os64_draw_fill_round_rect(s, w->bounds, radius, t->panel_bg);
-    os64_draw_round_rect(s, w->bounds, radius, w->focused ? t->focus_ring : t->panel_border,
-                         w->focused ? t->focus_ring : t->panel_border);
+    uint32_t paper = t->panel_bg, ink = t->label_fg;
+    if (p->over_picture) {
+        paper = BAND_PAPER;
+        ink = BAND_INK;
+        os64_draw_fill_rect_alpha(s, w->bounds, 0x000000u, BAND_ALPHA);
+        if (w->focused && p->keyed)
+            os64_draw_rect(s, w->bounds, t->focus_ring);
+    } else {
+        int32_t radius = w->bounds.h / 2;
+        os64_draw_fill_round_rect(s, w->bounds, radius, t->panel_bg);
+        os64_draw_round_rect(s, w->bounds, radius, w->focused ? t->focus_ring : t->panel_border,
+                             w->focused ? t->focus_ring : t->panel_border);
+    }
     yonder_player_parts_t parts;
     yonder_player_parts(w->bounds, &parts);
     bool broken = v->error != 0;
-    uint32_t ink = broken ? t->disabled_fg : t->label_fg;
+    if (broken)
+        ink = t->disabled_fg;
     if (v->paused || v->ended)
         play_icon(s, parts.play, ink);
     else
@@ -235,13 +251,14 @@ static void player_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_u
         int32_t from = parts.time.w > 0 ? parts.time.x : parts.seek.x;
         int64_t to = (int64_t)parts.seek.x + parts.seek.w;
         os64_gui_rect_t room = {from, w->bounds.y, (int32_t)(to - from), w->bounds.h};
-        text_paint(w, &p->note_run, s, room, note, t->label_fg, t->panel_bg);
+        text_paint(w, &p->note_run, s, room, note, ink, paper);
     } else {
         double at = p->drag == YONDER_PLAYER_DRAG_SEEK ? p->drag_value : v->position;
         char clock[48];
         yonder_player_time(at, v->duration, clock, sizeof(clock));
-        text_paint(w, &p->time_run, s, parts.time, clock, t->label_fg, t->panel_bg);
-        bar_paint(s, parts.seek, v->arrived_from, v->arrived, at, v->duration, v->seekable, t);
+        text_paint(w, &p->time_run, s, parts.time, clock, ink, paper);
+        if (!p->over_picture || (v->duration > 0 && isfinite(v->duration)))
+            bar_paint(s, parts.seek, v->arrived_from, v->arrived, at, v->duration, v->seekable, t);
     }
     if (parts.volume.w > 0) {
         double volume = p->drag == YONDER_PLAYER_DRAG_VOLUME ? p->drag_value : v->muted ? 0 : v->volume;
@@ -268,6 +285,11 @@ static void toggle(os64_ui_t *ui, yonder_player_t *p)
     if (play)
         p->view.ended = false;
     os64_ui_mark_dirty(ui, &p->w);
+}
+
+void yonder_player_toggle(os64_ui_t *ui, yonder_player_t *p)
+{
+    toggle(ui, p);
 }
 
 static void mute_flip(os64_ui_t *ui, yonder_player_t *p)
@@ -396,6 +418,8 @@ static bool player_event(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_even
     case OS64_GUI_EVENT_MOUSE_BUTTON_DOWN: {
         if (ev->mouse.button != OS64_GUI_MOUSE_LEFT)
             return false;
+        p->keyed = false;
+        p->by_press = true;
         os64_ui_set_focus(ui, w);
         int32_t x = ev->mouse.x, y = ev->mouse.y;
         if (in(parts.play, x, y)) {

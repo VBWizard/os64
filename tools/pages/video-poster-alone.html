@@ -1,0 +1,25 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>A poster, then a video</title>
+<!--
+  A <video controls> with a red poster (VIDEO.md § 5, V.6.2) and the strip
+  (§ 8): the poster until it plays, then the picture on the video's plane
+  (VIDEO_PLANE.md § 5) with no black frame between; a pause does not bring
+  the poster back. The strip shows over the poster too, and hides as on a
+  playing picture. The button under it puts the video in full screen,
+  poster or picture filling it, and Escape comes back.
+-->
+<style>
+  body { margin: 16px; background: #ffffff; font: 16px sans-serif; }
+  video { width: 640px; height: 360px; background: #000; display: block; }
+  button { margin-top: 8px; }
+</style>
+<video id="v" controls loop poster="poster-red.png" src="bbb-480p-3s-av.mp4"></video>
+<button id="full">Full screen</button>
+<script>
+  document.getElementById('full').addEventListener('click', () => {
+    document.getElementById('v').requestFullscreen().catch(e => console.log('video-poster-alone: ' + e));
+  });
+  document.addEventListener('fullscreenchange', () =>
+    console.log('video-poster-alone: full screen ' + (document.fullscreenElement ? 'on' : 'off')));
+</script>
