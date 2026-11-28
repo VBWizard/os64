@@ -59,20 +59,23 @@
 //  - a held box over `max_box` is BOX_TOO_LARGE, an mdat over `max_mdat`
 //    MDAT_TOO_LARGE; a moof naming more than OS64_MEDIA_FRAGMENT_MAX_SAMPLES
 //    frames is TOO_MANY_SAMPLES;
-//  - a field that runs past the box it sits in is MALFORMED, and so is a
-//    moof with no traf (format § 4);
+//  - a box that runs past its parent, a field that runs past its box, or a
+//    box the format requires that is missing (a trak's mdia, stbl or stsd;
+//    a sample entry's avcC or esds; a moof's traf, format § 4) is MALFORMED;
 //  - a media segment (a moof) before any init segment is
 //    MEDIA_BEFORE_INIT (MSE § 5.5.1 step 6.1);
 //  - an init segment without mvex is NO_MVEX, one with samples of its own
 //    (entries in stts, stsc, stco, co64 or stsz) INIT_HAS_SAMPLES (format § 3);
 //  - an init segment with no picture or sound track is NO_TRACKS; one with
-//    more than one track of a kind is TOO_MANY_TRACKS (not in v1); two
+//    more than one track of a kind (not in v1), or more than
+//    OS64_MEDIA_FRAGMENT_MAX_IGNORED of other kinds, is TOO_MANY_TRACKS; two
 //    tracks with one id is DUPLICATE_TRACK (format § 2); a later init
 //    segment with a different number of tracks of a kind is
 //    TRACK_COUNT_CHANGED (MSE § 5.5.7);
 //  - a sample entry v1 does not decode (anything but avc1 or avc3 for a
 //    picture, mp4a with MPEG-4 or MPEG-2 AAC for a sound; encrypted entries
-//    among them) is UNSUPPORTED_CODEC; more than
+//    among them), or an mp4a without its AudioSpecificConfig, is
+//    UNSUPPORTED_CODEC; more than
 //    OS64_MEDIA_FRAGMENT_MAX_ENTRIES in one stsd is TOO_MANY_ENTRIES; a
 //    timescale of zero is BAD_TIMESCALE;
 //  - a traf for a track the init segment has not got is UNKNOWN_TRACK;
@@ -84,8 +87,10 @@
 //    EMPTY_FRAGMENT_HAS_SAMPLES;
 //  - a frame whose bytes are not all inside one mdat after its moof is
 //    SAMPLE_OUTSIDE_MDAT (format § 4: the mdat holds every byte a trun
-//    names), found when the frame's mdat ends or the next moof or moov
-//    begins;
+//    names), found as soon as it can be: a frame placed before its moof at
+//    once, one before the mdat it should be in when that mdat begins, one
+//    running past its mdat when the mdat ends, one in no mdat when the
+//    next moof or moov begins;
 //  - a time that does not fit in 63 bits is TIME_OVERFLOW.
 // Boxes it does not read are skipped by length, inside a box it reads and
 // at the top level (ftyp, styp, sidx, free, emsg and the rest).

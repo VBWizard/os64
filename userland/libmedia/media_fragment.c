@@ -3,8 +3,9 @@
 //
 // Two halves. The FRAMER (os64_media_fragment_append) walks top-level boxes
 // across appends: a header is gathered (8 bytes, 16 with a 64-bit size),
-// then the box is held whole (moov, moof), counted past (anything else), or
-// for an mdat copied into a slab that frames are handed out of as it fills.
+// then the box is held whole (moov, moof), counted past (anything else, and
+// an mdat holding none of the moof's frames), or, for an mdat that holds
+// them, copied into a slab that frames are handed out of as it fills.
 // The READER (parse_moov, parse_moof) runs on a held box, every field read
 // through rd_t, which answers zero and marks itself bad rather than read past
 // the box: a reader that finishes bad is MALFORMED.
