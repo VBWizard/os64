@@ -1,8 +1,9 @@
 #!/bin/bash
-# libmedia's fragment parser on real streams, decoded by the pinned FFmpeg and
-# compared with the host's ffmpeg: every picture and sound frame bit for bit,
-# and every presentation time (tools/test_media_fragment_decode_host.c says
-# what each scenario proves). Runs under ASan.
+# libmedia's fragment parser and track buffer on real streams, decoded by the
+# pinned FFmpeg and compared with the host's ffmpeg: every picture and sound
+# frame bit for bit, and every presentation time
+# (tools/test_media_fragment_decode_host.c says what each scenario proves).
+# Runs under ASan.
 #
 #     tools/test_media_fragment_decode_host.sh <ffmpeg-9.0.2.tar.xz>
 #     (or OS64_FFMPEG_ARCHIVE=<archive> tools/test_media_fragment_decode_host.sh)
@@ -89,6 +90,7 @@ ffmpeg -hide_banner -loglevel error -y -i "$media/whole-2.mp4" -map 0:a -f frame
 gcc -std=c17 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
     -I "$ROOT/userland/libmedia/include" -I "$ff/include" \
     "$ROOT/tools/test_media_fragment_decode_host.c" "$ROOT/userland/libmedia/media_fragment.c" \
+    "$ROOT/userland/libmedia/media_track.c" \
     "$ff/lib/libavcodec.a" "$ff/lib/libavutil.a" -lm -lpthread -o "$work/decode"
 
 "$work/decode" "$media"

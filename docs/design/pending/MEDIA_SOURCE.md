@@ -137,6 +137,17 @@ so no field is used before it is checked against the box it sits in. The
 held boxes and the mdats holding frames have caps (4 MB and 128 MB to
 begin with, set by the caller), and a moof may name at most 65,536 frames.
 
+**The init segment's duration** is mvex's `mehd` fragment duration when
+it gives one (a `mehd` of 0 gives none, and mvhd's stands), else mvhd's,
+in the movie's timescale. ISO's all ones, in either box and either
+version, is unknown, as is 0 left at the end; MSE takes unknown as
++Infinity, as Chromium does.
+
+**The parsing-media-segment flag** (`os64_media_fragment_parsing_media`)
+is true from a moof's header until its last frame is handed out, and false
+after a reset or in an error: the page may not change `timestampOffset` or
+`mode` while it is up.
+
 **The sink may reset or destroy the parser** from inside a callback (a
 track buffer that fails mid-append runs the append error algorithm, which
 resets the parser): the append in progress ends there, the rest of its
@@ -191,31 +202,137 @@ lock covers them.
 
 ## 4. The track buffer (pure)
 
-One per track. It is the spec's coded frame processing, as a table of
-rules over the frames the parser gives:
+Built in MS.1.2: `os64/media_track.h` and `userland/libmedia/media_track.c`;
+the header states every rule below in the code's own terms. One
+`os64_media_buffer_t` a SourceBuffer: its tracks (a picture and a sound at
+most, as the parser gives them), its mode, offset, append window, group
+start and end, and each track's quota. "CFP n" is the spec's coded frame
+processing, list item n of step 1.
 
-| Rule | What it does |
-|---|---|
-| `timestampOffset` | added to every frame's times as it arrives |
-| the append window | a frame outside `appendWindowStart`..`End` is dropped, and the next frames wait for a random access point. A sound frame before the window is still DECODED, its output discarded (preroll): AAC overlaps each frame's transform with the one before, and dropping the priming frame unread changed 291 of the next 563 frames in MS.1.1's decode check |
-| need a random access point | after an init segment, a discontinuity or a dropped frame, frames are dropped until one |
-| a discontinuity | a decode time that steps back, or forward by more than twice the last duration, starts a new coded frame group |
-| overlap | a new frame removes the frames it overlaps in presentation time, and, when it is a random access point, the old frames that depended on what it replaced |
-| order | kept by decode time within a coded frame group; found by presentation time |
-| `buffered` | the ranges of presentation time held, small gaps (under a frame or two) joined, as other browsers join them |
-| `remove(start, end)` | frames in the range go, and those after them up to the next random access point |
-| `mode` | `segments` (times from the stream) and `sequence` (each group placed after the last), both in v1: the rule is two lines and a player library may ask for either |
-| eviction | when an append would pass the QUOTA, frames well behind the play position go first, then those far ahead; if it still does not fit, the append fails with QuotaExceededError and nothing is taken |
-| the group end and the highest end time | kept as the spec keeps them, for `duration` and `endOfStream` |
+| Rule | Spec | Function | Host case |
+|---|---|---|---|
+| sequence mode: a group's first frame lands on the group start (`timestampOffset = group start − pts`), group end = group start, need a random access point | CFP 1.3 | `os64_media_buffer_frame` | sequence mode; a thousand one-frame groups |
+| `timestampOffset` added to pts and dts (an offset past int64 is an error) | CFP 1.4 | `os64_media_buffer_frame` | random scripts |
+| a decode time that steps back, or forward by more than twice the last duration, starts a coded frame group: segments, group end = pts; sequence, group start = group end; every track unset and needs a random access point; the frame processed again | CFP 1.6 | `os64_media_buffer_frame` | a 3-frame hole, a 1.9-frame hole, out of order |
+| a frame outside `appendWindowStart`..`End` is dropped and the track needs a random access point | CFP 1.8–1.9 | `os64_media_buffer_frame` | the window and the preroll |
+| the sound frame just before the window's start is kept as the PRELOAD of the next kept frame (decoded, output discarded) when it ends at that frame (within a microsecond), does not decode after it, and no kept frame of the track decodes between the two; otherwise it is nobody's. AAC overlaps each frame's transform with the one before, and dropping the priming frame unread changed 291 of the next 563 frames in MS.1.1's decode check | Chromium's preroll buffer | `os64_media_buffer_frame` | the window and the preroll; a preload far from its frame; out of decode order; with a frame decoded between; none for a picture; the decode check |
+| frames are dropped until a random access point; every sound frame is one whatever its flags (Chromium `frame_processor.cc`, Firefox `MoofParser.cpp`) | CFP 1.10 | `os64_media_buffer_frame` | sound flagged non-sync |
+| a group's first frame starting inside a kept frame removes it: a picture's within a microsecond of its start, a sound frame's always (no splice: a cut, DEBTS) | CFP 1.13 | `os64_media_buffer_frame` | a group 0 and 1 tick into a frame |
+| frames presented in [pts, end) (group start) or [highest end, end) go, and from each of them in decode order to the next random access point (what depended on them); a kept stretch after a removed one is a range of its own | CFP 1.14–1.15 | `cut_presented` | a quality switch over 2–4 s; an overlap inside a GOP; random scripts |
+| a group whose last kept frame was removed goes on only from a random access point | — | `os64_media_buffer_frame` | a group after its last frame went |
+| kept; last decode time, last duration, highest end, group end | CFP 1.16–1.20 | `os64_media_buffer_frame` | every case |
+| `remove(start, end)`: frames presented in it and what depended on them | range removal | `os64_media_buffer_remove` | remove |
+| eviction and QuotaExceededError | eviction; prepare append 6–7 | `os64_media_buffer_make_room` | eviction around the play position; with none; muxed shares |
+| `buffered`: the intersection of the tracks' ranges; once the MediaSource has ended, each track's last range first reaches the highest end across tracks | track buffer ranges; `buffered` | `os64_media_buffer_buffered` | every case, both ways, beside the model |
+| an assignment to `timestampOffset` in sequence mode starts the next coded frame group at it, the value unchanged or not | `timestampOffset` setter | `os64_media_buffer_set_offset` | sequence: the offset assigned again |
+| `mode`: setting `sequence` sets the group start to the group end; a parser reset in sequence mode does too | `mode` setter; reset parser state | `os64_media_buffer_set_mode`, `_reset_parser` | sequence mode |
 
-**The quota** is per SourceBuffer, in bytes of slabs held: 150 MB for
-picture and 12 MB for sound to begin with (what another browser allows),
-set in one place and reported, to be tuned from the P5's readings in M5.
+**Ranges.** A track keeps RANGES: runs of frames in decode order, each
+starting at a random access point, made of coded frame groups or what a
+cut left of them. A group goes on the end of the range it continues
+within the JOIN, in decode time and on the screen; otherwise it starts a
+range: it continues one when its first frame is within the join of the
+range's decode end and of its presentation end, before or after, and is
+presented no earlier than the range's last random access point (a group
+whose times moved back after a parser reset would otherwise put the
+range's random access points out of presentation order, which the seek's
+search and eviction rely on). The join
+is twice the longest frame duration or decode step the track has seen: Chromium's fudge room (`SourceBufferRange::GetFudgeRoom`).
+Firefox fuzzes only its report, by half the longest frame each side, and
+WebKit snaps gaps under a fixed 2002/24000 s as frames go in. **Ranges
+never merge.** A merge while a group is still arriving lets the group's
+later frames interleave in decode time with the next range's (a rendition
+without B-frames ending where one with them begins), and a cut of one
+chain then runs on through the other. The join is applied when ranges are
+READ instead: `buffered` joins a range that begins no later than the join
+past another's end, and a cursor at a range's end goes on into the earliest
+range beginning after its own by that same rule. So `buffered` and what
+plays agree by construction. A range's extent
+runs from its earliest presentation to its latest end, so a hole a cut
+leaves inside it counts as held, as Chromium counts it (DEBTS).
 
-**What the player asks of it:** the frame at or after a time; the next
-frame in decode order; the random access point at or before a time; the
-init generation of a frame; whether the play position is inside a
-buffered range and how far that range runs ahead.
+**Times are nanoseconds**, int64, everywhere in the buffer: the
+SourceBuffer's offset, window, group start and end, and every frame's times.
+- **One conversion per frame.** A frame enters in its track's ticks and is
+  converted once, to the nearest nanosecond, from its own exact tick values.
+  Its duration is its converted end less its converted start, so
+  consecutive frames meet exactly.
+- **Not ticks inside a track:** a quality switch may change a track's
+  timescale (15360 and 90000 renditions), so a track has no single tick.
+- **A nanosecond is finer than any timescale taken.** The cap is
+  1,000,000,000 (a 10,000,000 packager is exact), and a finer one is
+  refused, so ticks to nanoseconds and back is exact.
+- **Sequence drift is bounded.** A group lands exactly on the group start,
+  which is the last group's end rounded once. So the starts drift from the
+  exact sum by half a nanosecond a group at most: 333 ns after a thousand
+  one-frame AAC groups, under a microsecond for an hour of two-second
+  segments.
+- **Seconds only at the edge.** A page's seconds meet nanoseconds only in
+  `os64_media_seconds_to_ns` and `_ns_to_seconds`, nearest both ways. The
+  round trip from nanoseconds and back is exact below 2^51 ns (26 days).
+  Not ceil and floor at the window's edges: 0.1 × 90000 is
+  9000.000000000002 as a double.
+
+**Memory and the lock.** The caller's one lock covers every call, the
+player's included.
+- **Holds.** The buffer holds a frame's slab for every frame it keeps, and
+  a player holds it for every frame it has taken and not given back
+  (`os64_media_track_frame_done`, once `avcodec_send_packet` has copied
+  the packet).
+- **Generations.** A generation's configurations are copied at its init
+  segment, since the parser's go at its next one. They are kept while a
+  kept frame of it or a decoder (`os64_media_track_generation_hold`) uses
+  them. A frame the player has taken does not count, so the player takes
+  the hold for a new generation in the same lock section as the `next`
+  that returned its first frame.
+- **Nothing is freed by the buffer itself, in its own time.** A slab's last
+  drop calls the slab's own release, and the buffer's blocks go to its
+  release, so both may be a queue the caller empties after the lock is let
+  go (MS.2's glue). On os64 freeing a slab is an unmap under the heap's
+  lock, and an eviction drops many. The host test frees at once under
+  ASan, to prove nothing is touched after release.
+- **Room for real accounting.** The caller's memory functions see every
+  slab, so the caller can count the real slab bytes beside the frame bytes
+  the buffer counts.
+
+**The player's cursor** reads a track in decode order and hops into the
+range the join joins to its range's end. After an overlap, remove or
+eviction it is re-found by the serials of the frame it returned last and
+of the one that followed it.
+- **RESYNC only when it must:** when either of those two frames is gone.
+  The player then starts again from the random access point at or before
+  its position, frames before it decoded and discarded.
+- **Anything else reads on:** through the old frames to the new random
+  access point, then into the new frames. Above all this covers a quality
+  switch appended ahead of the decoder, the common case of this arc, which
+  plays through with no flush.
+- **Other browsers do better on the one RESYNC case:** they keep the
+  tail of the group being read, so even its next frame going does not stall
+  them (DEBTS).
+
+**The quota** is per track, in bytes of frames kept: 150 MB for a picture
+and 12 MB for a sound, Chromium's defaults, set in one place. An append's
+bytes are shared between a muxed SourceBuffer's tracks by their quotas.
+
+**Eviction** frees whole units:
+1. **First behind the play position:** the front of the earliest range,
+   never into the unit holding the play position.
+2. **Then far ahead:** the back of the latest ranges, never into the play
+   position's unit through 10 s past it.
+
+The play position is the caller's to give at every eviction. With none, or
+one in no range, nothing is protected by position and everything goes
+oldest first. QuotaExceededError: after eviction freed what it could, the
+frames kept plus the append's share still exceed the quota, and nothing of
+the append is taken.
+
+**What the player asks of it** (none allocates):
+- `os64_media_track_seek` and `_next` (the cursor);
+- `_rap_at_or_before` (a binary search over the range's units);
+- `_frame_at_or_after` (a scan of the range, for a paused seek's preview);
+- `_ahead` (whether a time is buffered and where its range ends);
+- `_generation_hold`;
+- `_ranges`.
 
 ## 5. The fed media in libmedia
 

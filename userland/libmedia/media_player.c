@@ -1538,6 +1538,8 @@ static int64_t decoding_thread(void *arg)
 
 int os64_media_player_create(const os64_media_player_config_t *cfg, os64_media_player_t **out)
 {
+    if (cfg != NULL && cfg->fed != NULL)
+        return OS64_MEDIA_UNSUPPORTED;      // the fed path: MSE_TRACKER.csv's MS.2
     if (cfg == NULL || out == NULL || (cfg->source.read == NULL && cfg->prepare == NULL) || cfg->want == 0)
         return OS64_MEDIA_BAD_ARGS;
     *out = NULL;
