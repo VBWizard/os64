@@ -3456,6 +3456,7 @@ static void input_validation(void) {
  * none arrived it keeps libflow's guess, never a caption's size. Each
  * widget is placed over its box, so the caption the paint centres has the
  * room it was measured for. */
+static os64_font_set_t *interface_test_set(uint32_t px);
 static int32_t button_css(const char *caption) {
     int32_t dw=0;
     if (os64_ui_button_width(&g.ui,OS64_UI_FONT_APP,caption,strlen(caption),&dw)!=OS64_FONT_OK) return -1;
@@ -3501,6 +3502,39 @@ static void input_button_width(void) {
     check(fw!=NULL && fw->kind==FW_BUTTON && os64_streq(fw->text,"Full screen, then remove") &&
           fw->w->bounds.w==lw && fw->w->bounds.h==bh,
           "button width: the widget is placed over its box, its whole caption with room");
+    probe_drop();
+    /* Under a larger controls face the caption's box grows with it, and a
+     * width the page gives is the box whatever the caption needs: one wider
+     * than the caption centres it with room, one narrower clips it, and
+     * neither moves the height. The P5's fonts.conf (web.size 26, Sans Mono
+     * Bold) draws the controls at 21 px and this caption at 328 px; the
+     * host's test face is narrower, so 30 px stands in for it. 300 px, which
+     * the test page once took for "wider than the caption", is narrower. */
+    probe_page("<p><button id=fit>Full screen, then remove</button>"
+        "<button id=wide style='width:600px'>Full screen, then remove</button>"
+        "<button id=cut style='width:120px'>Full screen, then remove</button></p>",true);
+    script_turn();
+    os64_font_set_t *large=interface_test_set(30);
+    check(os64_ui_font_app(&g.ui,large,OS64_FONT_ROLE_UI)==OS64_FONT_OK,"button width: the controls lent a 30 px face");
+    check(page_lay_out(&g.page,800,600,g.zoom,&g.page),"button width: laid out again in it");
+    forms_place();
+    const flow_box_t *fit=flow_box_for(g.page.tree,probe_id("fit")),*wide=flow_box_for(g.page.tree,probe_id("wide")),
+                     *cut=flow_box_for(g.page.tree,probe_id("cut"));
+    int32_t big=button_css("Full screen, then remove");
+    int32_t big_h=os64_ui_font_row_height(&g.ui,OS64_UI_FONT_APP)+2*BUTTON_FRAME_Y;
+    check(fit!=NULL && wide!=NULL && cut!=NULL && big>lw && big>300 && big_h>bh,
+          "button width: at 30 px the caption is wider than at 13, and wider than 300 px");
+    if (fit!=NULL && wide!=NULL && cut!=NULL) {
+        check(fit->rect.w==big && fit->rect.h==big_h,
+              "button width: at 30 px the box is the larger caption's width and row");
+        check(wide->rect.w==600 && wide->rect.h==big_h && cut->rect.w==120 && cut->rect.h==big_h,
+              "button width: at 30 px a width given wider or narrower than the caption is the box, the height the row's");
+    }
+    FormWidget *clipped=probe_field("cut");
+    check(clipped!=NULL && clipped->w->bounds.w==120 && clipped->w->bounds.h==big_h,
+          "button width: a caption wider than the width given is clipped to the box, not spread past it");
+    (void)os64_ui_font_app(&g.ui,NULL,OS64_FONT_ROLE_UI);
+    os64_font_set_release(large);
     probe_drop();
 }
 
