@@ -137,6 +137,12 @@ gplay_key_t gplay_key(uint8_t *seq, char ascii, uint8_t scancode, bool shift)
     case 'q':
     case 'Q':
         return GPLAY_KEY_QUIT;
+    case 'w':
+    case 'W':
+        return GPLAY_KEY_SWITCH;
+    case 'e':
+    case 'E':
+        return GPLAY_KEY_EVICT;
     case '[':
         return GPLAY_KEY_SOUND_EARLIER;
     case ']':
