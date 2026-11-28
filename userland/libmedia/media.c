@@ -1161,12 +1161,13 @@ static int fed_pull_locked(os64_media_t *m, int k)
             // A resync goes on to the first data after its place, however
             // far: what it stood on was removed under a decoder that had
             // fallen behind, and nothing will come back there.
-            os64_media_time_range_t r[8];
-            uint32_t n = os64_media_track_ranges(t, r, 8);
+            // The first range after the place (the place itself holds
+            // nothing), however many come before it.
+            os64_media_time_range_t r[1];
             int64_t at = OS64_MEDIA_NO_TIME;
-            for (uint32_t i = 0; i < n && i < 8 && at == OS64_MEDIA_NO_TIME; i++)
-                if (r[i].start > want && (f->forward || r[i].start - want <= 2 * t->interbuffer))
-                    at = r[i].start;
+            if (os64_media_track_ranges_from(t, want, r, 1) > 0 && r[0].start > want &&
+                (f->forward || r[0].start - want <= 2 * t->interbuffer))
+                at = r[0].start;
             if (at == OS64_MEDIA_NO_TIME && media_fed_ended(m->fed)) {
                 f->done = true;         // nothing there or after, and nothing more is coming
                 return 0;
@@ -1290,6 +1291,14 @@ static int fed_read_packet(os64_media_t *m)
 {
     int r = 0;
     media_fed_lock(m->fed);
+    // The sound's join, the widest gap its placement fills with silence,
+    // from the track as its frames arrive (a media opened on its
+    // initialization segments alone has seen no frame yet).
+    os64_media_track_t *st = m->codec != NULL ? media_fed_track(m->fed, OS64_MEDIA_FRAGMENT_AUDIO, NULL) : NULL;
+    if (st != NULL && 2 * st->interbuffer != m->join_ns) {
+        m->join_ns = 2 * st->interbuffer;
+        m->place.bound = os64_media_fed_sound_samples(m->join_ns, m->rate);   // the placement's own field
+    }
     for (int k = 0; k < 2 && r == 0; k++) {
         fed_kind_t *f = &m->fk[k];
         if (fed_in_use(m, k) && !f->done && !f->pending && !f->resync && !f->reopen)
@@ -1384,11 +1393,15 @@ static int __attribute__((noinline)) fed_reopen(os64_media_t *m, int k)
     f->entry = f->next;
     if (f->next.config_size) os64_memcpy(f->config, f->next_config, f->next.config_size);
     f->entry.config = f->config;
+    // The picture decoder's skip policy (os64_media_picture_skip) goes with
+    // it to the new one: a player catching up sets it once, not again.
+    enum AVDiscard skip = k == KIND_PICTURE && m->pcodec != NULL ? m->pcodec->skip_frame : AVDISCARD_DEFAULT;
     os64_lock_acquire(&s_lock);
     avcodec_free_context(k == KIND_SOUND ? &m->codec : &m->pcodec);
     int r = fed_open_decoder_locked(m, k);
     os64_lock_release(&s_lock);
     if (r < 0) return r;
+    if (k == KIND_PICTURE) m->pcodec->skip_frame = skip;
     f->generation = f->frame.generation;
     f->entry_index = f->frame.entry;
     f->reopen = false;
@@ -1480,6 +1493,7 @@ int media_open_fed(os64_media_fed_t *fed, uint32_t want, os64_media_t **out, os6
     m->frame = av_frame_alloc();
     m->pframe = av_frame_alloc();
     bool have[2] = { false, false };
+    int64_t picture_frame_ns = 0;       // a picture's duration, when frames are already held
     int result = OS64_MEDIA_NO_MEMORY;
     for (int k = 0; k < 2; k++) {
         m->fk[k].track_kind = k == KIND_SOUND ? OS64_MEDIA_FRAGMENT_AUDIO : OS64_MEDIA_FRAGMENT_VIDEO;
@@ -1508,6 +1522,7 @@ int media_open_fed(os64_media_fed_t *fed, uint32_t want, os64_media_t **out, os6
         f->generation = f->frame.generation;
         f->entry_index = f->frame.entry;
         if (k == KIND_SOUND) m->join_ns = 2 * t->interbuffer;
+        if (k == KIND_PICTURE && t->interbuffer > 0) picture_frame_ns = t->interbuffer;
         have[k] = true;
     }
     double duration = media_fed_duration(fed);
@@ -1539,6 +1554,13 @@ int media_open_fed(os64_media_fed_t *fed, uint32_t want, os64_media_t **out, os6
         os64_strcopy(info->picture_codec, sizeof(info->picture_codec), "h264");
         info->width = info->coded_width = e->width;
         info->height = info->coded_height = e->height;
+        // Its rate, as a file states one, from the picture track's frame
+        // duration (the pace's period); none yet, the player takes the
+        // first picture's.
+        if (picture_frame_ns > 0 && picture_frame_ns < UINT32_MAX) {
+            info->rate_num = 1000000000u;
+            info->rate_den = (uint32_t)picture_frame_ns;
+        }
     }
     m->position = 0;
     *out = m;

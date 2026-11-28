@@ -1560,6 +1560,11 @@ static int64_t decoding_thread(void *arg)
                 look(p);
             }
         } else if (got.kind == OS64_MEDIA_GOT_PICTURE) {
+            // A media that states no rate (a fed media opened before its
+            // frames, a file without one) gives the pace its period from the
+            // first picture that has a duration.
+            if (p->pace.period == 0 && got.picture->duration > 0)
+                os64_media_pace_period(&p->pace, got.picture->duration);
             int pushed = os64_media_pictures_push(&p->decoded, gen_decoded, got.picture, got.picture->at + base,
                                                   got.picture->duration);
             int64_t ends = got.picture->at + (got.picture->duration > 0 ? got.picture->duration : 0);
