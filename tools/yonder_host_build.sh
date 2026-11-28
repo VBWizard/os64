@@ -25,7 +25,7 @@ yonder_host_build() {
     fi
     host_flags=(-O1 -g -std=gnu11 -Wall -Wextra -Werror -ffreestanding -fno-builtin
         -ffunction-sections -fdata-sections -fno-tree-loop-distribute-patterns
-        -fno-stack-protector -DOS64_JS_TARGET '-DLIBDOM_STREAMS_JS="userland/libdom/streams.js"' '-DLIBJS_INTL_DIR="userland/libjs/intl/"'
+        -fno-stack-protector -DOS64_HOST_SYSCALL_HOOK -DOS64_JS_TARGET '-DLIBDOM_STREAMS_JS="userland/libdom/streams.js"' '-DLIBJS_INTL_DIR="userland/libjs/intl/"'
         -Iuserland/libpng/include -Iuserland/libcanvas/include -Iuserland/libdraw2d/include -Iuserland/libxml/include -Iuserland/libsvg/include -Iuserland/libmath/include -Iuserland/libjs/port -Iuserland/libjs/include
         -Iuserland/libdom/include -Iuserland/libhtml/include -Iuserland/libpage/include
         -Iuserland/libflow/include -Iuserland/libgarb/include -Iuserland/libway/include
