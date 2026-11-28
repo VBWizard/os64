@@ -1,0 +1,45 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>An index at the end</title>
+<!--
+  VIDEO.md § 5 (V.6.1): an MP4 not written for the web keeps its index
+  (`moov`) after its data, and opening it reads the end first.
+
+  Serve it with tools/pages_serve.py, which answers ranges, slowly enough
+  that the fetch has not reached the end when the open asks for it:
+
+    tools/pages_serve.py --rate 100000
+
+  What to look for: the clip plays, with its sound, and its controls have a
+  bar of 8 seconds. The server's log says the open cost three requests: the
+  file from 0, `range=bytes=N-` for its tail, then the front again. The
+  record's `media` line (yonder's `d`) counts the same requests.
+  video-tail-whole.html is the same clip from a server with no ranges.
+
+  The window's title is the readyState, the duration and the time, then
+  "ended" or "error"; the log lists the events with their times.
+-->
+<style>
+  body { font: 16px sans-serif; margin: 16px; }
+  video { background: #888; display: block; }
+  #log { font: 13px monospace; background: #f4f4f4; padding: 8px; white-space: pre-wrap; }
+</style>
+<h1>An index at the end</h1>
+<video id="v" src="tail-index.mp4" controls autoplay muted width="640" height="360"></video>
+<pre id="log"></pre>
+<script>
+  const v = document.getElementById('v'), log = document.getElementById('log');
+  const t0 = performance.now();
+  let last = '';
+  for (const t of ['loadstart', 'progress', 'durationchange', 'loadedmetadata', 'canplay', 'playing',
+                   'waiting', 'ended', 'error'])
+    v.addEventListener(t, () => {
+      if (t === 'progress' && last === 'progress') return;
+      last = t;
+      log.textContent += (performance.now() - t0).toFixed(0) + ' ms  ' + t + '  duration ' + v.duration + '\n';
+    });
+  setInterval(() => {
+    document.title = 'r' + v.readyState + ' d' + v.duration + ' t' + v.currentTime.toFixed(1) +
+      (v.ended ? ' ended' : '') + (v.error ? ' error ' + v.error.code : '');
+  }, 500);
+</script>

@@ -50,6 +50,7 @@
 #define CHUNK_FRAMES 4096u                // what the decoding thread asks for at once
 #define BUFFER_SOUND (RATE / 2u)          // buffering ends with this much sound queued
 #define POSITION_LOOK_US 250000           // a sound alone rings `look` this often while it plays
+#define LENGTH_SLACK (RATE / 10)          // an end this near the stated length leaves it standing
 #define SOUND_FLOOR (RATE / 4u)           // under it is far behind (the pace's twin door)
 #define COLLECT 64                        // a seek's flush plus a paint's drops, with room
 // A report's trust (os64_media_clock_still): longer than the oldest a
@@ -89,6 +90,7 @@ struct os64_media_player {
     os64_media_info_t info;
     bool probed, has_sound, has_picture;
     int64_t length;
+    int64_t length_us, looked_us;         // when `length` was last set, and `look` last rung (facts)
 
     os64_media_pictures_entry_t decoded_slot[DECODED_DEPTH], ready_slot[READY_DEPTH];
     os64_media_pictures_t decoded, ready;
@@ -181,6 +183,7 @@ static int64_t now_us(void)
 
 static void look(os64_media_player_t *p)
 {
+    p->looked_us = now_us();
     if (p->cfg.look != NULL)
         p->cfg.look(p->cfg.ctx);
 }
@@ -1148,6 +1151,7 @@ static void opened(os64_media_player_t *p)
     p->has_picture = picture;
     p->voiced = voiced;
     p->length = p->info.frames;
+    p->length_us = now_us();
     int64_t period = p->info.rate_num > 0 ? (int64_t)RATE * p->info.rate_den / p->info.rate_num : 0;
     os64_media_pace_period(&p->pace, period);
     // A mute asked while opening holds: the clock is heard only if the sound is.
@@ -1209,9 +1213,23 @@ static int64_t decoding_thread(void *arg)
     os64_media_player_t *p = arg;
     // With no output the sound is not opened: nothing would drain its queue.
     uint32_t want = p->cfg.output != NULL ? p->cfg.want : p->cfg.want & ~OS64_MEDIA_WANT_SOUND;
-    int r = want != 0 ? os64_media_open_for(&p->cfg.source, want, &p->media, &p->info) : OS64_MEDIA_BAD_ARGS;
-    if (r == 0 && (p->cfg.want & OS64_MEDIA_WANT_PICTURE) != 0)
+    // The source made ready here, on this thread, when the caller asked
+    // (a fetch whose head must be waited for): the source is this thread's
+    // from now on, as the config says.
+    int r = want == 0 ? OS64_MEDIA_BAD_ARGS
+            : p->cfg.prepare != NULL && !p->cfg.prepare(p->cfg.ctx, &p->cfg.source) ? OS64_MEDIA_IO
+            : p->cfg.source.read == NULL ? OS64_MEDIA_BAD_ARGS
+                                         : os64_media_open_for(&p->cfg.source, want, &p->media, &p->info);
+    if (r == 0 && (p->cfg.want & OS64_MEDIA_WANT_PICTURE) != 0) {
+        // A refused start ran nothing (a thread's handle is reserved before
+        // the thread exists), so finish's join may skip it: no picture, no
+        // player.
         p->picture_thread = os64_thread_named(picture_thread, p, "convert");
+        if (p->picture_thread < 0) {
+            os64_media_close(p->media);
+            r = OS64_MEDIA_NO_MEMORY;
+        }
+    }
     if (r != 0) {
         p->media = NULL;
         os64_lock_acquire(&p->lock);
@@ -1239,6 +1257,10 @@ static int64_t decoding_thread(void *arg)
     // `pad_at`, since the output plays queued sound back to back.
     int64_t base = 0, run_end = 0, run_sound_end = 0, pad_at = 0, pad = 0;
     bool ended_queued = false;
+    // The run began at frame 0 (the open, a loop's start, a seek to 0): only
+    // such a run's end measures the media, since a seek elsewhere may land
+    // by estimate in exactly the files whose header is wrong.
+    bool from_start = true;
     int64_t position_looked = 0;          // a sound alone's last periodic `look`
     collect_t c = {0};
     os64_lock_acquire(&p->lock);
@@ -1293,6 +1315,7 @@ static int64_t decoding_thread(void *arg)
             resync_waiting = false;
             base = run_end = run_sound_end = pad = 0;   // a seek's place is the media's own
             ended_queued = false;
+            from_start = target == 0;
             unlock(p);
             int sought = os64_media_seek(p->media, target);
             os64_lock_acquire(&p->lock);
@@ -1405,10 +1428,23 @@ static int64_t decoding_thread(void *arg)
             if ((accept & OS64_MEDIA_WANT_PICTURE) != 0)
                 pictures_done = true;
             bool all_done = (!p->has_sound || sound_done) && (!p->has_picture || pictures_done);
-            if (all_done && run_end > 0 && p->length < 0) {
-                // A media whose length the probe could not say has one now
-                // (an MP3 with no header served with no length).
-                p->length = run_end;
+            // The end says how long the media is: a length the probe could
+            // not say (an MP3 with no header served with no length) is the
+            // run's end; one its header stated wrong (an MP3 whose Info
+            // frame count is wrong) is corrected for a SOUND ALONE whose
+            // run began at frame 0 (from_start), its end decoded whole. With a picture the end is no evidence
+            // against the header: the sound may end before the pictures,
+            // and a decoder held behind resyncs to the next keyframe,
+            // which at the end of a file there is none of, so its last
+            // pictures are never decoded. Within the slack the stated
+            // length stands (streams end a frame or two from their
+            // container).
+            int64_t heard_end = p->has_sound && !p->has_picture && from_start ? run_sound_end : -1;
+            bool corrected = heard_end > 0 && p->length >= 0 &&
+                             (heard_end - p->length > LENGTH_SLACK || p->length - heard_end > LENGTH_SLACK);
+            if (all_done && run_end > 0 && (p->length < 0 || corrected)) {
+                p->length = corrected ? heard_end : run_end;
+                p->length_us = now_us();
                 look(p);
             }
             if (!all_done && p->loop && run_end > 0) {
@@ -1502,7 +1538,7 @@ static int64_t decoding_thread(void *arg)
 
 int os64_media_player_create(const os64_media_player_config_t *cfg, os64_media_player_t **out)
 {
-    if (cfg == NULL || out == NULL || cfg->source.read == NULL || cfg->want == 0)
+    if (cfg == NULL || out == NULL || (cfg->source.read == NULL && cfg->prepare == NULL) || cfg->want == 0)
         return OS64_MEDIA_BAD_ARGS;
     *out = NULL;
     os64_media_player_t *p = os64_calloc(1, sizeof(*p));
@@ -1751,6 +1787,8 @@ void os64_media_player_facts(os64_media_player_t *p, os64_media_player_facts_t *
     f.has_sound = p->has_sound;
     f.muted = p->muted;
     f.length = p->length;
+    f.length_us = p->length_us;
+    f.looked_us = p->looked_us;
     // At the end the position is the end (HTML's: currentTime is the
     // duration), whatever the ear last reported.
     f.position = p->state == OS64_MEDIA_PLAYER_ENDED && p->length >= 0

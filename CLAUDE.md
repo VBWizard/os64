@@ -692,8 +692,9 @@ virtio because its drain waits for the tick.
   `--plane=off` or `planes = off` to compare, `--plane-check` to compose
   each hole with the kernel's own blend against the page's pixels,
   `/tests/pages/video-held.html` and `video-controls.html`)
-  (`apps/yonder/media.c`: an opener thread and a player per element, a
-  loader thread for a network address,
+  (`apps/yonder/media.c`: a player per element, which makes its bytes
+  ready on its own decoding thread (`prepare`), a loader thread for a
+  network address,
   and a VOICE each on libmedia's output, `os64/media_output.h`: one audio
   thread per program owning `/dev/audio` and mixing every voice,
   `os64/media_mix.h`, which gplay's sound is a voice of too), while libdom keeps the element's

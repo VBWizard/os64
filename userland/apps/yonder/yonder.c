@@ -10346,16 +10346,26 @@ static bool paint_lines(DiagText *t, DiagText *u)
         os64_media_player_facts_t vf;
         if (s_videos[i].node == NULL || !yonder_media_player_facts(s_videos[i].session, &vf))
             continue;
+        // The element's duration as script has it (NaN unknown, inf no
+        // end), beside the media lines below.
+        os64_dom_media_view_t view;
+        char duration[24];
+        yonder_media_seconds(yonder_scripts_media_view(g.page.scripts, s_videos[i].node, &view) ? view.duration : NAN,
+                             duration, sizeof(duration));
         dt_put(t, "; video %d %ux%u: shown %lu, dropped %lu, skipped %lu, starved %lu, resyncs %lu, "
-               "sound written %lu let go %lu, buffering %lu",
+               "sound written %lu let go %lu, buffering %lu, element duration %s",
                (int)i, vf.info.width, vf.info.height, (unsigned long)vf.pace.shown,
                (unsigned long)vf.pace.dropped, (unsigned long)vf.pace.skipped, (unsigned long)vf.pace.starved,
                (unsigned long)vf.pace.resyncs, (unsigned long)vf.sound_written, (unsigned long)vf.sound_dropped,
-               (unsigned long)vf.buffers);
+               (unsigned long)vf.buffers, duration);
         video_glass_reading(t, &s_videos[i], &vf);
         plane_reading(t, &s_videos[i], &vf);
     }
     plane_counts_reading(t);
+    // Every media session's length, from its source to what script was told.
+    char media_line[320];
+    for (uint32_t i = 0; yonder_media_report(i, media_line, sizeof(media_line)); i++)
+        dt_put(t, "; media %u %s", (unsigned)i, media_line);
 
     // The bells the loop took, then the ticker's own counts: its rings —
     // more than the bells when rings were made before the loop took one —
@@ -16612,6 +16622,7 @@ static void media_failed_told(void *opaque, const os64_html_node_t *node, void *
 {
     static const char *const kClass[] = {"error", "aborted", "network", "decode", "not supported"};
     char line[OS64_FETCH_URL_MAX + 512];
+    line[0] = '\0';        // written before every true answer below; said for the compiler
     if (session != NULL) {
         if (yonder_media_failure_take(session, code, line, sizeof(line)))
             media_failed((uint64_t)(uintptr_t)opaque, line, NULL, NULL, NULL, NULL);

@@ -126,6 +126,8 @@ bool yonder_media_failure_take(yonder_media_t *m, int code, char *out, size_t ca
              "4096 bytes received, the first request)", kClass[code >= 1 && code <= 4 ? code : 3]);
     return true;
 }
+bool yonder_media_report(uint32_t i, char *out, size_t cap) { (void)i; (void)out; (void)cap; return false; }
+size_t yonder_media_seconds(double s, char *out, size_t cap) { (void)s; if (cap > 0) out[0] = '\0'; return 0; }
 int yonder_media_can_play(const char *type) { (void)type; return 0; }
 void yonder_media_reap(void) {}
 #ifdef OS64_JS_BYTECODE_ROUND_TRIP
