@@ -29,6 +29,8 @@
 //  5  TWO INITS IN ONE APPEND (seam change 10): the first one's duration.
 //  6  A SWITCH APPENDED OVER WHAT IS BUFFERED AHEAD of the decoder plays on
 //     to the end without waiting.
+//  7  A RESYNC IN THE MIDDLE OF A GROUP drops pictures to the next keyframe,
+//     which comes out next, and goes on to the end.
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -480,6 +482,50 @@ static void switch_over_buffered(void)
     os64_media_fed_close(fed);
 }
 
+// Case 7: a resync (os64_media_picture_resync, a player far behind) in the
+// middle of a group: pictures are dropped until the next keyframe, which
+// is the next picture out, and they go on from there to the end.
+static void resync_mid_group(void)
+{
+    os64_media_fed_t *fed;
+    os64_media_fed_create(&fed);
+    media_fed_hold(fed, NULL);
+    os64_media_fed_buffer_t *v = os64_media_fed_add(fed, "video/mp4; codecs=\"avc1.640020\"");
+    append(fed, v, &s_720, s_720.init[0], s_720.init[1]);
+    for (int i = 0; i < s_720.count; i++) append_frag(fed, v, &s_720, i);
+    os64_media_fed_end(fed);
+    os64_media_t *m = open_fed(fed);
+    if (m == NULL) return;
+    int pictures = 0, after = 0;
+    int64_t first_after = -1, last_at = -1;
+    bool ended = false;
+    while (!ended) {
+        if (pictures == 30) CHECK(os64_media_picture_resync(m) == 0, "resync");
+        os64_media_got_t got;
+        int r = os64_media_next(m, OS64_MEDIA_WANT_PICTURE, NULL, 0, &got);
+        CHECK(r == 0 && got.kind != OS64_MEDIA_GOT_WAIT, "resync: next %d, kind %d", r, got.kind);
+        if (r != 0 || got.kind == OS64_MEDIA_GOT_WAIT) break;
+        if (got.kind == OS64_MEDIA_GOT_END) ended = true;
+        else if (got.kind == OS64_MEDIA_GOT_PICTURE) {
+            if (pictures >= 30) {
+                if (after++ == 0) {
+                    first_after = got.picture->at;
+                    CHECK(got.picture->keyframe, "resync: the first picture after it is a keyframe");
+                }
+            }
+            pictures++;
+            last_at = got.picture->at;
+            os64_media_picture_release(m, got.picture);
+        }
+    }
+    CHECK(first_after == 2 * 48000 + 1600, "resync: decoding starts again at the keyframe at 2 s (%lld)",
+          (long long)first_after);
+    CHECK(ended && last_at > 9 * 48000, "resync: it goes on to the end (last at %lld)", (long long)last_at);
+    os64_media_close(m);
+    media_fed_release(fed);
+    os64_media_fed_close(fed);
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 3) { printf("usage: test_media_fed_host <pages> <crcs>\n"); return 2; }
@@ -496,6 +542,7 @@ int main(int argc, char **argv)
     two_threads();
     two_inits();
     switch_over_buffered();
+    resync_mid_group();
     printf("media fed: %u checks, %u failed\n", s_checks, s_failed);
     return s_failed != 0;
 }

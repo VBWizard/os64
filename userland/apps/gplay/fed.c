@@ -192,6 +192,7 @@ static int64_t feeder(void *arg)
                 if (i < g->sound.count && g->sound.start[i] + g->sound.duration[i] <= at - 1.0) g->appended_a[i] = false;
             }
             g->removes++;
+            g->ended = false;           // a removal reopens an ended source: the end is said again
         }
         // What the next four seconds need, from where the position is.
         const rendition_t *p = &g->pic[g->current];
@@ -201,9 +202,11 @@ static int64_t feeder(void *arg)
         for (int i = fragment_at(&g->sound, at); i < g->sound.count && g->sound.start[i] < until; i++)
             if (!g->appended_a[i])
                 g->appended_a[i] = append(g, g->a, &g->sound, g->sound.frag[i][0], g->sound.frag[i][1]);
+        // Everything from the position on appended (what was removed behind
+        // it is never appended again): then the end, as a page says it.
         bool all = true;
-        for (int i = 0; i < p->count; i++) all &= g->appended_v[i];
-        for (int i = 0; i < g->sound.count; i++) all &= g->appended_a[i];
+        for (int i = fragment_at(p, at); i < p->count; i++) all &= g->appended_v[i];
+        for (int i = fragment_at(&g->sound, at); i < g->sound.count; i++) all &= g->appended_a[i];
         if (all && !g->ended) os64_media_fed_end(g->fed);
         g->ended = all;
         os64_media_fed_counts_t c;

@@ -1191,6 +1191,21 @@ static int fed_packet(os64_media_t *m, int k)
 {
     fed_kind_t *f = &m->fk[k];
     os64_media_track_frame_t fr = f->frame;
+    if (k == KIND_PICTURE && m->resync) {
+        // A resync drops pictures until a keyframe (os64_media_picture_resync),
+        // as a file's reading does: the decoder was flushed, and a packet from
+        // the middle of a group would decode to nothing, or to damage.
+        if (!(fr.flags & OS64_MEDIA_FRAME_RAP)) {
+            media_fed_lock(m->fed);
+            os64_media_track_frame_done(&f->frame);
+            media_fed_unlock(m->fed);
+            f->pending = false;
+            m->counts.picture_packets++;
+            m->counts.pictures_resync++;
+            return 0;
+        }
+        m->resync = false;                                 // the keyframe: decoding starts again from it
+    }
     uint8_t *data = fr.slab->data + fr.offset;             // frame_done below clears fr.slab
     AVBufferRef *old = NULL;
     if (fr.slab != f->base_slab) {
