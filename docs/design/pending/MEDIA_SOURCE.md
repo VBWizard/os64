@@ -344,16 +344,18 @@ the append is taken.
 ## 5. The fed media in libmedia
 
 `os64/media_fed.h`: a media whose frames come from track buffers. The
-player's decoding thread, which today pulls packets from a demuxer, pulls
-coded frames from the track buffers by the play position; everything
-after the decoder is the player as it is (the picture queue, the clock,
-the pace, the show thread, the plane, the voice).
+player's decoding thread, which pulls packets from a demuxer for a file,
+pulls coded frames from the track buffers through a cursor per kind
+(media.c § THE FED MEDIA); everything after the decoder is the player as
+it is (the picture queue, the clock, the pace, the show thread, the
+plane, the voice).
 
 - **Decoders** are avcodec's, opened from the init segment's
   configuration (`avcC` as the decoder's extra data, the AAC configuration
-  from `esds`). A frame of another generation is a decoder reopened with
-  that generation's configuration, at that frame; the picture thread
-  already takes a picture of any size. Opens and closes stay under
+  from `esds`). A frame of another generation is a decoder DRAINED (so no
+  reordered picture is lost) and reopened with that generation's
+  configuration, at that frame, unless the configuration is byte-equal to
+  the open one; the picture thread already takes a picture of any size. Opens and closes stay under
   libmedia's one FFmpeg lock, on the decoding thread, as today.
 - **Starvation.** The play position leaving the buffered range holds the
   clock (the sound stops cleanly, the picture holds) and the element says
@@ -365,14 +367,17 @@ the pace, the show thread, the plane, the voice).
 - **One lock a fed media**, held for a frame's insertion or lookup and
   never across a copy, a decode or a call out. The appending side and the
   decoding thread are its two takers.
-- **`readyState`** follows the buffered ranges: nothing before both
-  tracks' init segments; current data when the play position has a frame;
-  future data and enough data by how far the range runs ahead (the
-  thresholds in one place, reported).
-- **Nothing that runs per frame allocates**: frame records live in
-  blocks a track buffer grows by doubling; a slab is one allocation a
-  media segment; the decoder's and the picture's buffers are the player's
-  existing pools.
+- **`readyState`** follows the buffered ranges, both kinds intersected:
+  nothing before both tracks' init segments; current data when the play
+  position is in a range; future data with 250 ms buffered ahead and
+  enough data with 3 s (media_player.c's `FED_FUTURE` and `FED_ENOUGH`),
+  or the range reaching the end after `endOfStream`.
+- **Nothing libmedia's fed code does per frame allocates**: frame records
+  live in blocks a track buffer grows by doubling; a slab is one
+  allocation a media segment; packets and list nodes are reused; the
+  decoder's and the picture's buffers are the player's existing pools.
+  FFmpeg's side makes two small references a packet (`av_buffer_ref` from
+  the slab's base reference, and `avcodec_send_packet`'s own).
 
 **Where an append is parsed.** On the appending thread, inside the
 append's own task: the copy and the box walk cost about a millisecond a
@@ -385,7 +390,7 @@ thread of its own, so both shapes are proven by M2.
 
 ## 6. The fixture (M2), before any browser code
 
-`/tests/msetest`, and `gplay --fed <directory>` for eyes: sound and
+`/tests/msetest`, and `gplay --fed <prefix>` for eyes: sound and
 picture as two streams from local fragmented files, an init segment then
 media segments, appended in pieces of arbitrary sizes on a schedule a
 streaming player would keep (a few seconds ahead of the play position),
@@ -395,6 +400,20 @@ gplay's plus the track buffers' (ranges, bytes held against the quota,
 frames dropped by each rule, starvations, decoder reopens). It passes in
 `testrun` muted and covered, like gplaytest, and on the P5 it is the
 proof of 1080p60 fed in pieces, smooth, before a page is involved.
+
+**As built (MS.2).**
+- **The fixture is one set**, used by the host test, `msetest`, `gplay --fed` and yonder's pages alike. `tools/make_dash_fixture.sh` makes it from the sync clip: 1080p, 720p and 480p pictures and 48 and 44.1 kHz sound, each a fragmented MP4 with a 2 s fragment grid and a JSON index of byte ranges, in `/tests/pages`.
+- **`tools/test_media_fed_host.sh`** runs the fed media over the pinned FFmpeg under ThreadSanitizer and ASan, with nine cases:
+  - pictures bit-exact through a switch;
+  - a seek into what is not yet buffered;
+  - a switch over buffered fragments;
+  - a resync, and a removal under a decoder fallen behind;
+  - two threads, and two inits in one append;
+  - a seek past the end.
+- **`/tests/msetest`** is in `testrun`. It skips when the sink can be heard, and it checks that pictures are shown to the end, not their count: a live player behind leaves pictures out.
+- **`gplay --fed`** feeds four seconds ahead from a thread of its own; `w` switches size and `e` removes what is behind. Its readout line is the fed media's counts (appends, switches, removes, reopens, resyncs, slab bytes, whether the end is said), not the track buffers' per-rule drops.
+- **A resync** places its cursor on the first data at or after its place, however far, since what was removed under a decoder fallen behind will not come back.
+- **A seek** lands in a range starting within the join after its target: a picture with B-frames starts a frame or two after 0 when its file has no edit list (DEBTS: that rule belongs in the core).
 
 The live-player factor applies to every forecast here: what a stage costs
 in a playing video on the P5 has measured about twice its benchmark.
