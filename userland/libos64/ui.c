@@ -779,16 +779,48 @@ static void label_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
 	                  t->label_fg, t->panel_bg);
 }
 
+// A button's corner radius: the theme's, 0 to 8, and no more than half of
+// either side of `b`.
+static int32_t button_radius(const os64_ui_theme_t *t, os64_gui_rect_t b)
+{
+	int32_t radius = t->control_radius;
+	if (radius < 0) radius = 0;
+	if (radius > 8) radius = 8;
+	if (radius > b.w / 2) radius = b.w / 2;
+	if (radius > b.h / 2) radius = b.h / 2;
+	return radius;
+}
+
+// How far in from each side button_paint keeps a caption whole: it starts
+// the caption no nearer the edge than the theme's pad, and clips it at the
+// corner radius.
+static int32_t button_inset(const os64_ui_theme_t *t)
+{
+	int32_t radius = button_radius(t, (os64_gui_rect_t){0, 0, INT32_MAX, INT32_MAX});
+	return t->pad > radius ? t->pad : radius;
+}
+
+os64_font_status_t os64_ui_button_width(os64_ui_t *ui, os64_font_role_t role,
+                                        const char *text, size_t len, int32_t *out)
+{
+	if (!out)
+		return OS64_FONT_BAD_ARGUMENT;
+	*out = 0;
+	int32_t tw = 0;
+	os64_font_status_t status = os64_ui_run_width(ui, (void **)0, role, text, len, &tw);
+	if (status != OS64_FONT_OK)
+		return status;
+	int64_t w = (int64_t)tw + 2 * (int64_t)(ui ? button_inset(&ui->theme) : 0);
+	*out = w > INT32_MAX ? INT32_MAX : (int32_t)w;
+	return OS64_FONT_OK;
+}
+
 void os64_ui_button_face(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
                           const os64_ui_theme_t *t)
 {
 	uint32_t face = w->pressed ? t->button_face_pressed :
 	                w->hovered ? t->button_face_hover : t->button_face;
-	int32_t radius = t->control_radius;
-	if (radius < 0) radius = 0;
-	if (radius > 8) radius = 8;
-	if (radius > w->bounds.w / 2) radius = w->bounds.w / 2;
-	if (radius > w->bounds.h / 2) radius = w->bounds.h / 2;
+	int32_t radius = button_radius(t, w->bounds);
 	if (radius) os64_draw_fill_rect(&ctx->surf, w->bounds, t->panel_bg);
 	os64_draw_fill_round_rect(&ctx->surf, w->bounds, radius, face);
 	uint32_t border = w->focused ? t->focus_ring :
@@ -814,11 +846,7 @@ static void button_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
 	os64_ui_button_face(w, ctx, t);
 	uint32_t face = w->pressed ? t->button_face_pressed :
 	                w->hovered ? t->button_face_hover : t->button_face;
-	int32_t radius = t->control_radius;
-	if (radius < 0) radius = 0;
-	if (radius > 8) radius = 8;
-	if (radius > w->bounds.w / 2) radius = w->bounds.w / 2;
-	if (radius > w->bounds.h / 2) radius = w->bounds.h / 2;
+	int32_t radius = button_radius(t, w->bounds);
 	os64_ui_t *ui = os64_ui_of(w);
 	os64_font_role_t role = ui_role(w, OS64_FONT_ROLE_UI);
 	size_t len = ui_strlen(w->text);

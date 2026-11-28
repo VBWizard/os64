@@ -842,6 +842,13 @@ extern const os64_ui_class_t os64_ui_label_class;
 extern const os64_ui_class_t os64_ui_button_class;
 // Shared button furniture for controls with a different content painter.
 void os64_ui_button_face(os64_ui_widget_t *, os64_draw_ctx_t *, const os64_ui_theme_t *);
+// The width a stock button needs to show all of `text` in `role`: the
+// caption measured as its paint measures it (os64_ui_run_width), and on
+// each side the inset its paint keeps (the theme's pad, or its corner
+// radius where that is larger). In device pixels; OS64_FONT_OK, or the
+// measurement's failure with *out 0.
+os64_font_status_t os64_ui_button_width(os64_ui_t *ui, os64_font_role_t role,
+                                        const char *text, size_t len, int32_t *out);
 
 // Move key focus. Maintains each widget's `focused` mirror and dirties both
 // ends so carets appear and disappear honestly. NULL blurs. A non-NULL target
