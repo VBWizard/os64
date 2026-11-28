@@ -1582,6 +1582,45 @@ static void out_of_memory(void)
         os64_media_buffer_destroy(&b);
         check(s_live == live0, "out of memory at allocation %ld: %ld blocks not given back", k, s_live - live0);
     }
+
+    // Codex #769 rd3: a preload is never kept without its frame. Sixty-three
+    // one-second sound frames fill the range's 64 places; with the window at
+    // 64 s the frame at 63 s is held as the preload of the frame at 64 s,
+    // and the allocation that grows the range for the pair fails. Then a
+    // frame at 65 s, which the preload does not end at.
+    for (long k = 1; k <= 3; k++) {
+        os64_media_buffer_t b;
+        os64_media_buffer_init(&b, &kMemory);
+        os64_media_fragment_init_t init = { .generation = 1, .track_count = 1 };
+        static const uint8_t config[] = { 0x12, 0x10 };
+        init.track[0] = (os64_media_fragment_track_t){ .id = 1, .kind = OS64_MEDIA_FRAGMENT_AUDIO, .timescale = 1,
+                                                       .entry_count = 1 };
+        init.track[0].entry[0].config = config;
+        init.track[0].entry[0].config_size = 2;
+        os64_media_buffer_init_segment(&b, &init);
+        os64_media_fragment_slab_t *slab = slab_new(1000);
+        for (int i = 0; i <= 65; i++) {
+            if (i == 63) b.window_start = 64000000000ll;
+            if (i == 64) s_fail_countdown = k;
+            os64_media_fragment_frame_t ff = { .track_id = 1, .kind = OS64_MEDIA_FRAGMENT_AUDIO, .generation = 1,
+                                               .timescale = 1, .dts = i, .pts = i, .duration = 1, .rap = true,
+                                               .slab = slab, .offset = 0, .size = 10 };
+            (void)os64_media_buffer_frame(&b, &ff);
+            s_fail_countdown = 0;
+            const os64_media_track_t *a = &b.track[0];
+            for (uint32_t ri = 0; ri < a->range_count; ri++) {
+                const os64_media_track_range_t *r = &a->range[ri];
+                for (uint32_t j = 0; j < r->count; j++) {
+                    if (!(r->frame[j].flags & OS64_MEDIA_FRAME_PRELOAD)) continue;
+                    check(j + 1 < r->count && r->frame[j].pts + r->frame[j].duration == r->frame[j + 1].pts,
+                          "out of memory at %ld, frame %d: a preload kept without the frame it ends at", k, i);
+                }
+            }
+        }
+        slab_end(slab);
+        os64_media_buffer_destroy(&b);
+        check(s_live == live0, "out of memory at allocation %ld: %ld blocks not given back (preload)", k, s_live - live0);
+    }
 }
 
 // ── Random scripts ─────────────────────────────────────────────────────────

@@ -808,6 +808,14 @@ static os64_media_track_rule_t buffer_frame(os64_media_buffer_t *b, const os64_m
                             t->preload.pts + t->preload.duration > sat_add(pts, ONE_MICROSECOND) ||
                             t->preload.dts > dts || decoded_between(t, t->preload.dts, dts)))
         preload_clear(t);
+    // Room for the preload and its frame together, so neither is kept
+    // without the other: a preload with no frame after it would be taken
+    // as the preroll of whatever frame came next.
+    if (!range_reserve(t, r, r->count + (t->have_preload ? 2u : 1u))) {
+        if (r->count == 0)
+            range_delete(t, ri);
+        return OS64_MEDIA_TRACK_NO_MEMORY;
+    }
     if (t->have_preload) {
         t->preload.serial = ++t->next_serial;
         if (!range_push(t, r, &t->preload)) {
