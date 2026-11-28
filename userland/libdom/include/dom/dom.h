@@ -133,6 +133,14 @@ typedef struct {
      * a Range with members missing. One switch for the same reason as
      * shadow trees'. Clear in the defaults. */
     bool ranges;
+    /* Media Source Extensions (docs/design/pending/MSE_DOM.md), with
+     * `modern`: set, MediaSource, SourceBuffer, SourceBufferList and
+     * VideoPlaybackQuality on window, createObjectURL taking a MediaSource,
+     * and a video's getVideoPlaybackQuality exist; clear, none of them
+     * does, so a page's feature test takes the fallback it takes in a
+     * browser without MSE. Set it only for a host that installs a fed
+     * source (dom/media.h, os64_dom_set_fed). Clear in the defaults. */
+    bool media_source;
     /* The UTF-8 message is borrowed during this owner-thread call. The host
      * copies it if needed and must not enter JS or a nested event loop here. */
     void (*alert)(void *opaque, const char *utf8, size_t length);

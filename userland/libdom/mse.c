@@ -2,9 +2,10 @@
 #include "os64/fmt.h"
 #include <math.h>
 
-/* MEDIA SOURCE EXTENSIONS (MSE_DOM.md, MEDIA_SOURCE.md § 7; W3C media-source): the
- * MediaSource, SourceBuffer and SourceBufferList a page feeds a media
- * element through, and the object URLs that name a MediaSource.
+/* MEDIA SOURCE EXTENSIONS (MSE_DOM.md; MEDIA_SOURCE.md § 7; W3C
+ * media-source): the MediaSource, SourceBuffer and SourceBufferList a page
+ * feeds a media element through, and the object URLs that name a
+ * MediaSource.
  *
  * libdom keeps the objects, their states and their events; the host keeps
  * the fed session it opens when a MediaSource attaches and a buffer per
@@ -18,7 +19,7 @@
  * queue them (`sourceended` before the element's `durationchange`, `error`
  * before `updateend`). An append's work and a removal's are tasks there
  * too (d_media_queue_work), between `updatestart` and `update`; the parse
- * runs inside the append's task (MEDIA_SOURCE.md § 5, "where an append is
+ * runs inside the append's task (MEDIA_SOURCE.md § 9, "where an append is
  * parsed"), and a host whose parse runs elsewhere answers PENDING and is
  * polled from the media turn (d_mse_turn) until it is done. abort() and
  * removeSourceBuffer() cancel the queued task; a queued task holds its
@@ -28,6 +29,10 @@
  * SourceBuffer, and one with a removal in flight queues nothing, as
  * Chromium's SourceBuffer::RemovedFromMediaSource does (Firefox agrees on
  * the append); a revoked object URL leaves an attachment as it is.
+ *
+ * All of it exists only with the binding's media_source switch (dom.h),
+ * which a host sets when it installs a fed source; without it the names
+ * are absent, and createObjectURL takes Blobs alone.
  *
  * What it leaves out (DEBTS.md): a MediaSource in a worker and its
  * MediaSourceHandle, ManagedMediaSource, the AudioTrack and VideoTrack
@@ -426,10 +431,15 @@ static void parsed(os64_dom_t *dom, DSourceBuffer *b, const os64_dom_fed_result_
                 list_event(dom, s->active_list, "addsourcebuffer");
                 d_media_fed_reinit(dom, s->media);
             }
+            /* § 5.5.7's last step: with every SourceBuffer initialized the
+             * element has its metadata, inside this append. */
+            if (d_mse_probed(dom, s->self)) d_media_fed_metadata(dom, s->media);
         }
     }
-    if (r->frames && !isnan(r->group_end) && !(r->group_end <= s->duration))
-        (void)duration_change(dom, NULL, s, isnan(s->duration) || r->group_end > s->duration ? r->group_end : s->duration);
+    /* Coded frame processing's step 5: frames past the duration raise it
+     * to the group's end. */
+    if (r->frames && !isnan(r->group_end) && (isnan(s->duration) || r->group_end > s->duration))
+        (void)duration_change(dom, NULL, s, r->group_end);
     b->updating = false;
     buffer_event(dom, b, "update");
     buffer_event(dom, b, "updateend");
@@ -1107,12 +1117,13 @@ bool d_mse_probed(os64_dom_t *dom, JSValueConst source)
 }
 
 /* The element's buffered (MSE § 10.2): the active SourceBuffers' ranges
- * intersected, from [0, the highest end among them]. */
+ * intersected, from [0, the highest end among them]; when the source has
+ * ended, each one's last range reaches that highest end first. */
 uint32_t d_mse_buffered(os64_dom_t *dom, JSValueConst source, os64_dom_fed_range_t *out, uint32_t cap)
 {
     DMediaSource *s = source_of(dom, source);
     if (s == NULL || cap == 0) return 0;
-    static os64_dom_fed_range_t each[MSE_BUFFERS_MAX][D_RANGES_MAX];
+    os64_dom_fed_range_t each[MSE_BUFFERS_MAX][D_RANGES_MAX];
     uint32_t counts[MSE_BUFFERS_MAX] = {0};
     double highest = 0;
     bool any = false;
@@ -1124,6 +1135,9 @@ uint32_t d_mse_buffered(os64_dom_t *dom, JSValueConst source, os64_dom_fed_range
         any = true;
     }
     if (!any || !(highest > 0)) return 0;
+    if (s->ready == MS_ENDED)
+        for (uint32_t i = 0; i < s->count; i++)
+            if (s->active[i] && counts[i] > 0) each[i][counts[i] - 1].end = highest;
     os64_dom_fed_range_t now[D_RANGES_MAX], next[D_RANGES_MAX];
     now[0] = (os64_dom_fed_range_t){0, highest};
     uint32_t n = 1;

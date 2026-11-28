@@ -234,8 +234,10 @@ typedef enum {
  * load fails as a network error does. */
 void os64_dom_set_media(os64_dom_t *dom, const os64_dom_media_provider_t *provider);
 /* Install or replace (NULL removes) the fed source's host, outside
- * callbacks. With none, a MediaSource never opens: its element fails as a
- * source that cannot be fetched. */
+ * callbacks, in a binding made with the media_source switch (dom.h), which
+ * is what puts MediaSource on window. With none, a MediaSource never opens
+ * (its element fails as a source that cannot be fetched) and
+ * isTypeSupported answers no. */
 void os64_dom_set_fed(os64_dom_t *dom, const os64_dom_fed_provider_t *provider);
 /* The media turn, owner thread, between tasks, no script: each media
  * element brought up to date with its tree (inserted, removed, src

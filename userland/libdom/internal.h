@@ -1577,13 +1577,16 @@ int d_image_data_view(os64_dom_t *, JSContext *, JSValueConst, canvas_rgba8_t *)
  * the HTMLIFrameElement interface over D_PROTO_IFRAME, and its members. */
 int d_frames_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* The media row (media.c): HTMLMediaElement, HTMLAudioElement, MediaError,
- * TimeRanges, Audio, and the media events' handlers, then HTMLVideoElement
- * (d_video_install). Its departure step closes the host's sessions and
- * forgets queued tasks; drain lets go of the engine values the records
- * hold; free frees the records. */
+ * TimeRanges, Audio, and the media events' handlers, then, with the
+ * media_source switch, Media Source Extensions (d_mse_install), then
+ * HTMLVideoElement (d_video_install). Its departure step closes the host's
+ * sessions (detaching any MediaSource) and forgets queued tasks; drain lets
+ * go of the engine values the records and MSE's registry hold; free frees
+ * the records. */
 int d_media_elements_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
-/* HTMLVideoElement (video.c), a media element that plays sound and no
- * picture (AUDIO_YONDER.md § Y.4), over the HTMLMediaElement on window. */
+/* HTMLVideoElement (video.c), over the HTMLMediaElement on window, and
+ * with the media_source switch its getVideoPlaybackQuality and
+ * VideoPlaybackQuality. */
 int d_video_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 void d_media_elements_cancel(os64_dom_t *dom);
 void d_media_elements_drain(os64_dom_t *dom);
@@ -1622,13 +1625,15 @@ DMediaTask *d_media_queue_work(os64_dom_t *dom, JSValueConst object, void (*run)
 void d_media_task_cancel(DMediaTask *task);
 /* The element `media` (a DMediaElement, opaque to mse.c) of an attached
  * MediaSource: its duration set and durationchange queued; the end of
- * stream's error steps (a decode error, else a network one); readyState
+ * stream's error steps (a decode error, else a network one); HAVE_METADATA
+ * reached (every SourceBuffer's first initialization segment); readyState
  * back to HAVE_METADATA when above HAVE_CURRENT_DATA (an initialization
  * segment while playing); the coded frame removal's drop when the
  * position is inside [start, end); whether it has a MediaError (prepare
  * append's "recent element error"). */
 void d_media_fed_duration(os64_dom_t *dom, void *media, double duration);
 void d_media_fed_failed(os64_dom_t *dom, void *media, bool decode);
+void d_media_fed_metadata(os64_dom_t *dom, void *media);
 void d_media_fed_reinit(os64_dom_t *dom, void *media);
 void d_media_fed_removed(os64_dom_t *dom, void *media, double start, double end);
 bool d_media_fed_has_error(const void *media);

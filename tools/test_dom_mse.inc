@@ -270,7 +270,9 @@ static bool mse_entropy(void *opaque, uint8_t *out, size_t length)
     return true;
 }
 
-/* media_fixture's page, with randomness and the fake fed host. */
+/* media_fixture's page with Media Source Extensions' switch on (dom.h's
+ * media_source, which is what makes the interfaces), randomness for the
+ * object URLs, and the fake fed host. */
 static DomFixture mse_fixture(DomFixture *slot)
 {
     memset(fed_sessions, 0, sizeof(fed_sessions));
@@ -283,6 +285,7 @@ static DomFixture mse_fixture(DomFixture *slot)
     p2b_us = 1000000;
     os64_dom_options_t options = p2b_options(P2B_URL);
     options.entropy = mse_entropy;
+    options.media_source = true;
     *slot = fixture_new(&options);
     if (fixture_ready(slot)) {
         os64_dom_set_media(slot->binding, &media_provider);
@@ -380,6 +383,15 @@ static void dom_mse_attach_cases(void)
     mse_script(&f, "URL.revokeObjectURL(url);assert(ms.readyState==='open');", "mse: revoke after attach");
     media_turn(&f, "mse: revoke turn");
     mse_script(&f, "assert(ms.readyState==='open'&&heard()==='','still attached');", "mse: revoke keeps it");
+    /* A revoked URL names no MediaSource: the element asks the media host
+     * for it as any address (this fake opens everything), the fed host is
+     * never asked, and the source stays closed. */
+    mse_script(&f, "globalThis.m3=new MediaSource();const u3=URL.createObjectURL(m3);URL.revokeObjectURL(u3);"
+                   "globalThis.x=document.createElement('video');watch(x,'x',V_EVENTS);x.src=u3;",
+               "mse: a revoked URL");
+    media_turn(&f, "mse: revoked URL turn");
+    mse_script(&f, "heard();assert(m3.readyState==='closed','revoked: '+m3.readyState);", "mse: a revoked URL attaches nothing");
+    check(fed_opened == 1, "mse: a revoked URL opens no fed session");
     fixture_free(&f);
 
     /* With no fed host a MediaSource never opens. */
@@ -440,8 +452,8 @@ static void dom_mse_buffer_cases(void)
     media_turn(&f, "mse: the append's task");
     check(b->parses == 1 && s->duration == 10, "mse: parsed; the host told the duration");
     mse_script(&f,
-        "const h=heard();assert(h==='sb:updatestart active:addsourcebuffer v:durationchange sb:update sb:updateend "
-        "v:loadedmetadata','the order: '+h);"
+        "const h=heard();assert(h==='sb:updatestart v:durationchange active:addsourcebuffer v:loadedmetadata "
+        "sb:update sb:updateend','the order (MSE 5.5.7): '+h);"
         "assert(!sb.updating&&ms.activeSourceBuffers[0]===sb&&ms.duration===10&&v.duration===10&&v.readyState===1);",
         "mse: the init segment received");
     mse_script(&f, "sb.appendBuffer(B('frames:0:4'));", "mse: frames");
@@ -504,11 +516,13 @@ static void dom_mse_sequence_cases(void)
     mse_script(&f, "throws('InvalidStateError',()=>{sb.timestampOffset=1});throws('InvalidStateError',()=>{sb.mode='segments'});"
                    "sb.abort();sb.timestampOffset=1;assert(sb.timestampOffset===1,'abort resets the parser');",
                "mse: PARSING_MEDIA_SEGMENT");
-    /* A parse elsewhere: updating until the poll answers. */
+    /* A parse elsewhere: updating until the poll answers (the task's parse
+     * at the first turn, a poll at each turn after). */
     mse_script(&f, "heard();sb.appendBuffer(B('pending:2 frames:0:1'));", "mse: pending");
     media_turn(&f, "mse: pending turn 1");
-    mse_script(&f, "assert(sb.updating&&heard()==='sb:updatestart','still parsing');", "mse: still parsing");
     media_turn(&f, "mse: pending turn 2");
+    mse_script(&f, "assert(sb.updating&&heard()==='sb:updatestart','still parsing');", "mse: still parsing");
+    media_turn(&f, "mse: pending turn 3");
     mse_script(&f, "assert(!sb.updating&&heard()==='sb:update sb:updateend','the poll ended it');", "mse: parsed elsewhere");
     fixture_free(&f);
 }
@@ -626,8 +640,8 @@ static void dom_mse_detach_cases(void)
                "mse: detach with an append in flight");
     check(fed_closed == 1 && !fed_sessions[0].open, "mse: the fed session is closed");
     media_turn(&f, "mse: detach events");
-    mse_script(&f, "const h=heard();assert(h==='sb:updatestart sb:abort sb:updateend active:removesourcebuffer "
-                   "list:removesourcebuffer ms:sourceclose v:emptied',h);"
+    mse_script(&f, "const h=heard();assert(h==='sb:updatestart v:abort v:emptied sb:abort sb:updateend "
+                   "active:removesourcebuffer list:removesourcebuffer ms:sourceclose',h);"
                    "throws('InvalidStateError',()=>sb.appendBuffer(B('x')));",
                "mse: the detach's events");
     /* Detached, it may attach again. */
@@ -647,8 +661,8 @@ static void dom_mse_detach_cases(void)
     mse_script(&f, "heard();sb.remove(0,1);v.removeAttribute('src');v.load();", "mse: detach with a removal");
     media_turn(&f, "mse: dr events");
     check(fed_sessions[0].buffers[0].removes == 0, "mse: the removal never ran");
-    mse_script(&f, "const h=heard();assert(h==='sb:updatestart active:removesourcebuffer list:removesourcebuffer "
-                   "ms:sourceclose v:emptied',h);",
+    mse_script(&f, "const h=heard();assert(h==='sb:updatestart v:abort v:emptied active:removesourcebuffer "
+                   "list:removesourcebuffer ms:sourceclose',h);",
                "mse: no abort for a removal");
     fixture_free(&f);
 }
@@ -746,8 +760,24 @@ static void dom_mse_quality_cases(void)
     fixture_free(&f);
 }
 
+/* Without the switch none of it exists, as on a page before MSE: the
+ * feature tests a player makes answer as they always did. */
+static void dom_mse_absent_cases(void)
+{
+    DomFixture f;
+    media_fixture(&f);
+    if (!fixture_ready(&f)) return;
+    mse_script(&f, "for(const n of ['MediaSource','SourceBuffer','SourceBufferList','VideoPlaybackQuality'])"
+                   "assert(!(n in window)&&window[n]===undefined,n+' is absent');"
+                   "assert(!('getVideoPlaybackQuality' in document.createElement('video')),'no quality');"
+                   "throws('TypeError',()=>URL.createObjectURL({}));",
+               "mse: absent without the switch");
+    fixture_free(&f);
+}
+
 static void dom_mse_cases(void)
 {
+    dom_mse_absent_cases();
     dom_mse_interface_cases();
     dom_mse_attach_cases();
     dom_mse_buffer_cases();

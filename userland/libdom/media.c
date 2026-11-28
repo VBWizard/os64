@@ -717,6 +717,26 @@ static void ready_to(os64_dom_t *dom, DMediaElement *m, uint8_t want)
     }
 }
 
+/* HAVE_METADATA from HAVE_NOTHING: the duration (a fed element's is its
+ * MediaSource's, already set), the picture's size, loadedmetadata. */
+static void metadata_reached(os64_dom_t *dom, DMediaElement *m, const os64_dom_media_facts_t *f, bool fed)
+{
+    if (!fed) {
+        m->duration = f->duration;
+        queue(dom, m, "durationchange", SETTLE_NONE);
+    }
+    /* A video's size is set and resize queued before HAVE_METADATA's
+     * loadedmetadata (HTML § 4.8.9); again at each later change. */
+    if (f->picture && f->width > 0 && f->height > 0) {
+        m->video_width = f->width;
+        m->video_height = f->height;
+        queue(dom, m, "resize", SETTLE_NONE);
+    }
+    m->ready = R_METADATA;
+    queue(dom, m, "loadedmetadata", SETTLE_NONE);
+    if (m->default_start > 0) seek(dom, m, m->default_start);
+}
+
 static void fold_facts(os64_dom_t *dom, DMediaElement *m)
 {
     if (m->session == NULL || dom->media_provider.facts == NULL) return;
@@ -754,20 +774,7 @@ static void fold_facts(os64_dom_t *dom, DMediaElement *m)
         queue(dom, m, "error", SETTLE_NONE);
     }
     if (f.probed && m->ready == R_NOTHING) {
-        if (!fed) {
-            m->duration = f.duration;
-            queue(dom, m, "durationchange", SETTLE_NONE);
-        }
-        /* A video's size is set and resize queued before HAVE_METADATA's
-         * loadedmetadata (HTML § 4.8.9); again at each later change. */
-        if (f.picture && f.width > 0 && f.height > 0) {
-            m->video_width = f.width;
-            m->video_height = f.height;
-            queue(dom, m, "resize", SETTLE_NONE);
-        }
-        m->ready = R_METADATA;
-        queue(dom, m, "loadedmetadata", SETTLE_NONE);
-        if (m->default_start > 0) seek(dom, m, m->default_start);
+        metadata_reached(dom, m, &f, fed);
     } else if (!fed && f.probed && !isnan(f.duration) && !(f.duration == m->duration)) {
         m->duration = f.duration;
         queue(dom, m, "durationchange", SETTLE_NONE);
@@ -897,8 +904,11 @@ static void step(os64_dom_t *dom, DMediaElement *m)
     if (m->session != NULL && (loops(m) != m->loop_seen || wants_all(m) != m->all_seen)) tell_settings(dom, m);
     fold_facts(dom, m);
     /* Done with, for now: ended or failed, paused, and in no document. Its
-     * session goes back to the host (session_wake). */
-    if (m->session != NULL && m->paused && !m->connected && !m->seeking && (m->ended || m->error != 0)) {
+     * session goes back to the host (session_wake). Not a fed session:
+     * closing it is the MediaSource's detach, which the page sees, and
+     * nothing could open it again. */
+    if (m->session != NULL && JS_IsUndefined(m->fed) && m->paused && !m->connected && !m->seeking &&
+        (m->ended || m->error != 0)) {
         session_close(dom, m);
         m->dormant = true;
     }
@@ -1710,6 +1720,15 @@ void d_media_fed_failed(os64_dom_t *dom, void *media, bool decode)
                                    m->message);
 }
 
+void d_media_fed_metadata(os64_dom_t *dom, void *media)
+{
+    DMediaElement *m = media;
+    if (m == NULL || m->ready != R_NOTHING || m->session == NULL) return;
+    os64_dom_media_facts_t f = {0};
+    if (dom->media_provider.facts != NULL) dom->media_provider.facts(dom->media_provider.opaque, m->session, &f);
+    metadata_reached(dom, m, &f, true);
+}
+
 void d_media_fed_reinit(os64_dom_t *dom, void *media)
 {
     DMediaElement *m = media;
@@ -1937,6 +1956,6 @@ int d_media_elements_install(os64_dom_t *dom, JSContext *ctx, JSValueConst globa
             if (d_event_handler(dom, ctx, holders[i], kind) < 0) return -1;
     if (d_event_handler(dom, ctx, media, D_EVENT_ERROR) < 0) return -1;
     d_mutation_register(dom, &s->mutations, src_changed);
-    if (d_mse_install(dom, ctx, global) < 0) return -1;
+    if (dom->options.media_source && d_mse_install(dom, ctx, global) < 0) return -1;
     return d_video_install(dom, ctx, global);
 }

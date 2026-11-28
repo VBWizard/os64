@@ -11,7 +11,8 @@
  * with the resize event). canPlayType is the host's, which counts the
  * picture (yonder answers "probably" for an MP4 with avc1). The picture
  * itself is the host's to draw. getVideoPlaybackQuality (Media Playback
- * Quality) reads the host's counts of pictures shown and dropped. */
+ * Quality), with Media Source Extensions' switch, reads the host's counts
+ * of pictures shown and dropped. */
 
 enum { V_VIDEO_WIDTH = 16, V_VIDEO_HEIGHT, V_QUALITY };
 enum { Q_CREATION, Q_DROPPED, Q_TOTAL, Q_CORRUPTED };
@@ -93,16 +94,19 @@ int d_video_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     for (size_t i = 0; i < sizeof(kRows) / sizeof(kRows[0]); i++)
         if (d_accessor(dom, ctx, video, kRows[i].property, video_member, (int)i, true) < 0) return -1;
     if (d_accessor(dom, ctx, video, "videoWidth", video_member, V_VIDEO_WIDTH, false) < 0 ||
-        d_accessor(dom, ctx, video, "videoHeight", video_member, V_VIDEO_HEIGHT, false) < 0 ||
-        d_method_named(dom, ctx, video, "getVideoPlaybackQuality", video_member, 0, V_QUALITY) < 0)
+        d_accessor(dom, ctx, video, "videoHeight", video_member, V_VIDEO_HEIGHT, false) < 0)
         return -1;
+    /* Playback quality is Media Source Extensions' switch's (dom.h's
+     * media_source): a page reads it to judge a fed stream. */
     static const JSClassDef quality_class = {.class_name = "VideoPlaybackQuality", .finalizer = quality_free};
     JSValue quality_proto;
-    if (d_interface_class(dom, ctx, global, os64_js_class_id(&video_quality_slot), &quality_class, &quality_proto) < 0 ||
+    if (dom->options.media_source &&
+        (d_method_named(dom, ctx, video, "getVideoPlaybackQuality", video_member, 0, V_QUALITY) < 0 ||
+         d_interface_class(dom, ctx, global, os64_js_class_id(&video_quality_slot), &quality_class, &quality_proto) < 0 ||
         d_accessor(dom, ctx, quality_proto, "creationTime", quality_member, Q_CREATION, false) < 0 ||
         d_accessor(dom, ctx, quality_proto, "droppedVideoFrames", quality_member, Q_DROPPED, false) < 0 ||
         d_accessor(dom, ctx, quality_proto, "totalVideoFrames", quality_member, Q_TOTAL, false) < 0 ||
-        d_accessor(dom, ctx, quality_proto, "corruptedVideoFrames", quality_member, Q_CORRUPTED, false) < 0)
+         d_accessor(dom, ctx, quality_proto, "corruptedVideoFrames", quality_member, Q_CORRUPTED, false) < 0))
         return -1;
     JSValue parent = JS_GetPropertyStr(ctx, global, "HTMLMediaElement");
     if (JS_IsException(parent)) return -1;

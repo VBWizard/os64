@@ -17,7 +17,7 @@ saying why.**
    other exactly as queued, which the spec's orders (`sourceended` before the
    element's `durationchange`, `error` before `updateend`) need.
 2. **An append's work is a TASK on that same queue**, between `updatestart`
-   and `update`/`updateend`; the parse runs inside it (MS § 5, "where an append
+   and `update`/`updateend`; the parse runs inside it (MS § 9, "where an append
    is parsed"). The seam lets that task answer PENDING, so moving the parse to
    the session's thread later changes yonder, not libdom (§ 4).
 3. **The bytes are copied once, by `appendBuffer`, straight into the parser's
@@ -39,10 +39,17 @@ saying why.**
    are absent (not empty lists), and a DEBTS row books them (§ 10).
 9. **`getVideoPlaybackQuality` is every video's**, not only a fed one's, from
    two counters the facts gain (shown, dropped).
-10. **With no fed host installed, `isTypeSupported` answers no to
-   everything**, so a player falls back to the plain file it would take in
-   a browser without MSE (YouTube's 360p on the P5, 2026-11-20) instead of
-   choosing a MediaSource that can never open.
+10. **Without the binding's `media_source` switch (dom.h) none of it
+   exists**: no MediaSource, SourceBuffer, SourceBufferList or
+   VideoPlaybackQuality on window, no `getVideoPlaybackQuality`, and
+   `createObjectURL` takes Blobs alone. A page's feature test then answers
+   as it did before MSE, so a player takes the plain file it would take in
+   a browser without MSE (YouTube's 360p on the P5, 2026-11-20). A host
+   sets the switch when it installs a fed source (yonder in MS.3.2, from a
+   `yonder.conf` switch; the DOM host's MSE fixture). And the second line of
+   defence: **with the switch set but no fed host installed,
+   `isTypeSupported` answers no to everything**, so a player is never told
+   yes for a MediaSource that can never open.
 
 ## 1. The interfaces (§ 3, § 5, § 6, § 10, media-playback-quality)
 
