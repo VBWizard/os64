@@ -452,6 +452,7 @@ static os64_media_fragment_rule_t parse_moov(os64_media_fragment_t *p, rd_t moov
 
     os64_media_fragment_init_t next = { 0 };
     uint32_t ignored[OS64_MEDIA_FRAGMENT_MAX_IGNORED];
+    uint32_t ignored_size[OS64_MEDIA_FRAGMENT_MAX_IGNORED] = { 0 };
     uint32_t ignored_count = 0;
     rd_t walk = moov;
     while (rd_box(&walk, &b)) {
@@ -508,6 +509,11 @@ static os64_media_fragment_rule_t parse_moov(os64_media_fragment_t *p, rd_t moov
                 next.track[i].trex_size = size;
                 next.track[i].trex_flags = flags;
             }
+        // A track read past still has bytes in the mdat, and a chained traf
+        // after it begins where they end.
+        for (uint32_t i = 0; i < ignored_count; i++)
+            if (ignored[i] == id)
+                ignored_size[i] = size;
     }
     if (walk.bad)
         return OS64_MEDIA_FRAGMENT_MALFORMED;
@@ -525,8 +531,10 @@ static os64_media_fragment_rule_t parse_moov(os64_media_fragment_t *p, rd_t moov
     }
     next.generation = p->init.generation + 1;
     p->init = next;
-    for (uint32_t i = 0; i < ignored_count; i++)
+    for (uint32_t i = 0; i < ignored_count; i++) {
         p->ignored[i] = ignored[i];
+        p->ignored_size[i] = ignored_size[i];
+    }
     p->ignored_count = ignored_count;
     p->have_init = true;
     return OS64_MEDIA_FRAGMENT_OK;
@@ -617,15 +625,20 @@ static os64_media_fragment_rule_t sort_samples(os64_media_fragment_t *p)
     return OS64_MEDIA_FRAGMENT_OK;
 }
 
-static const os64_media_fragment_track_t *track_of(const os64_media_fragment_t *p, uint32_t id, bool *ignored)
+// The track a traf names, or NULL; for a track read past, *ignored is set
+// and *ignored_size is its trex default size.
+static const os64_media_fragment_track_t *track_of(const os64_media_fragment_t *p, uint32_t id, bool *ignored,
+                                                   uint32_t *ignored_size)
 {
     *ignored = false;
+    *ignored_size = 0;
     for (uint32_t i = 0; i < p->init.track_count; i++)
         if (p->init.track[i].id == id)
             return &p->init.track[i];
     for (uint32_t i = 0; i < p->ignored_count; i++)
         if (p->ignored[i] == id) {
             *ignored = true;
+            *ignored_size = p->ignored_size[i];
             return 0;
         }
     return 0;
@@ -642,13 +655,14 @@ static os64_media_fragment_rule_t parse_traf(os64_media_fragment_t *p, box_t tra
     if (tfhd.body.bad)
         return OS64_MEDIA_FRAGMENT_MALFORMED;
     bool ignored;
-    const os64_media_fragment_track_t *t = track_of(p, id, &ignored);
+    uint32_t ignored_size;
+    const os64_media_fragment_track_t *t = track_of(p, id, &ignored, &ignored_size);
     if (t == 0 && !ignored)
         return OS64_MEDIA_FRAGMENT_UNKNOWN_TRACK;
     if (flags & TFHD_BASE_DATA_OFFSET)
         return OS64_MEDIA_FRAGMENT_BASE_DATA_OFFSET;
     uint32_t entry = t ? t->trex_entry : 1, duration = t ? t->trex_duration : 0;
-    uint32_t size = t ? t->trex_size : 0, sample_flags = t ? t->trex_flags : 0;
+    uint32_t size = t ? t->trex_size : ignored_size, sample_flags = t ? t->trex_flags : 0;
     if (flags & TFHD_SAMPLE_DESCRIPTION)
         entry = (uint32_t)rd_n(&tfhd.body, 4);
     if (flags & TFHD_DEFAULT_DURATION)

@@ -966,6 +966,14 @@ static void streams(void)
         s.f[1] = full_traf(9, 0, 2, 1000);
         s.f[2] = full_traf(2, 0, 4, 1024);
         write_segment(&m, &s);
+        // Its sizes from trex alone, then from tfhd: either way its bytes
+        // still move the chained traf after it.
+        d.t[2].trex_size = 40;
+        write_init(&m, &d);
+        s.f[1].trun_fields = 0xD00;
+        write_segment(&m, &s);
+        s.f[1].tfhd_flags = 0x10; s.f[1].def_size = 25;
+        write_segment(&m, &s);
         expect_stream("a text track", &m);
         model_free(&m);
     }

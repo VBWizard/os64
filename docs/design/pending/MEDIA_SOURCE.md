@@ -105,8 +105,9 @@ presentation times, frame for frame.
 and `mp4a`/`esds`, `mvex`/`trex`), `moof` (`traf`/`tfhd`/`tfdt`/`trun`),
 `mdat`, and everything else (`styp`, `sidx`, `free`, `emsg`, `mfhd`,
 `sdtp` ...) skipped by length, at the top level and inside a box it reads.
-A track of another kind (text, metadata) is read for its id and its
-trafs for their length; its frames are not handed out.
+A track of another kind (text, metadata) is read for its id and its trex
+default size, and its trafs for their length (a chained traf after one
+begins where its data ends); its frames are not handed out.
 
 **Rules it enforces** (the byte stream format's; each has a host case and
 a mutant): a partial box waits; a top-level box whose size is zero or

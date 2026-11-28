@@ -110,7 +110,7 @@ mutants = [
      'int64_t time = version == 1 ? (int64_t)rd_n(&r, 8) :', 'int64_t time = version == 9 ? (int64_t)rd_n(&r, 8) :'),
     # The moof.
     ('a-traf-for-an-unknown-track-is-taken', F, '    if (t == 0 && !ignored)', '    if (0)'),
-    ('an-ignored-track-is-unknown', F, '            *ignored = true;\n            return 0;', '            return 0;'),
+    ('an-ignored-track-is-unknown', F, '            *ignored = true;\n            *ignored_size', '            *ignored_size'),
     ('an-ignored-track-is-handed-out', F, '        if (!s->ignored) {', '        if (1) {'),
     ('a-base-data-offset-is-taken', F,
      '    if (flags & TFHD_BASE_DATA_OFFSET)\n        return OS64_MEDIA_FRAGMENT_BASE_DATA_OFFSET;', ''),
@@ -131,6 +131,7 @@ mutants = [
     ('trex-duration-is-not-the-default', F,
      'uint32_t entry = t ? t->trex_entry : 1, duration = t ? t->trex_duration : 0;',
      'uint32_t entry = t ? t->trex_entry : 1, duration = 0;'),
+    ('a-read-past-tracks-trex-size-is-not-kept', F, '                ignored_size[i] = size;', '                ignored_size[i] = size * 0;'),
     ('trex-size-is-not-kept', F, '                next.track[i].trex_size = size;\n', '                next.track[i].trex_size = size * 0;\n'),
     ('the-first-sample-flags-are-ignored', F,
      'f = (i == 0 && have_first) ? first_flags : sample_flags;', 'f = (i == 0 && have_first && 0) ? first_flags : sample_flags;'),

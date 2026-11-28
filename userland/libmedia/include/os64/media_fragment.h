@@ -121,7 +121,8 @@
 // 14496-12 § 8.8.7; the byte stream format calls only a single such traf
 // relative addressing, MEDIA_SOURCE.md § 3 says why this is accepted); a
 // track of another kind (a text or metadata track), whose trafs are read
-// for their length and whose frames are not handed out.
+// for their length (with trex's default size where they give none) and
+// whose frames are not handed out.
 //
 // THE EDIT LIST. The first edit with a media time places the media: its
 // media time is subtracted from every time, and the durations of any empty
@@ -274,7 +275,8 @@ typedef struct {
     uint8_t *init_box;          // the accepted moov's bytes; configurations point here
     uint64_t init_capacity;
     os64_media_fragment_init_t init;
-    uint32_t ignored[OS64_MEDIA_FRAGMENT_MAX_IGNORED];
+    uint32_t ignored[OS64_MEDIA_FRAGMENT_MAX_IGNORED];       // tracks read past: ids,
+    uint32_t ignored_size[OS64_MEDIA_FRAGMENT_MAX_IGNORED];  // and trex's default size
     uint32_t ignored_count;
     bool have_init;
     // The current moof's samples, ordered by stream position.
