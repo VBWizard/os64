@@ -184,6 +184,10 @@ typedef struct {
     // DOM Range's surface (os64_dom_options_t.ranges), which takes `modern`
     // too.
     bool ranges;
+    // Media Source Extensions (os64_dom_options_t.media_source), with
+    // `modern`, and the fed source's host installed with them.
+    bool media_source;
+    os64_dom_fed_provider_t fed;
     // Where the page's localStorage and sessionStorage are kept (storage.h),
     // borrowed for the host's life; NULL keeps them for the page's life.
     yonder_storage_t *storage;

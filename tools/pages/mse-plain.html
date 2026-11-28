@@ -1,0 +1,33 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>The same clip, plain</title>
+<!--
+  The comparison for the Media Source Extensions pages: the clip they feed
+  (tools/pages/sync-720p60.mp4, the fed fixture's source) played as a plain
+  file, with the same log and verdict line. Run it with yonder's `mse = off`
+  (or --mse=off) beside mse-basic.html with it on: the flash and the beep
+  should be in step on both, and the counts alike.
+
+  PASS once `ended` fires with no error.
+-->
+<style>
+  body { font: 16px sans-serif; margin: 16px; }
+  video { background: #888; display: block; }
+  #log { font: 13px monospace; background: #f4f4f4; padding: 8px; white-space: pre-wrap; }
+</style>
+<h1>The same clip, plain</h1>
+<video id="v" src="sync-720p60.mp4" controls autoplay muted width="640" height="360"></video>
+<pre id="log"></pre>
+<script src="mse-common.js"></script>
+<script>
+  const v = document.getElementById('v');
+  MSE.watch(v, 60);
+  MSE.quality(v);
+  MSE.note(typeof MediaSource === 'undefined' ? 'no MediaSource on this window (mse off)' : 'MediaSource is on');
+  v.addEventListener('ended', () => {
+    const q = v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality() : null;
+    MSE.verdict(!v.error, 'ended at ' + v.currentTime.toFixed(2) +
+                (q ? ', pictures ' + q.totalVideoFrames + ', dropped ' + q.droppedVideoFrames : ''));
+  });
+  v.addEventListener('error', () => MSE.verdict(false, 'the element failed, code ' + v.error.code));
+</script>

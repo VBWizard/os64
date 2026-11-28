@@ -129,6 +129,11 @@ bool yonder_settings_saved_ranges(void);
 // `planes = off` says otherwise (as `--plane=off` does); anything else, or
 // no key, leaves them on. Read at start.
 bool yonder_settings_saved_planes(void);
+// A developer's key with no row in the dialog: Media Source Extensions
+// (os64_dom_options_t.media_source, and yonder's fed source behind it) only
+// with `mse = on` (as `--mse=on` asks); anything else, or no key, leaves
+// them off, and a page sees no MediaSource. Read at start.
+bool yonder_settings_saved_mse(void);
 // yonder.conf's `ledger` developer key: where each page's script time goes,
 // written to its record beside the paint counts (`on`), and with a sampling
 // profile of the script itself (`profile`); anything else, or no key, is

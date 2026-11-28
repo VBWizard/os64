@@ -1,0 +1,48 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>A removal behind the position</title>
+<!--
+  Media Source Extensions (MSE_DOM.md): the whole clip appended, play, and
+  at five seconds a remove(0, 4) from both SourceBuffers, as a player frees
+  what is behind the viewer. Needs yonder's `mse = on`.
+
+  What to look for: the picture and sound play through 5 s with no hitch,
+  buffered starts at 4 s after the removal, and the clip plays to its end.
+  PASS once `ended` fires with buffered starting at or after 4 s.
+-->
+<style>
+  body { font: 16px sans-serif; margin: 16px; }
+  video { background: #888; display: block; }
+  #log { font: 13px monospace; background: #f4f4f4; padding: 8px; white-space: pre-wrap; }
+</style>
+<h1>A removal behind the position</h1>
+<video id="v" controls autoplay muted width="640" height="360"></video>
+<pre id="log"></pre>
+<script src="mse-common.js"></script>
+<script>
+  const v = document.getElementById('v');
+  MSE.watch(v, 40);
+  (async () => {
+    const [video, sound] = await Promise.all([MSE.clip('sync-fed-720p'), MSE.clip('sync-fed-a48')]);
+    const {ms, buffers: [vb, ab]} = await MSE.open(v, [MSE.VIDEO_720, MSE.AUDIO]);
+    await MSE.append(vb, MSE.init(video));
+    await MSE.append(ab, MSE.init(sound));
+    for (let i = 0; i < video.index.fragments.length; i++) {
+      await MSE.append(vb, MSE.fragment(video, i));
+      await MSE.append(ab, MSE.fragment(sound, i));
+    }
+    MSE.note('all appended: buffered ' + MSE.ranges(v.buffered));
+    await new Promise(r => {
+      const tick = () => v.currentTime >= 5 ? (v.removeEventListener('timeupdate', tick), r()) : 0;
+      v.addEventListener('timeupdate', tick);
+    });
+    await MSE.remove(vb, 0, 4);
+    await MSE.remove(ab, 0, 4);
+    MSE.note('removed 0-4 at t ' + v.currentTime.toFixed(2) + ': buffered ' + MSE.ranges(v.buffered));
+    ms.endOfStream();
+    v.addEventListener('ended', () => MSE.verdict(v.buffered.length > 0 && v.buffered.start(0) >= 3.99 && !v.error,
+                                                  'ended at ' + v.currentTime.toFixed(2) + ', buffered ' +
+                                                  MSE.ranges(v.buffered)));
+    v.addEventListener('error', () => MSE.verdict(false, 'the element failed, code ' + v.error.code));
+  })().catch(e => MSE.verdict(false, e.message));
+</script>

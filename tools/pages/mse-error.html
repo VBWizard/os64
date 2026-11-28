@@ -1,0 +1,50 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>A broken append</title>
+<!--
+  Media Source Extensions (MSE_DOM.md): the clip's first fragment, then the
+  second with its first box's size overwritten with one far past the
+  parser's limit for a box (4 MiB, os64/media_fragment.h), as a stream
+  damaged on the way would arrive. Needs
+  yonder's `mse = on`.
+
+  What to look for: the first two seconds play; the broken append fires
+  `error` and `updateend` at the SourceBuffer, the MediaSource ends
+  (`sourceended`) and the element fails with MEDIA_ERR_DECODE (3), its
+  metadata kept. PASS once the element's error is code 3 after those.
+-->
+<style>
+  body { font: 16px sans-serif; margin: 16px; }
+  video { background: #888; display: block; }
+  #log { font: 13px monospace; background: #f4f4f4; padding: 8px; white-space: pre-wrap; }
+</style>
+<h1>A broken append</h1>
+<video id="v" controls autoplay muted width="640" height="360"></video>
+<pre id="log"></pre>
+<script src="mse-common.js"></script>
+<script>
+  const v = document.getElementById('v');
+  MSE.watch(v, 30);
+  (async () => {
+    const video = await MSE.clip('sync-fed-720p');
+    const {ms, buffers: [vb]} = await MSE.open(v, [MSE.VIDEO_720]);
+    let sbError = false;
+    vb.addEventListener('error', () => { sbError = true; MSE.note('SourceBuffer error'); });
+    await MSE.append(vb, MSE.init(video));
+    await MSE.append(vb, MSE.fragment(video, 0));
+    const broken = new Uint8Array(MSE.fragment(video, 1));       // a copy
+    new DataView(broken.buffer).setUint32(0, 0x7fffff00);          // the first box's size, far past the limit
+    try {
+      await MSE.append(vb, broken);
+      MSE.verdict(false, 'the broken append was taken');
+    } catch (e) {
+      MSE.note('the broken append failed: readyState ' + ms.readyState);
+    }
+    // The element's error is a queued task: half a second is long enough.
+    await new Promise(r => setTimeout(r, 500));
+    const code = v.error ? v.error.code : 0;
+    MSE.verdict(sbError && code === 3 && ms.readyState === 'ended' && v.readyState >= 1,
+                'SourceBuffer error ' + sbError + ', element code ' + code + ', MediaSource ' + ms.readyState +
+                ', readyState ' + v.readyState);
+  })().catch(e => MSE.verdict(false, e.message));
+</script>

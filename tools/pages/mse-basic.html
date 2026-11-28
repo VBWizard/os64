@@ -1,0 +1,49 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>A fed video</title>
+<!--
+  Media Source Extensions (MSE_DOM.md): the fed fixture's 720p picture and
+  its 48 kHz sound in two SourceBuffers, each appended in pieces cut at
+  arbitrary bytes (a third, then two thirds, of every fragment), then
+  endOfStream. Needs yonder's `mse = on` (or --mse=on).
+
+  What to look for: the flash and the beep in step (the clip is the sync
+  dial's, tools/pages/sync-720p60.mp4), the controls' bar filling, and once a
+  second the buffered ranges and getVideoPlaybackQuality's counts in the
+  log. PASS once `ended` fires with all ten seconds buffered and no error.
+  Unmute with the controls to hear it.
+-->
+<style>
+  body { font: 16px sans-serif; margin: 16px; }
+  video { background: #888; display: block; }
+  #log { font: 13px monospace; background: #f4f4f4; padding: 8px; white-space: pre-wrap; }
+</style>
+<h1>A fed video</h1>
+<video id="v" controls autoplay muted width="640" height="360"></video>
+<pre id="log"></pre>
+<script src="mse-common.js"></script>
+<script>
+  const v = document.getElementById('v');
+  MSE.watch(v, 40);
+  MSE.quality(v);
+  (async () => {
+    const [video, sound] = await Promise.all([MSE.clip('sync-fed-720p'), MSE.clip('sync-fed-a48')]);
+    const {ms, buffers: [vb, ab]} = await MSE.open(v, [MSE.VIDEO_720, MSE.AUDIO]);
+    await MSE.appendCut(vb, MSE.init(video), [0.5]);
+    await MSE.appendCut(ab, MSE.init(sound), [0.5]);
+    for (let i = 0; i < video.index.fragments.length; i++) {
+      await MSE.appendCut(vb, MSE.fragment(video, i), [1 / 3, 2 / 3]);
+      await MSE.appendCut(ab, MSE.fragment(sound, i), [1 / 3, 2 / 3]);
+      MSE.note('fragment ' + i + ' appended: buffered ' + MSE.ranges(v.buffered));
+    }
+    ms.endOfStream();
+    MSE.note('endOfStream: duration ' + v.duration + ', buffered ' + MSE.ranges(v.buffered));
+    v.addEventListener('ended', () => {
+      const q = v.getVideoPlaybackQuality();
+      const whole = v.buffered.length === 1 && v.buffered.start(0) < 0.1 && v.buffered.end(0) > 9.9;
+      MSE.verdict(whole && !v.error, 'ended at ' + v.currentTime.toFixed(2) + ', buffered ' + MSE.ranges(v.buffered) +
+                  ', pictures ' + q.totalVideoFrames + ', dropped ' + q.droppedVideoFrames);
+    });
+    v.addEventListener('error', () => MSE.verdict(false, 'the element failed, code ' + v.error.code));
+  })().catch(e => MSE.verdict(false, e.message));
+</script>

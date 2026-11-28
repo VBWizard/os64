@@ -1,0 +1,45 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>End of stream</title>
+<!--
+  Media Source Extensions (MSE_DOM.md): the clip's first three fragments,
+  then endOfStream with six seconds buffered, as a player ends a short
+  stream. Needs yonder's `mse = on`.
+
+  What to look for: `sourceended`, the duration set to the buffered end
+  (about 6 s, a `durationchange`), the clip playing to there and `ended`.
+  PASS once `ended` fires with the duration within a tenth of a second of
+  the buffered end.
+-->
+<style>
+  body { font: 16px sans-serif; margin: 16px; }
+  video { background: #888; display: block; }
+  #log { font: 13px monospace; background: #f4f4f4; padding: 8px; white-space: pre-wrap; }
+</style>
+<h1>End of stream</h1>
+<video id="v" controls autoplay muted width="640" height="360"></video>
+<pre id="log"></pre>
+<script src="mse-common.js"></script>
+<script>
+  const v = document.getElementById('v');
+  MSE.watch(v, 30);
+  (async () => {
+    const [video, sound] = await Promise.all([MSE.clip('sync-fed-720p'), MSE.clip('sync-fed-a48')]);
+    const {ms, buffers: [vb, ab]} = await MSE.open(v, [MSE.VIDEO_720, MSE.AUDIO]);
+    await MSE.append(vb, MSE.init(video));
+    await MSE.append(ab, MSE.init(sound));
+    for (let i = 0; i < 3; i++) {
+      await MSE.append(vb, MSE.fragment(video, i));
+      await MSE.append(ab, MSE.fragment(sound, i));
+    }
+    ms.endOfStream();
+    MSE.note('endOfStream: readyState ' + ms.readyState + ', duration ' + v.duration + ', buffered ' +
+             MSE.ranges(v.buffered));
+    v.addEventListener('ended', () => {
+      const end = v.buffered.length ? v.buffered.end(v.buffered.length - 1) : NaN;
+      MSE.verdict(Math.abs(v.duration - end) < 0.1 && ms.readyState === 'ended' && !v.error,
+                  'ended at ' + v.currentTime.toFixed(2) + ', duration ' + v.duration + ', buffered end ' + end);
+    });
+    v.addEventListener('error', () => MSE.verdict(false, 'the element failed, code ' + v.error.code));
+  })().catch(e => MSE.verdict(false, e.message));
+</script>

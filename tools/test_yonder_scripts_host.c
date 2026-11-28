@@ -53,6 +53,36 @@ yonder_media_t *yonder_media_open(const yonder_media_request_t *r)
     return fake_media_on ? (yonder_media_t *)&fake_media_session : NULL;
 }
 void yonder_media_close(yonder_media_t *m) { (void)m; }
+/* A fed session never opens either (os64/media_fed.h's calls below refuse
+ * whatever they are asked), so a page's MediaSource fails to attach, as it
+ * does against libmedia's stub. `isTypeSupported` still asks the host. */
+os64_media_fed_t *yonder_media_fed(yonder_media_t *m) { (void)m; return NULL; }
+double yonder_media_position(yonder_media_t *m) { (void)m; return NAN; }
+bool os64_media_fed_type_supported(const char *type) { return strstr(type, "mp4") != NULL; }
+os64_media_fed_buffer_t *os64_media_fed_add(os64_media_fed_t *fed, const char *type) { (void)fed; (void)type; return NULL; }
+void os64_media_fed_remove_buffer(os64_media_fed_t *fed, os64_media_fed_buffer_t *buf) { (void)fed; (void)buf; }
+bool os64_media_fed_evict(os64_media_fed_t *fed, os64_media_fed_buffer_t *buf, size_t incoming, double play)
+{ (void)fed; (void)buf; (void)incoming; (void)play; return false; }
+bool os64_media_fed_take(os64_media_fed_t *fed, os64_media_fed_buffer_t *buf, const uint8_t *bytes, size_t length)
+{ (void)fed; (void)buf; (void)bytes; (void)length; return false; }
+static void fed_refused(os64_media_fed_result_t *out) { memset(out, 0, sizeof(*out)); out->status = OS64_MEDIA_FED_ERROR; }
+void os64_media_fed_parse(os64_media_fed_t *fed, os64_media_fed_buffer_t *buf, os64_media_fed_result_t *out)
+{ (void)fed; (void)buf; fed_refused(out); }
+void os64_media_fed_poll(os64_media_fed_t *fed, os64_media_fed_buffer_t *buf, os64_media_fed_result_t *out)
+{ (void)fed; (void)buf; fed_refused(out); }
+void os64_media_fed_reset(os64_media_fed_t *fed, os64_media_fed_buffer_t *buf, os64_media_fed_result_t *out)
+{ (void)fed; (void)buf; fed_refused(out); }
+void os64_media_fed_remove(os64_media_fed_t *fed, os64_media_fed_buffer_t *buf, double start, double end,
+                           os64_media_fed_result_t *out)
+{ (void)fed; (void)buf; (void)start; (void)end; fed_refused(out); }
+void os64_media_fed_set(os64_media_fed_t *fed, os64_media_fed_buffer_t *buf, os64_media_fed_mode_t mode,
+                        double timestamp_offset, os64_media_fed_group_t group, double window_start, double window_end)
+{ (void)fed; (void)buf; (void)mode; (void)timestamp_offset; (void)group; (void)window_start; (void)window_end; }
+uint32_t os64_media_fed_ranges(os64_media_fed_t *fed, os64_media_fed_buffer_t *buf, bool ended,
+                               os64_media_fed_range_t *out, uint32_t cap, double *highest_end)
+{ (void)fed; (void)buf; (void)ended; (void)out; (void)cap; if (highest_end) *highest_end = NAN; return 0; }
+void os64_media_fed_duration(os64_media_fed_t *fed, double seconds) { (void)fed; (void)seconds; }
+void os64_media_fed_end(os64_media_fed_t *fed) { (void)fed; }
 void yonder_media_play(yonder_media_t *m) { (void)m; }
 void yonder_media_pause(yonder_media_t *m) { (void)m; }
 void yonder_media_seek(yonder_media_t *m, double seconds, uint64_t generation) { (void)m; (void)seconds; (void)generation; }
@@ -13889,6 +13919,43 @@ static void fairness_cases(void)
     fake_media_on = false;
 }
 
+/* THE MSE SWITCH (yonder.conf's `mse`, `--mse=`): off, a page sees no
+ * MediaSource at all, as before Media Source Extensions; on, it has them,
+ * isTypeSupported asks libdom's table and the host, and a source that
+ * cannot attach (a fed session that never opens, as here) fails the
+ * element as a source that cannot be fetched. */
+static void mse_switch_cases(void)
+{
+    bool was = s_mse;
+    s_mse = false;
+    probe_page("<!doctype html><p id=out>-</p><script>document.getElementById('out').textContent="
+               "typeof MediaSource+' '+typeof document.createElement('video').getVideoPlaybackQuality;</script>", true);
+    for (int i = 0; i < 4; i++) script_turn();
+    const os64_html_node_t *p = probe_id("out");
+    const char *text = p && p->first_child ? p->first_child->text : "";
+    check(os64_streq(text, "undefined undefined"), "mse switch off: no MediaSource, no playback quality");
+    if (!os64_streq(text, "undefined undefined")) printf("  saw '%s'\n", text);
+    probe_drop();
+    s_mse = true;
+    probe_page("<!doctype html><video id=v></video><p id=out>-</p><script>"
+               "const o=document.getElementById('out'),v=document.getElementById('v'),ms=new MediaSource();"
+               "o.textContent=MediaSource.isTypeSupported('video/mp4; codecs=\"avc1.640020\"')+' '+"
+               "MediaSource.isTypeSupported('video/webm; codecs=\"vp9\"');"
+               "ms.onsourceopen=()=>{o.textContent+=' open'};"
+               "v.onerror=()=>{o.textContent+=' error '+v.error.code};"
+               "v.src=URL.createObjectURL(ms);</script>", true);
+    for (int i = 0; i < 12; i++) {
+        script_turn();
+        media_turn();
+    }
+    p = probe_id("out");
+    text = p && p->first_child ? p->first_child->text : "";
+    check(os64_streq(text, "true false error 4"), "mse switch on: the types answered, an unopened source fails the element");
+    if (!os64_streq(text, "true false error 4")) printf("  saw '%s'\n", text);
+    probe_drop();
+    s_mse = was;
+}
+
 int main(void)
 {
     os64_text_options_t options={.memory={.alloc=probe_alloc,.free=probe_free},
@@ -14050,6 +14117,7 @@ int main(void)
     schedule_cost_cases();
     node_census_cases();
     fairness_cases();
+    mse_switch_cases();
     media_failure_cases();
     layout_profile_cases();
     damage_cases();

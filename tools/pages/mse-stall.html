@@ -1,0 +1,57 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>A stall and its recovery</title>
+<!--
+  Media Source Extensions (MSE_DOM.md): the clip's first two fragments
+  only, then nothing: the element plays to 4 s and stalls (`waiting`), as a
+  player's network falls behind. Two seconds into the stall the page
+  appends the rest, and `playing` follows. What a real player does most.
+  Needs yonder's `mse = on`.
+
+  What to look for: at 4 s the picture holds and the sound stops together;
+  when the bytes come back both resume together, the flash and the beep
+  still in step (unmute with the controls to hear it). PASS once `ended`
+  fires after a `waiting` near 4 s and a `playing` after it.
+-->
+<style>
+  body { font: 16px sans-serif; margin: 16px; }
+  video { background: #888; display: block; }
+  #log { font: 13px monospace; background: #f4f4f4; padding: 8px; white-space: pre-wrap; }
+</style>
+<h1>A stall and its recovery</h1>
+<video id="v" controls autoplay muted width="640" height="360"></video>
+<pre id="log"></pre>
+<script src="mse-common.js"></script>
+<script>
+  const v = document.getElementById('v');
+  let stalledAt = NaN, resumed = false;
+  MSE.watch(v, 40);
+  MSE.quality(v);
+  (async () => {
+    const [video, sound] = await Promise.all([MSE.clip('sync-fed-720p'), MSE.clip('sync-fed-a48')]);
+    const {ms, buffers: [vb, ab]} = await MSE.open(v, [MSE.VIDEO_720, MSE.AUDIO]);
+    const add = async (from, to) => {
+      for (let i = from; i < to; i++) {
+        await MSE.append(vb, MSE.fragment(video, i));
+        await MSE.append(ab, MSE.fragment(sound, i));
+      }
+    };
+    await MSE.append(vb, MSE.init(video));
+    await MSE.append(ab, MSE.init(sound));
+    await add(0, 2);
+    await new Promise(r => v.addEventListener('waiting', () => { stalledAt = v.currentTime; r(); }, {once: true}));
+    MSE.note('stalled at ' + stalledAt.toFixed(2) + ': buffered ' + MSE.ranges(v.buffered));
+    await new Promise(r => setTimeout(r, 2000));
+    v.addEventListener('playing', () => { resumed = true; }, {once: true});
+    await add(2, video.index.fragments.length);
+    ms.endOfStream();
+    MSE.note('the rest appended: buffered ' + MSE.ranges(v.buffered));
+    v.addEventListener('ended', () => {
+      const q = v.getVideoPlaybackQuality();
+      MSE.verdict(stalledAt > 3.5 && stalledAt < 4.3 && resumed && !v.error,
+                  'stalled at ' + stalledAt.toFixed(2) + ', resumed ' + resumed + ', ended at ' +
+                  v.currentTime.toFixed(2) + ', dropped ' + q.droppedVideoFrames + ' of ' + q.totalVideoFrames);
+    });
+    v.addEventListener('error', () => MSE.verdict(false, 'the element failed, code ' + v.error.code));
+  })().catch(e => MSE.verdict(false, e.message));
+</script>

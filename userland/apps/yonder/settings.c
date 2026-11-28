@@ -36,6 +36,7 @@
 #define CONF_SHADOW_DOM "shadow_dom"
 #define CONF_RANGES "ranges"
 #define CONF_PLANES "planes"
+#define CONF_MSE "mse"
 #define CONF_LEDGER "ledger"
 #define CONF_PROFILE "profile"
 #define CONF_DOWNLOADS "downloads"
@@ -195,6 +196,12 @@ bool yonder_settings_saved_planes(void)
 {
     char value[8];
     return os64_conf_get(CONF_NAME, CONF_PLANES, value, sizeof(value)) != 0 || !os64_streq_nocase(value, "off");
+}
+
+bool yonder_settings_saved_mse(void)
+{
+    char value[8];
+    return os64_conf_get(CONF_NAME, CONF_MSE, value, sizeof(value)) == 0 && os64_streq_nocase(value, "on");
 }
 
 bool yonder_settings_saved_scripts(void)

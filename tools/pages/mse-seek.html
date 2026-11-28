@@ -1,0 +1,54 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>A seek into a gap</title>
+<!--
+  Media Source Extensions (MSE_DOM.md): the clip's first fragment and its
+  last two, out of order, leaving 2 to 6 seconds unbuffered; play, then a
+  seek to 3 s, into the gap. Only then are the missing fragments appended,
+  as a player fetches what a seek asks for. Needs yonder's `mse = on`.
+
+  What to look for: the seek holds (`seeking`, no `seeked`, the element
+  `waiting`) until the gap is filled, then `seeked` at 3 s and the clip
+  plays on from there with its sound to the end. PASS once `ended` fires
+  after a `seeked` that landed within a quarter second of 3 s.
+-->
+<style>
+  body { font: 16px sans-serif; margin: 16px; }
+  video { background: #888; display: block; }
+  #log { font: 13px monospace; background: #f4f4f4; padding: 8px; white-space: pre-wrap; }
+</style>
+<h1>A seek into a gap</h1>
+<video id="v" controls autoplay muted width="640" height="360"></video>
+<pre id="log"></pre>
+<script src="mse-common.js"></script>
+<script>
+  const v = document.getElementById('v');
+  let landed = NaN;
+  MSE.watch(v, 40);
+  (async () => {
+    const [video, sound] = await Promise.all([MSE.clip('sync-fed-720p'), MSE.clip('sync-fed-a48')]);
+    const {ms, buffers: [vb, ab]} = await MSE.open(v, [MSE.VIDEO_720, MSE.AUDIO]);
+    const add = async list => {
+      for (const i of list) {
+        await MSE.append(vb, MSE.fragment(video, i));
+        await MSE.append(ab, MSE.fragment(sound, i));
+      }
+    };
+    await MSE.append(vb, MSE.init(video));
+    await MSE.append(ab, MSE.init(sound));
+    await add([0, 4, 3]);
+    MSE.note('with a gap: buffered ' + MSE.ranges(v.buffered));
+    await new Promise(r => v.addEventListener('playing', r, {once: true}));
+    v.currentTime = 3;
+    MSE.note('seek to 3 s into the gap');
+    await new Promise(r => setTimeout(r, 1500));
+    if (!v.seeking) MSE.verdict(false, 'the seek landed with nothing buffered there (t ' + v.currentTime + ')');
+    v.addEventListener('seeked', () => { landed = v.currentTime; }, {once: true});
+    await add([1, 2]);
+    MSE.note('gap filled: buffered ' + MSE.ranges(v.buffered));
+    ms.endOfStream();
+    v.addEventListener('ended', () => MSE.verdict(Math.abs(landed - 3) < 0.25 && !v.error,
+                                                  'seeked at ' + landed + ', ended at ' + v.currentTime.toFixed(2)));
+    v.addEventListener('error', () => MSE.verdict(false, 'the element failed, code ' + v.error.code));
+  })().catch(e => MSE.verdict(false, e.message));
+</script>

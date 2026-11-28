@@ -1,0 +1,48 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>A quality switch</title>
+<!--
+  Media Source Extensions (MSE_DOM.md): the picture's first two fragments
+  from the 480p clip, then the 720p clip's initialization segment and its
+  last three fragments into the same SourceBuffer, as a player switches up
+  at a fragment boundary (the two share keyframe times). The sound is one
+  SourceBuffer of its own throughout. Needs yonder's `mse = on`.
+
+  What to look for: at four seconds the picture sharpens with no stall,
+  `resize` says 854x480 then 1280x720, and the sound runs on unbroken. PASS
+  once `ended` fires having seen both sizes.
+-->
+<style>
+  body { font: 16px sans-serif; margin: 16px; }
+  video { background: #888; display: block; }
+  #log { font: 13px monospace; background: #f4f4f4; padding: 8px; white-space: pre-wrap; }
+</style>
+<h1>A quality switch</h1>
+<video id="v" controls autoplay muted width="640" height="360"></video>
+<pre id="log"></pre>
+<script src="mse-common.js"></script>
+<script>
+  const v = document.getElementById('v');
+  const sizes = new Set();
+  v.addEventListener('resize', () => sizes.add(v.videoWidth + 'x' + v.videoHeight));
+  MSE.watch(v, 40);
+  (async () => {
+    const [low, high, sound] = await Promise.all([MSE.clip('sync-fed-480p'), MSE.clip('sync-fed-720p'),
+                                                  MSE.clip('sync-fed-a48')]);
+    const {ms, buffers: [vb, ab]} = await MSE.open(v, [MSE.VIDEO_480, MSE.AUDIO]);
+    await MSE.append(ab, MSE.init(sound));
+    for (let i = 0; i < sound.index.fragments.length; i++) await MSE.append(ab, MSE.fragment(sound, i));
+    await MSE.append(vb, MSE.init(low));
+    for (let i = 0; i < 2; i++) await MSE.append(vb, MSE.fragment(low, i));
+    MSE.note('480p to 4 s: buffered ' + MSE.ranges(v.buffered));
+    await MSE.append(vb, MSE.init(high));
+    for (let i = 2; i < high.index.fragments.length; i++) await MSE.append(vb, MSE.fragment(high, i));
+    MSE.note('720p from 4 s: buffered ' + MSE.ranges(v.buffered));
+    ms.endOfStream();
+    v.addEventListener('ended', () => {
+      const both = sizes.has('854x480') && sizes.has('1280x720');
+      MSE.verdict(both && !v.error, 'ended at ' + v.currentTime.toFixed(2) + ', sizes seen ' + [...sizes].join(' then '));
+    });
+    v.addEventListener('error', () => MSE.verdict(false, 'the element failed, code ' + v.error.code));
+  })().catch(e => MSE.verdict(false, e.message));
+</script>

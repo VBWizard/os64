@@ -626,6 +626,7 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
     options.modern = s->options.modern;
     options.shadow_trees = s->options.shadow_trees;
     options.ranges = s->options.ranges;
+    options.media_source = s->options.media_source;
     options.alert = s->options.alert;
     options.alert_opaque = s->options.opaque;
     options.url = s->url;
@@ -661,6 +662,8 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
     os64_dom_set_text_style(s->dom, s->options.text_style, s->options.opaque);
     os64_dom_set_images(s->dom,&s->options.images);
     os64_dom_set_media(s->dom, &s->options.media);
+    if (s->options.media_source)
+        os64_dom_set_fed(s->dom, &s->options.fed);
     if (s->options.fullscreen.enter != NULL)
         os64_dom_set_fullscreen(s->dom, &s->options.fullscreen);
     os64_dom_set_text(s->dom,&s->options.canvas_text);

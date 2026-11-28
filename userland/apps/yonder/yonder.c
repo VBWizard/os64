@@ -5085,6 +5085,13 @@ static bool s_covers = true;
 static bool s_planes = true;
 static bool s_planes_off_asked;
 
+// MEDIA SOURCE EXTENSIONS, a page's MediaSource fed to its <video> (the fed
+// source's host, below): off unless `--mse=on` or yonder.conf's `mse = on`
+// asks; `--mse=off` keeps them off whatever the file says, to compare the
+// fed path against a plain file on one page.
+static bool s_mse;
+static int s_mse_asked;             // 1 on, -1 off, 0 as the file says
+
 // `--plane-check[=N]`: at every Nth paint that places a video (each one
 // unless said), the hole's content is composed over the picture with the
 // kernel's own blend (plane_blend, kernel/src/gui/plane_compose.c, built
@@ -16978,7 +16985,7 @@ static void *media_open(void *opaque, const os64_html_node_t *node, const char *
     char element[32], name[128];
     media_element_name(node, element, sizeof(element));
     yonder_media_request_t r = {url,   page,    serial,  cors, g.way.agent, g.way.identity, blob, picture,
-                                element, picture_name(url, name, sizeof(name))};
+                                element, picture_name(url, name, sizeof(name)), false};
     yonder_media_t *session = yonder_media_open(&r);
     os64_dom_blob_release(blob);
     if (session == NULL)
@@ -17194,6 +17201,10 @@ static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state
         .history = {history_update, history_fragment, history_length, doc},
         .css_animations = {css_animations_count, css_animations_at, css_animations_drive, css_animations_version, doc},
         .diag = diag, .encrypted = encrypted, .modern = modern, .shadow_trees = s_shadow_dom, .ranges = s_ranges,
+        .media_source = s_mse,
+        .fed = {(void *)(uintptr_t)serial, fed_open, fed_close, fed_add, fed_remove_buffer, fed_evict, fed_take,
+                fed_parse, fed_poll, fed_reset, fed_remove, fed_set, fed_ranges, fed_duration, fed_end,
+                fed_type_supported},
         .storage = s_storage, .timing = &g.stream.timing, .screen = s_screen, .zoom = script_zoom,
         .request = script_request, .run = script_run, .release = script_release, .more = script_more,
         .referrer = referrer, .last_modified = modified, .focus = script_focus,
@@ -26915,6 +26926,10 @@ int main(int argc, char **argv)
             s_covers = false;
         else if (os64_streq(argv[arg], "--plane=off"))
             s_planes_off_asked = true;
+        else if (os64_streq(argv[arg], "--mse=on"))
+            s_mse_asked = 1;
+        else if (os64_streq(argv[arg], "--mse=off"))
+            s_mse_asked = -1;
         else if (os64_streq(argv[arg], "--plane-check"))
             s_plane_check = 1;
         else if (os64_strlen(argv[arg]) > 14 && os64_memcmp(argv[arg], "--plane-check=", 14) == 0) {
@@ -26952,6 +26967,7 @@ int main(int argc, char **argv)
     s_shadow_dom = yonder_settings_saved_shadow_dom();
     s_ranges = yonder_settings_saved_ranges();
     s_planes = !s_planes_off_asked && yonder_settings_saved_planes();
+    s_mse = s_mse_asked != 0 ? s_mse_asked > 0 : yonder_settings_saved_mse();
     s_ledger = yonder_settings_saved_ledger();
     s_started_cycles = os64_js_ledger_now();
     s_started_us = os64_micros();
