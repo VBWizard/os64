@@ -34,6 +34,9 @@
 //  8  A REMOVAL PAST WHERE A DECODER FALLEN BEHIND IS READING: its cursors
 //     resync on to the first data after the cut, and it plays to the end.
 //  9  A SEEK PAST EVERYTHING after the end was said ends, never waits.
+// 10  A SEEK TO 0 with the sound buffered from 0: the sound plays from 0.
+// 11  SOUND ALONE TAKEN while the picture waits to reopen: GOT_FULL, no spin.
+// 12  AN APPEND AFTER THE END, then a seek back: it plays again.
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -610,6 +613,101 @@ static void seek_past_the_end(void)
     os64_media_fed_close(fed);
 }
 
+// Case 10 (Codex #771 rd1): a seek to 0 with the sound buffered from 0.
+// The sound's run-in would start before anything held; it starts at 0.
+static void seek_to_zero(void)
+{
+    os64_media_fed_t *fed;
+    os64_media_fed_create(&fed);
+    media_fed_hold(fed, NULL);
+    os64_media_fed_buffer_t *v = os64_media_fed_add(fed, "video/mp4; codecs=\"avc1.640020\"");
+    os64_media_fed_buffer_t *a = os64_media_fed_add(fed, "audio/mp4; codecs=\"mp4a.40.2\"");
+    append(fed, v, &s_720, s_720.init[0], s_720.init[1]);
+    append(fed, a, &s_a44, s_a44.init[0], s_a44.init[1]);
+    for (int i = 0; i < 2; i++) {
+        append_frag(fed, v, &s_720, i);
+        append_frag(fed, a, &s_a44, i);
+    }
+    os64_media_t *m = open_fed(fed);
+    if (m == NULL) return;
+    CHECK(os64_media_seek(m, 0) == 0, "seek to 0");
+    static pulled_t got;
+    pull(m, &got, NULL, NULL);
+    CHECK(got.sound_first == 0 && got.sound_frames > 48000, "seek to 0: the sound plays from 0 (first %lld, %lld frames)",
+          (long long)got.sound_first, (long long)got.sound_frames);
+    os64_media_close(m);
+    media_fed_release(fed);
+    os64_media_fed_close(fed);
+}
+
+// Case 11 (Codex #771 rd1): sound alone taken (the picture queue full)
+// while the picture waits to reopen for a new configuration and the sound
+// has run dry: the answer is GOT_FULL naming the picture, which the caller
+// must take before anything can move, not a spin inside os64_media_next.
+static void reopen_not_taken(void)
+{
+    os64_media_fed_t *fed;
+    os64_media_fed_create(&fed);
+    media_fed_hold(fed, NULL);
+    os64_media_fed_buffer_t *v = os64_media_fed_add(fed, "video/mp4; codecs=\"avc1.640020\"");
+    os64_media_fed_buffer_t *a = os64_media_fed_add(fed, "audio/mp4; codecs=\"mp4a.40.2\"");
+    append(fed, v, &s_720, s_720.init[0], s_720.init[1]);
+    append(fed, a, &s_a44, s_a44.init[0], s_a44.init[1]);
+    append_frag(fed, v, &s_720, 0);
+    append_frag(fed, v, &s_720, 1);
+    append(fed, v, &s_480, s_480.init[0], s_480.init[1]);
+    for (int i = 2; i < s_480.count; i++) append_frag(fed, v, &s_480, i);
+    append_frag(fed, a, &s_a44, 0);
+    append_frag(fed, a, &s_a44, 1);
+    os64_media_t *m = open_fed(fed);
+    if (m == NULL) return;
+    int16_t pcm[2 * 4096];
+    bool full = false;
+    for (int i = 0; i < 4000 && !full; i++) {
+        os64_media_got_t got;
+        int r = os64_media_next(m, OS64_MEDIA_WANT_SOUND, pcm, 4096, &got);
+        if (r != 0) break;
+        full = got.kind == OS64_MEDIA_GOT_FULL && got.full == OS64_MEDIA_WANT_PICTURE;
+        if (got.kind == OS64_MEDIA_GOT_END || got.kind == OS64_MEDIA_GOT_WAIT) break;
+    }
+    CHECK(full, "reopen not taken: GOT_FULL names the picture");
+    os64_media_close(m);
+    media_fed_release(fed);
+    os64_media_fed_close(fed);
+}
+
+// Case 12 (Fable's change 8): an append after the end reopens the source;
+// after a seek back, a kind that answered GOT_END plays again. The whole
+// 720p, the end, played to GOT_END; then [0 s, 2 s) removed and appended
+// again (ended cleared), the end again, and a seek to 0: it plays from 0
+// to the end once more.
+static void append_after_end(void)
+{
+    os64_media_fed_t *fed;
+    os64_media_fed_create(&fed);
+    media_fed_hold(fed, NULL);
+    os64_media_fed_buffer_t *v = os64_media_fed_add(fed, "video/mp4; codecs=\"avc1.640020\"");
+    append(fed, v, &s_720, s_720.init[0], s_720.init[1]);
+    for (int i = 0; i < s_720.count; i++) append_frag(fed, v, &s_720, i);
+    os64_media_fed_end(fed);
+    os64_media_t *m = open_fed(fed);
+    if (m == NULL) return;
+    static pulled_t got;
+    pull(m, &got, NULL, NULL);
+    int first = got.pictures;
+    os64_media_fed_result_t res;
+    os64_media_fed_remove(fed, v, 0, 2.0, &res);
+    append_frag(fed, v, &s_720, 0);
+    os64_media_fed_end(fed);
+    CHECK(os64_media_seek(m, 0) == 0, "seek back");
+    pull(m, &got, NULL, NULL);
+    CHECK(first == s_n720 && got.pictures == s_n720 && got.waits == 0 && got.crc[0] == s_crc720[0],
+          "after the end: it played again from 0 (%d then %d pictures, %d waits)", first, got.pictures, got.waits);
+    os64_media_close(m);
+    media_fed_release(fed);
+    os64_media_fed_close(fed);
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 3) { printf("usage: test_media_fed_host <pages> <crcs>\n"); return 2; }
@@ -629,6 +727,9 @@ int main(int argc, char **argv)
     resync_mid_group();
     remove_under_decoder();
     seek_past_the_end();
+    seek_to_zero();
+    reopen_not_taken();
+    append_after_end();
     printf("media fed: %u checks, %u failed\n", s_checks, s_failed);
     return s_failed != 0;
 }
