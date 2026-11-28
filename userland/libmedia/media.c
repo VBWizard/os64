@@ -1161,12 +1161,13 @@ static int fed_pull_locked(os64_media_t *m, int k)
             // A resync goes on to the first data after its place, however
             // far: what it stood on was removed under a decoder that had
             // fallen behind, and nothing will come back there.
-            os64_media_time_range_t r[8];
-            uint32_t n = os64_media_track_ranges(t, r, 8);
+            // The first range after the place (the place itself holds
+            // nothing), however many come before it.
+            os64_media_time_range_t r[1];
             int64_t at = OS64_MEDIA_NO_TIME;
-            for (uint32_t i = 0; i < n && i < 8 && at == OS64_MEDIA_NO_TIME; i++)
-                if (r[i].start > want && (f->forward || r[i].start - want <= 2 * t->interbuffer))
-                    at = r[i].start;
+            if (os64_media_track_ranges_from(t, want, r, 1) > 0 && r[0].start > want &&
+                (f->forward || r[0].start - want <= 2 * t->interbuffer))
+                at = r[0].start;
             if (at == OS64_MEDIA_NO_TIME && media_fed_ended(m->fed)) {
                 f->done = true;         // nothing there or after, and nothing more is coming
                 return 0;
@@ -1392,11 +1393,15 @@ static int __attribute__((noinline)) fed_reopen(os64_media_t *m, int k)
     f->entry = f->next;
     if (f->next.config_size) os64_memcpy(f->config, f->next_config, f->next.config_size);
     f->entry.config = f->config;
+    // The picture decoder's skip policy (os64_media_picture_skip) goes with
+    // it to the new one: a player catching up sets it once, not again.
+    enum AVDiscard skip = k == KIND_PICTURE && m->pcodec != NULL ? m->pcodec->skip_frame : AVDISCARD_DEFAULT;
     os64_lock_acquire(&s_lock);
     avcodec_free_context(k == KIND_SOUND ? &m->codec : &m->pcodec);
     int r = fed_open_decoder_locked(m, k);
     os64_lock_release(&s_lock);
     if (r < 0) return r;
+    if (k == KIND_PICTURE) m->pcodec->skip_frame = skip;
     f->generation = f->frame.generation;
     f->entry_index = f->frame.entry;
     f->reopen = false;
