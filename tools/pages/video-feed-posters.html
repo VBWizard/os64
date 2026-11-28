@@ -1,0 +1,27 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Eight videos with posters, one playing</title>
+<!--
+  A feed's shape: eight videos with posters, all in view.
+  The fourth plays by itself (autoplay, muted, looping); the other seven
+  never play. Only a video that has played asks for a plane of the window,
+  so /sys/gui shows one plane for yonder's window, and yonder's reading
+  (Ctrl+Shift+D) shows one asked and placed. A window holds four, kept
+  until each session closes, so videos nobody plays must not spend them.
+-->
+<style>
+  body { font: 16px sans-serif; margin: 16px; background: #223; color: #ddd; }
+  .grid { display: grid; grid-template-columns: repeat(4, 200px); gap: 12px; }
+  video { width: 200px; height: 113px; background: #000; }
+</style>
+<h1>Eight videos with posters, one playing</h1>
+<div class="grid">
+  <video id=v1 src='bbb-480p-3s.mp4' poster='poster-red.png'></video>
+  <video id=v2 src='bbb-480p-3s.mp4' poster='poster-red.png'></video>
+  <video id=v3 src='bbb-480p-3s.mp4' poster='poster-red.png'></video>
+  <video id=v4 src='bbb-480p-3s.mp4' poster='poster-red.png' autoplay muted loop></video>
+  <video id=v5 src='bbb-480p-3s.mp4' poster='poster-red.png'></video>
+  <video id=v6 src='bbb-480p-3s.mp4' poster='poster-red.png'></video>
+  <video id=v7 src='bbb-480p-3s.mp4' poster='poster-red.png'></video>
+  <video id=v8 src='bbb-480p-3s.mp4' poster='poster-red.png'></video>
+</div>

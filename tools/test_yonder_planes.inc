@@ -727,6 +727,7 @@ static void plane_cases(void)
      * second after the end, at most three times; a refused one is not. */
     plane_page(kPlanePage);
     v->frame = (os64_media_player_frame_t){plane_pic, 320, 180, 1, true};
+    v->played = true;
     planes_prepare();
     planes_release();
     v->plane_asked = true;
@@ -970,22 +971,45 @@ static void plane_cases(void)
           "planes: scrolled since the close, the copy not painted, and let go");
     plane_drop();
 
-    /* No plane yet: asked at the first cover, once; not at all with planes
-     * off. */
+    /* No plane yet: a cover that has never played asks nothing (a paused
+     * first picture gains nothing from a plane, and a window's are few);
+     * once it has played, asked at the first cover, once; not at all with
+     * planes off. */
     plane_page(kPlanePage);
     fake_plane.facts.plane_state = OS64_MEDIA_PLANE_NONE;
     v->frame = (os64_media_player_frame_t){plane_pic, 320, 180, 1, true};
     planes_prepare();
     planes_prepare();
-    check(fake_plane.asks == 1 && v->plane_asked, "planes: asked at the first cover, once");
+    check(fake_plane.asks == 0 && !v->plane_asked, "planes: a cover that has never played asks nothing");
+    v->played = true;
+    planes_prepare();
+    planes_prepare();
+    check(fake_plane.asks == 1 && v->plane_asked, "planes: once played, asked at the first cover, once");
     plane_drop();
     plane_page(kPlanePage);
     fake_plane.facts.plane_state = OS64_MEDIA_PLANE_NONE;
     v->frame = (os64_media_player_frame_t){plane_pic, 320, 180, 1, true};
+    v->played = true;
     s_planes = false;
     planes_prepare();
     s_planes = true;
     check(fake_plane.asks == 0, "planes: off, never asked");
+    plane_drop();
+    /* A new picture of a cover marks only what its copy writes, unless the
+     * box's last paint drew the poster, which is fitted by its own size and
+     * may lie past the picture: then the whole box (an autoplay's first
+     * picture after its poster). The box is wider than the picture. */
+    plane_page("<!doctype html><style>body{margin:0;background:#123}"
+               "#v{position:absolute;left:40px;top:40px;width:400px;height:180px}</style><video id=v></video>");
+    v->frame = (os64_media_player_frame_t){plane_pic, 320, 180, 1, true};
+    {
+        os64_gui_rect_t part = {0, 0, 2000, 2000};
+        os64_gui_rect_t only = video_frame_mark(v, part);
+        v->poster_painted = true;
+        os64_gui_rect_t whole = video_frame_mark(v, part);
+        check(only.w == 320 && only.h == 180, "planes: a cover's new picture marks what its copy writes");
+        check(os64_memcmp(&whole, &part, sizeof(part)) == 0, "planes: after its poster was painted, the whole box");
+    }
     plane_drop();
     plane_fullscreen_container();
 }

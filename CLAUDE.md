@@ -680,7 +680,7 @@ virtio because its drain waits for the tick.
   dial (`[` and `]`).
   **yonder plays a page's `<audio>` and `<video>`** through libmedia's
   player, a sound alone or a sound and its picture, the picture drawn in
-  the box (VIDEO.md § 5, as built in V.5.3 and V.5.4:
+  the box, a poster before it (VIDEO.md § 5, as built in V.5.3 to V.6.2:
   `apps/yonder/yonder.c`'s videos section feeds the frame planner and
   paints the plain path or the general one, counted in yonder's `d`
   reading; `/tests/pages/video*.html`; and a video is shown on a plane of

@@ -112,6 +112,7 @@ typedef struct {
     double arrived_from;    /* buffered's start, seconds */
     double volume;          /* volume, 0 to 1 */
     int error;              /* error's code, or 0 */
+    bool show_poster;       /* HTML's show poster flag: a video shows its poster, not its picture */
 } os64_dom_media_view_t;
 
 /* What a control asks of its element: what a script would by play(),

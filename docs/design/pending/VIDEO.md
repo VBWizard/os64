@@ -853,7 +853,26 @@ interrupts off is heard.
 
 - `videoWidth`, `videoHeight` once metadata is known; the box takes the
   picture's ratio then (one layout), unless the page fixed it.
-- `poster`: fetched as an image, shown until the first frame is.
+- `poster`: fetched as an image, shown until the first frame is. **As
+  built (V.6.2):** HTML's show poster flag is libdom's (`show_poster` in
+  the element's view), set at the element's birth and at each load,
+  cleared by a play, autoplay's start or a seek, and never brought back by
+  a pause. While it is set and the poster has arrived, the box shows the
+  poster, even with a first picture ready; after it the picture, and the
+  poster still until there is one, so an autoplay shows no gap. `ended`
+  holds the last picture. The poster is drawn as a picture is
+  (`glass_picture`, the element's object-fit and object-position, the
+  general path). The box's natural size is the video's once known, else
+  the poster's once it has arrived, else 300x150; a poster's arrival lays
+  the page out once, unless the page fixed the box's size. yonder keeps a
+  poster slot per element (`poster_seen`, read by layout and paint, which
+  never touch the picture table) and asks for a new address's picture in
+  the media turn (`posters_turn`), so a poster set or changed by script is
+  fetched as any picture: it is one of the page's pictures in the record
+  and in its picture memory. A replaced poster's old picture stays in the
+  page's picture table, as an `<img>`'s replaced source does (DEBTS).
+  `/tests/pages/video-poster.html`; the flag's cases are
+  `tools/test_dom_media.inc`'s poster cases.
 - Readiness counts pictures as well as sound: `loadeddata` means a first
   frame exists.
 - `canPlayType`: `video/mp4` and `avc1` codecs answer for what is built.
