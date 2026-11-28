@@ -59,9 +59,13 @@
 //
 // WHAT IS HELD ACROSS A BYTE-SOURCE READ: an open reads its source (a
 // page's comes across the network) under `s_lock`, so `s_lock` is taken by
-// os64_media_open_for and os64_media_close alone, never by a release,
-// os64_media_next, the scaler or anything a player's audio or main thread
-// calls; tools/test_av_audit.py holds that. The cost: two media opening at
+// the opens (os64_media_open_for, and media_open_fed for a fed media) and
+// os64_media_close, and by one call more: a fed media's decoder REOPENED
+// at a change of configuration (fed_reopen, § THE FED MEDIA), which
+// os64_media_next reaches on the decoding thread, since a decoder's open
+// is libav's to serialize. Never by a release, the scaler, a seek or
+// anything a player's audio or main thread calls; tools/test_av_audit.py
+// holds that. The cost: two media opening at
 // once take turns, one waiting out the other's header and
 // find_stream_info, which reads a few packets of a sound and, for an open
 // that wants the picture, decodes its first pictures too (up to some
@@ -106,11 +110,18 @@
 #include "libavutil/mem.h"
 #include "libswscale/swscale.h"
 
+#include "media_fed_internal.h"
 #include "media_pcm.h"
 #include "media_picture.h"
+#include "os64/media_fed_sound.h"
+#include "os64/media_fragment.h"
 
 #define IO_BUFFER 32768
 #define NEED_INPUT 1000                  // a step's answer: its decoder wants a packet
+#define FED_WAIT 1001                    // a fed read's answer: nothing to read until an append
+#define FED_FULL_SOUND 1002              // a fed read's answer: that kind must be taken (to drain it for its
+#define FED_FULL_PICTURE 1003            // reopen) before anything else can move
+_Static_assert(MEDIA_FED_PADDING == AV_INPUT_BUFFER_PADDING_SIZE, "the fed media pads its blocks as FFmpeg reads");
 
 static const AVRational kOut = { 1, OS64_AUDIO_RATE };
 
@@ -125,7 +136,37 @@ typedef struct {
     listed_t *head, *tail;
     uint32_t packets;
     uint64_t bytes;
+    listed_t *spare;                 // nodes popped, kept for the next push (freed at close)
 } packet_list_t;
+
+// THE FED MEDIA's state for one kind (MEDIA_SOURCE.md § 5; § THE FED MEDIA
+// below). Its cursor and frame are read and moved only under the fed lock.
+typedef struct {
+    int track_kind;                  // OS64_MEDIA_FRAGMENT_VIDEO or _AUDIO
+    os64_media_track_cursor_t cursor;
+    bool seeked;                     // the cursor is placed; else it is to be, at seek_ns
+    int64_t seek_ns;
+    int64_t seek_target_ns;          // where a seek's run-in leads (NO_TIME none): placed there when the
+                                     // run-in's earlier place holds nothing
+    bool forward;                    // a resync's placing: the first data at or after seek_ns, however far
+    bool pending;                    // `frame` taken from the cursor, not yet a packet (it holds its slab)
+    os64_media_track_frame_t frame;
+    bool done;                       // its input has ended (the end, or its buffer gone)
+    bool resync;                     // the cursor lost its place: to be placed again, outside the lock
+    int64_t position_ns;             // the end of the last frame it gave; NO_TIME before the first
+    AVBufferRef *base;               // the reference every packet of `base_slab` takes from
+    os64_media_fragment_slab_t *base_slab;
+    uint32_t generation, entry_index;       // the decoder's configuration: its init segment, its sample entry
+    os64_media_fragment_entry_t entry;      // the decoder's configuration, `config` its bytes
+    uint8_t *config;
+    uint32_t config_cap;
+    bool reopen;                     // drain the decoder, then open it from `next`
+    os64_media_fragment_entry_t next;
+    uint8_t *next_config;
+    uint32_t next_cap;
+} fed_kind_t;
+
+#define FED_SPARE 16                 // packets kept for reuse
 
 struct os64_media {
     os64_media_source_t src;
@@ -179,7 +220,22 @@ struct os64_media {
 
     os64_media_counts_t counts;
     char error[160];
+
+    // THE FED MEDIA: NULL for a media over a byte source.
+    os64_media_fed_t *fed;
+    fed_kind_t fk[2];                // by KIND_*
+    os64_media_fed_sound_t place;    // where the sound's frames go (os64/media_fed_sound.h)
+    int64_t join_ns;                 // the sound track's join when the placement started
+    uint64_t silence_counted, cut_counted;  // since last told to the fed media's counts
+    AVPacket *spare[FED_SPARE];      // packets the decoders were sent, kept for reuse
+    uint32_t spares;
+    uint32_t accepting;              // the kinds the os64_media_next in hand takes (OS64_MEDIA_WANT_*)
 };
+
+static int fed_read_packet(os64_media_t *m);
+static int fed_reopen(os64_media_t *m, int kind);
+static int fed_seek(os64_media_t *m, int64_t frame);
+static void fed_close(os64_media_t *m);
 
 static os64_lock_t s_lock = OS64_LOCK_INIT;
 static bool s_ready;
@@ -397,7 +453,9 @@ static void find_zero(os64_media_t *m, int sound, int picture)
 
 static int list_push(packet_list_t *l, AVPacket *owned, bool front)
 {
-    listed_t *e = os64_malloc(sizeof(*e));
+    listed_t *e = l->spare;
+    if (e != NULL) l->spare = e->next;
+    else e = os64_malloc(sizeof(*e));
     if (e == NULL) return OS64_MEDIA_NO_MEMORY;
     e->packet = owned;
     e->next = NULL;
@@ -425,7 +483,8 @@ static AVPacket *list_pop(packet_list_t *l)
     l->packets--;
     l->bytes -= (uint64_t)e->packet->size;
     AVPacket *p = e->packet;
-    os64_free(e);
+    e->next = l->spare;
+    l->spare = e;
     return p;
 }
 
@@ -435,12 +494,24 @@ static void list_clear(packet_list_t *l)
     while ((p = list_pop(l)) != NULL) av_packet_free(&p);
 }
 
+// At close: the list emptied, and its spare nodes freed.
+static void list_free(packet_list_t *l)
+{
+    list_clear(l);
+    while (l->spare != NULL) {
+        listed_t *e = l->spare;
+        l->spare = e->next;
+        os64_free(e);
+    }
+}
+
 // One packet from the demuxer onto the list of its kind: 0 when one was
 // listed, or dropped (a stream nothing decodes, a picture before a
 // resync's keyframe), or the demuxer's end was reached; negative on an
 // error.
 static int read_packet(os64_media_t *m)
 {
+    if (m->fed != NULL) return fed_read_packet(m);
     int r = av_read_frame(m->format, m->packet);
     if (r == AVERROR_EOF) {
         m->reading_done = true;
@@ -488,7 +559,10 @@ static int feed(os64_media_t *m, int kind)
     AVCodecContext *c = kind == KIND_SOUND ? m->codec : m->pcodec;
     AVPacket *p = list_pop(&m->list[kind]);
     if (p == NULL) {
-        if (!m->reading_done) return NEED_INPUT;
+        // A fed kind's input ends at its end, and, for a decoder to be
+        // reopened, at the last packet of its configuration (drained first).
+        bool ended = m->fed != NULL ? m->fk[kind].done || m->fk[kind].reopen : m->reading_done;
+        if (!ended) return NEED_INPUT;
         if (m->flushed[kind]) return 0;     // nothing more to give; the step sees the end
         m->flushed[kind] = true;
         int r = avcodec_send_packet(c, NULL);
@@ -500,7 +574,12 @@ static int feed(os64_media_t *m, int kind)
         if ((r = list_push(&m->list[kind], p, true)) < 0) av_packet_free(&p);
         return r;
     }
-    av_packet_free(&p);
+    if (m->fed != NULL && m->spares < FED_SPARE) {
+        av_packet_unref(p);                 // kept for the next fed packet
+        m->spare[m->spares++] = p;
+    } else {
+        av_packet_free(&p);
+    }
     // Damaged media is skipped, as players do (the decoder says so in the
     // error text); only a refusal of a different kind ends the decode.
     if (r < 0 && r != AVERROR_INVALIDDATA) return OS64_MEDIA_DECODE;
@@ -533,10 +612,15 @@ static int sound_frame_into_out(os64_media_t *m)
     // A stream may change rate partway (two MP3s joined): what the old
     // resampler holds is drawn out, and a new one starts.
     if (f->sample_rate > 0 && (uint32_t)f->sample_rate != m->rate) {
+        // The placement's next place, as a time, before the rate moves: it
+        // counts the drained tail below, which the position does not yet.
+        int64_t placed_ns = m->fed != NULL && m->rate > 0 ? m->place.count * 1000000000 / (int64_t)m->rate : 0;
         int r = resampler_drain(m);
         if (r < 0) return r;
         m->rate = (uint32_t)f->sample_rate;
         if ((r = resampler_start(m)) < 0) return r;
+        if (m->fed != NULL)   // the placement counts at the new rate, from where the sound has got to
+            os64_media_fed_sound_start(&m->place, m->rate, m->join_ns, placed_ns);
     }
     // The roles come from each frame's own layout, which may change with
     // the rate. A frame that does not name its channels (a plain PCM WAV of
@@ -555,7 +639,35 @@ static int sound_frame_into_out(os64_media_t *m)
     if (!grow(&m->stereo, &m->stereo_cap, in.frames)) return OS64_MEDIA_NO_MEMORY;
     if (!media_pcm_to_stereo(&in, m->stereo)) return OS64_MEDIA_UNSUPPORTED;
     uint32_t first = 0;
-    if (m->seek_target >= 0) {
+    if (m->fed != NULL) {
+        // THE FED MEDIA's sound runs on by count (os64/media_fed_sound.h):
+        // what the placement says to fill goes in as silence before it,
+        // what it cuts is dropped, and a restart moves the timeline.
+        int64_t pts = f->best_effort_timestamp;
+        if (pts == AV_NOPTS_VALUE)
+            pts = m->place.count * 1000000000 / (int64_t)m->rate;
+        os64_media_fed_place_t at;
+        os64_media_fed_sound_place(&m->place, pts, in.frames, &at);
+        if (at.restarted) {
+            // A gap past the bound (only after the cursor was placed
+            // again): the timeline moves to the frame, the resampler's held
+            // samples from before dropped with it. The output is empty here
+            // (os64_media_next hands it out before it steps).
+            int r = resampler_start(m);
+            if (r < 0) return r;
+            m->position = os64_media_fed_sound_samples(at.at * 1000000000 / (int64_t)m->rate, OS64_AUDIO_RATE);
+        }
+        static const int16_t zeros[2 * 1024];
+        for (int64_t left = at.silence; left > 0;) {
+            uint32_t n = left > 1024 ? 1024 : (uint32_t)left;
+            int r = resample_into_out(m, zeros, n);
+            if (r < 0) return r;
+            left -= n;
+        }
+        m->silence_counted += (uint64_t)at.silence;
+        m->cut_counted += at.skip;
+        first = at.skip;
+    } else if (m->seek_target >= 0) {
         int64_t at = frame_index(m);
         if (at >= 0 && at < m->seek_target) {
             int64_t drop = m->seek_target - at;
@@ -594,6 +706,8 @@ static int sound_step(os64_media_t *m)
         if (r == AVERROR(EAGAIN) && !input_ended(m, KIND_SOUND)) return NEED_INPUT;
         // The end, or a decoder that never reports its end once its input has.
         if (r != AVERROR_EOF && r != AVERROR(EAGAIN)) return OS64_MEDIA_DECODE;
+        if (m->fed != NULL && m->fk[KIND_SOUND].reopen)
+            return fed_reopen(m, KIND_SOUND);   // drained: its next configuration
         m->decoding_done = true;
         return 1;
     }
@@ -625,7 +739,8 @@ static int refill(os64_media_t *m)
 
 int64_t os64_media_decode(os64_media_t *m, int16_t *out, uint32_t frames)
 {
-    if (m == NULL || m->codec == NULL || m->want != OS64_MEDIA_WANT_SOUND || (out == NULL && frames > 0))
+    if (m == NULL || m->codec == NULL || m->want != OS64_MEDIA_WANT_SOUND || (out == NULL && frames > 0) ||
+        m->fed != NULL)                 // a fed media is pulled by os64_media_next alone (its waits)
         return OS64_MEDIA_BAD_ARGS;
     uint32_t given = 0;
     while (given < frames) {
@@ -698,6 +813,13 @@ static media_picture_t *picture_from_frame(os64_media_t *m)
         return NULL;
     }
     av_frame_move_ref(p->frame, m->pframe);
+    if (m->fed != NULL) {
+        // A fed picture's times are nanoseconds (the packets' clock).
+        int64_t ns = p->frame->best_effort_timestamp;
+        p->pub.at = ns == AV_NOPTS_VALUE ? 0 : os64_media_fed_sound_samples(ns, OS64_AUDIO_RATE);
+        p->pub.duration = p->frame->duration > 0 ? os64_media_fed_sound_samples(p->frame->duration, OS64_AUDIO_RATE) : 0;
+        goto timed;
+    }
     const AVStream *s = m->format->streams[m->pstream];
     int64_t pts = p->frame->best_effort_timestamp;
     if (pts == AV_NOPTS_VALUE) pts = start_of(s);
@@ -706,6 +828,7 @@ static media_picture_t *picture_from_frame(os64_media_t *m)
         p->pub.duration = av_rescale_q(p->frame->duration, s->time_base, kOut);
     else if (m->picture_rate.num > 0 && m->picture_rate.den > 0)
         p->pub.duration = av_rescale(OS64_AUDIO_RATE, m->picture_rate.den, m->picture_rate.num);
+timed:
     p->pub.width = (uint32_t)p->frame->width;
     p->pub.height = (uint32_t)p->frame->height;
     p->pub.keyframe = (p->frame->flags & AV_FRAME_FLAG_KEY) != 0;
@@ -728,6 +851,8 @@ static int picture_step(os64_media_t *m)
     if (r == AVERROR_INVALIDDATA) return 1;
     if (r == AVERROR(EAGAIN) && !input_ended(m, KIND_PICTURE)) return NEED_INPUT;
     if (r == AVERROR_EOF || r == AVERROR(EAGAIN)) {
+        if (m->fed != NULL && m->fk[KIND_PICTURE].reopen)
+            return fed_reopen(m, KIND_PICTURE);  // drained: every picture out, then its next configuration
         // The end: a seek's held picture is the one showing at a target
         // past the last picture.
         m->picture_done = true;
@@ -779,6 +904,7 @@ int os64_media_next(os64_media_t *m, uint32_t accept, int16_t *pcm, uint32_t cap
     bool picture = m->pcodec != NULL && (accept & OS64_MEDIA_WANT_PICTURE);
     if (sound && (pcm == NULL || cap == 0)) return OS64_MEDIA_BAD_ARGS;
     os64_memset(got, 0, sizeof(*got));
+    m->accepting = accept;
     drain_released(m);
     for (;;) {
         if (picture && m->ready[0] != NULL) {
@@ -844,6 +970,15 @@ int os64_media_next(os64_media_t *m, uint32_t accept, int16_t *pcm, uint32_t cap
             return 0;
         }
         int r = read_packet(m);
+        if (r == FED_WAIT) {
+            got->kind = OS64_MEDIA_GOT_WAIT;
+            return 0;
+        }
+        if (r == FED_FULL_SOUND || r == FED_FULL_PICTURE) {
+            got->kind = OS64_MEDIA_GOT_FULL;
+            got->full = r == FED_FULL_SOUND ? OS64_MEDIA_WANT_SOUND : OS64_MEDIA_WANT_PICTURE;
+            return 0;
+        }
         if (r < 0) return r;
     }
 }
@@ -910,6 +1045,531 @@ void os64_media_counts(const os64_media_t *m, os64_media_counts_t *out)
     out->sound_listed_bytes = m->list[KIND_SOUND].bytes;
     out->picture_listed = m->list[KIND_PICTURE].packets;
     out->picture_listed_bytes = m->list[KIND_PICTURE].bytes;
+}
+
+// ---------------------------------------------------------------- THE FED MEDIA
+//
+// A media over a fed media (os64/media_fed.h, MEDIA_SOURCE.md § 5) reads
+// its packets from the track buffers' cursors instead of a demuxer; from
+// the packet lists on it is the file's path. The rules:
+// - WHICH KIND IS READ: each kind's next frame is taken from its cursor
+//   (pending), and the one that decodes first becomes a packet. A kind
+//   with nothing to read and not ended holds the other back once the
+//   other's next frame decodes FED_LEAD_NS past where the dry one is, so
+//   sound never plays on over a frozen picture: its queue runs down and the
+//   player buffers, as other browsers stall both. Nothing to read: FED_WAIT,
+//   which os64_media_next answers as OS64_MEDIA_GOT_WAIT.
+// - A NEW CONFIGURATION (a quality switch's initialization segment, or
+//   another sample entry) is copied out of the track buffer under the fed
+//   lock, in the same section as the frame that crossed into it, and its
+//   hold dropped there: a generation's bytes live in its track buffer,
+//   which a removal may free. A byte-equal one goes on with the open
+//   decoder. Otherwise the decoder is DRAINED (its input ended, every
+//   picture taken, so H.264's reordered pictures are not lost) and reopened
+//   from it (fed_reopen), and the frame waits as pending until then.
+// - THE BYTES: a packet points into its slab. Each kind keeps one base
+//   reference for the slab it is reading (av_buffer_create, holding the
+//   slab hold its first frame took); each packet takes a reference from it
+//   (av_buffer_ref, one small allocation a packet, beside the one
+//   avcodec_send_packet makes). The last reference's free drops the slab's
+//   hold under the fed lock (media_fed_slab_drop), so a slab lives while a
+//   decoder may read it, after its frames are evicted. Packets and list
+//   nodes are reused, so the rest of the path allocates nothing a frame.
+// - A PRELOAD frame (MEDIA_SOURCE.md § 4) goes to the decoder flagged
+//   AV_PKT_FLAG_DISCARD: decoded, its output dropped.
+// - A SEEK places each cursor at the random access point at or before the
+//   target, the sound's FED_RUN_IN of its frames earlier (the decoder's
+//   run-in; at the target itself where that earlier place holds nothing), and starts the sound's placement at the target, which cuts
+//   what comes before it. A cursor that cannot be placed (unbuffered) is
+//   placed at each read until it can, or at the first range starting
+//   within the join after the target. A cursor that loses its place
+//   (RESYNC: its frames removed under it) is placed again where its kind
+//   stood, its decoder flushed, or at the first data after that, however
+//   far, since what was removed under a decoder fallen behind will not come
+//   back.
+// - A kind ENDS when its cursor has nothing to read after endOfStream (or,
+//   not yet placed, nothing at or after where it is to be), or its buffer
+//   is gone; an append or removal reopens the fed media, and a
+//   seek reads an ended kind again.
+
+#define FED_LEAD_NS 500000000           // a dry kind holds the other this far ahead of it
+#define FED_RUN_IN 10                   // the sound's frames a seek starts before its target
+#define FED_CONFIG_MAX 4096             // a configuration's bytes (avcC, AudioSpecificConfig)
+#define FED_NS_PER_OUT(frames) ((frames) * 62500 / 3)   // output frames as nanoseconds (1e9 / 48000)
+
+static const AVRational kNanoseconds = { 1, 1000000000 };
+
+static bool fed_in_use(const os64_media_t *m, int k)
+{
+    return k == KIND_SOUND ? m->codec != NULL : m->pcodec != NULL;
+}
+
+static void fed_slab_free(void *opaque, uint8_t *data)
+{
+    (void)data;
+    media_fed_slab_drop(opaque);
+}
+
+static bool fed_same_entry(const os64_media_fragment_entry_t *a, const os64_media_fragment_entry_t *b)
+{
+    return a->fourcc == b->fourcc && a->config_size == b->config_size && a->width == b->width &&
+           a->height == b->height && a->channels == b->channels && a->sample_rate == b->sample_rate &&
+           (a->config_size == 0 || os64_memcmp(a->config, b->config, a->config_size) == 0);
+}
+
+// Under the fed lock: the configuration of the pending frame copied into
+// `next`; false if its generation is gone or its bytes too many.
+static bool fed_copy_next_locked(fed_kind_t *f, os64_media_track_t *t)
+{
+    os64_media_track_generation_t g;
+    if (!os64_media_track_generation_hold(t, f->frame.generation, &g)) return false;
+    uint32_t e = f->frame.entry < g.entry_count ? f->frame.entry : 0;
+    bool ok = g.entry[e].config_size <= FED_CONFIG_MAX;
+    if (ok) {
+        f->next = g.entry[e];
+        if (g.entry[e].config_size) os64_memcpy(f->next_config, g.entry[e].config, g.entry[e].config_size);
+        f->next.config = f->next_config;
+    }
+    os64_media_track_generation_drop(t, f->frame.generation);
+    return ok;
+}
+
+// Under the fed lock: the next frame of kind `k` taken from its cursor, or
+// why not (dry, ended, a resync owed).
+static int fed_pull_locked(os64_media_t *m, int k)
+{
+    fed_kind_t *f = &m->fk[k];
+    os64_media_track_t *t = media_fed_track(m->fed, f->track_kind, NULL);
+    if (t == NULL) {
+        f->done = true;                 // its buffer is gone, or the fed media closed
+        return 0;
+    }
+    if (!f->seeked) {
+        // A sound's run-in starts before its target; where that holds
+        // nothing (the target at a range's start, 0 among them) the cursor is
+        // placed at the target itself. Both are tried at each read until one
+        // lands, so a seek into what is not yet appended keeps its run-in.
+        int64_t want = f->seek_ns;
+        bool placed = os64_media_track_seek(t, want, &f->cursor) == OS64_MEDIA_TRACK_FRAME;
+        if (!placed && f->seek_target_ns != OS64_MEDIA_NO_TIME) {
+            want = f->seek_target_ns;
+            placed = os64_media_track_seek(t, want, &f->cursor) == OS64_MEDIA_TRACK_FRAME;
+        }
+        if (!placed) {
+            // A range that starts within the join after the time is where
+            // the seek lands (a picture with B-frames starts a frame or two
+            // after 0 when its file has no edit list), as `buffered` joins
+            // a gap that narrow and other browsers seek across it.
+            // A resync goes on to the first data after its place, however
+            // far: what it stood on was removed under a decoder that had
+            // fallen behind, and nothing will come back there.
+            // The first range after the place (the place itself holds
+            // nothing), however many come before it.
+            os64_media_time_range_t r[1];
+            int64_t at = OS64_MEDIA_NO_TIME;
+            if (os64_media_track_ranges_from(t, want, r, 1) > 0 && r[0].start > want &&
+                (f->forward || r[0].start - want <= 2 * t->interbuffer))
+                at = r[0].start;
+            if (at == OS64_MEDIA_NO_TIME && media_fed_ended(m->fed)) {
+                f->done = true;         // nothing there or after, and nothing more is coming
+                return 0;
+            }
+            if (at == OS64_MEDIA_NO_TIME || os64_media_track_seek(t, at, &f->cursor) != OS64_MEDIA_TRACK_FRAME)
+                return 0;               // not buffered there yet
+        }
+        f->seeked = true;
+        f->forward = false;
+        f->seek_target_ns = OS64_MEDIA_NO_TIME;
+    }
+    int r = os64_media_track_next(t, &f->cursor, &f->frame);
+    if (r == OS64_MEDIA_TRACK_FRAME) {
+        f->pending = true;
+        if (f->frame.generation != f->generation || f->frame.entry != f->entry_index) {
+            if (!fed_copy_next_locked(f, t)) return OS64_MEDIA_DECODE;
+            if (fed_same_entry(&f->next, &f->entry)) {
+                f->generation = f->frame.generation;
+                f->entry_index = f->frame.entry;
+            } else {
+                f->reopen = true;
+            }
+        }
+    } else if (r == OS64_MEDIA_TRACK_WAIT) {
+        if (media_fed_ended(m->fed)) f->done = true;
+    } else {
+        f->resync = true;
+        media_fed_count_resync(m->fed);
+    }
+    return 0;
+}
+
+// Outside the fed lock: a kind that lost its place is placed again where
+// it stands, its decoder flushed and its list emptied.
+static void fed_resync(os64_media_t *m, int k)
+{
+    fed_kind_t *f = &m->fk[k];
+    f->resync = false;
+    f->seeked = false;
+    f->forward = true;
+    list_clear(&m->list[k]);
+    m->flushed[k] = false;
+    if (k == KIND_SOUND) {
+        avcodec_flush_buffers(m->codec);
+        m->decoding_done = m->tail_done = false;
+        int64_t at = m->place.count * 1000000000 / (int64_t)m->rate;     // where its next sample goes
+        os64_media_fed_sound_start(&m->place, m->rate, m->join_ns, at);
+        f->seek_ns = at - FED_RUN_IN * (m->join_ns / 2);
+        f->seek_target_ns = at;
+    } else {
+        avcodec_flush_buffers(m->pcodec);
+        m->picture_done = false;
+        f->seek_ns = f->position_ns == OS64_MEDIA_NO_TIME ? 0 : f->position_ns;
+        m->seek_picture = os64_media_fed_sound_samples(f->seek_ns, OS64_AUDIO_RATE);
+    }
+}
+
+// Outside the fed lock: kind k's pending frame onto its list as a packet.
+static int fed_packet(os64_media_t *m, int k)
+{
+    fed_kind_t *f = &m->fk[k];
+    os64_media_track_frame_t fr = f->frame;
+    if (k == KIND_PICTURE && m->resync) {
+        // A resync drops pictures until a keyframe (os64_media_picture_resync),
+        // as a file's reading does: the decoder was flushed, and a packet from
+        // the middle of a group would decode to nothing, or to damage.
+        if (!(fr.flags & OS64_MEDIA_FRAME_RAP)) {
+            media_fed_lock(m->fed);
+            os64_media_track_frame_done(&f->frame);
+            media_fed_unlock(m->fed);
+            f->pending = false;
+            m->counts.picture_packets++;
+            m->counts.pictures_resync++;
+            return 0;
+        }
+        m->resync = false;                                 // the keyframe: decoding starts again from it
+    }
+    uint8_t *data = fr.slab->data + fr.offset;             // frame_done below clears fr.slab
+    AVBufferRef *old = NULL;
+    if (fr.slab != f->base_slab) {
+        // The frame's slab hold becomes the new base reference's.
+        AVBufferRef *base = av_buffer_create(fr.slab->data, (size_t)fr.slab->size + MEDIA_FED_PADDING, fed_slab_free,
+                                             fr.slab, AV_BUFFER_FLAG_READONLY);
+        if (base == NULL) return OS64_MEDIA_NO_MEMORY;     // still pending: tried again
+        old = f->base;
+        f->base = base;
+        f->base_slab = fr.slab;
+    } else {
+        media_fed_lock(m->fed);
+        os64_media_track_frame_done(&fr);                  // the base holds the slab
+        media_fed_unlock(m->fed);
+    }
+    f->pending = false;
+    av_buffer_unref(&old);                                 // may drop a slab's hold: takes the fed lock
+    AVPacket *p = m->spares > 0 ? m->spare[--m->spares] : av_packet_alloc();
+    if (p == NULL) return OS64_MEDIA_NO_MEMORY;
+    p->buf = av_buffer_ref(f->base);
+    if (p->buf == NULL) {
+        av_packet_free(&p);
+        return OS64_MEDIA_NO_MEMORY;
+    }
+    p->data = data;
+    p->size = (int)fr.size;
+    p->pts = fr.pts;
+    p->dts = fr.dts;
+    p->duration = fr.duration;
+    p->time_base = kNanoseconds;
+    p->flags = (fr.flags & OS64_MEDIA_FRAME_RAP ? AV_PKT_FLAG_KEY : 0) |
+               (fr.flags & OS64_MEDIA_FRAME_PRELOAD ? AV_PKT_FLAG_DISCARD : 0);
+    if (!(fr.flags & OS64_MEDIA_FRAME_PRELOAD) &&
+        (f->position_ns == OS64_MEDIA_NO_TIME || fr.pts + fr.duration > f->position_ns))
+        f->position_ns = fr.pts + fr.duration;
+    if (k == KIND_SOUND) m->counts.sound_packets++;
+    else m->counts.picture_packets++;
+    int r = list_push(&m->list[k], p, false);
+    if (r < 0) av_packet_free(&p);
+    return r;
+}
+
+static int fed_read_packet(os64_media_t *m)
+{
+    int r = 0;
+    media_fed_lock(m->fed);
+    // The sound's join, the widest gap its placement fills with silence,
+    // from the track as its frames arrive (a media opened on its
+    // initialization segments alone has seen no frame yet).
+    os64_media_track_t *st = m->codec != NULL ? media_fed_track(m->fed, OS64_MEDIA_FRAGMENT_AUDIO, NULL) : NULL;
+    if (st != NULL && 2 * st->interbuffer != m->join_ns) {
+        m->join_ns = 2 * st->interbuffer;
+        m->place.bound = os64_media_fed_sound_samples(m->join_ns, m->rate);   // the placement's own field
+    }
+    for (int k = 0; k < 2 && r == 0; k++) {
+        fed_kind_t *f = &m->fk[k];
+        if (fed_in_use(m, k) && !f->done && !f->pending && !f->resync && !f->reopen)
+            r = fed_pull_locked(m, k);
+    }
+    media_fed_count_sound(m->fed, m->silence_counted, m->cut_counted);
+    m->silence_counted = m->cut_counted = 0;
+    // The kind whose next frame decodes first; held back by a dry one.
+    int chosen = -1;
+    for (int k = 0; k < 2; k++)
+        if (m->fk[k].pending && !m->fk[k].reopen &&
+            (chosen < 0 || m->fk[k].frame.dts < m->fk[chosen].frame.dts))
+            chosen = k;
+    for (int k = 0; k < 2 && chosen >= 0; k++) {
+        const fed_kind_t *f = &m->fk[k];
+        if (k == chosen || !fed_in_use(m, k) || f->done || f->pending || f->reopen) continue;
+        if (f->position_ns == OS64_MEDIA_NO_TIME || m->fk[chosen].frame.dts > f->position_ns + FED_LEAD_NS)
+            chosen = -1;
+    }
+    bool live = false, resync = false;
+    int reopen_taken = 0, reopen_other = -1;      // a kind to drain: one this pull takes, or another
+    for (int k = 0; k < 2; k++) {
+        live |= fed_in_use(m, k) && !m->fk[k].done;
+        resync |= m->fk[k].resync;
+        if (m->fk[k].reopen) {
+            if (m->accepting & (k == KIND_SOUND ? OS64_MEDIA_WANT_SOUND : OS64_MEDIA_WANT_PICTURE)) reopen_taken++;
+            else reopen_other = k;
+        }
+    }
+    media_fed_unlock(m->fed);
+    if (r < 0) return r;
+    if (resync) {
+        for (int k = 0; k < 2; k++)
+            if (m->fk[k].resync) fed_resync(m, k);
+        return 0;
+    }
+    // Nothing to read: a decoder this pull takes is drained for its reopen
+    // (progress), or the kind to drain is one it does not take, which must
+    // be taken first (GOT_FULL), or every kind has ended (the decoders are
+    // told now), or it is a wait.
+    if (chosen < 0) {
+        if (reopen_taken) return 0;
+        if (reopen_other >= 0) return reopen_other == KIND_SOUND ? FED_FULL_SOUND : FED_FULL_PICTURE;
+        return live ? FED_WAIT : 0;
+    }
+    return fed_packet(m, chosen);
+}
+
+// Under s_lock (§ THREADS): kind k's decoder opened from its entry.
+static int fed_open_decoder_locked(os64_media_t *m, int k)
+{
+    const os64_media_fragment_entry_t *e = &m->fk[k].entry;
+    bool sound = k == KIND_SOUND;
+    const AVCodec *d = avcodec_find_decoder(sound ? AV_CODEC_ID_AAC : AV_CODEC_ID_H264);
+    if (d == NULL) return OS64_MEDIA_UNSUPPORTED;
+    AVCodecContext *c = avcodec_alloc_context3(d);
+    if (c == NULL) return OS64_MEDIA_NO_MEMORY;
+    c->opaque = m;
+    c->extradata = av_mallocz((size_t)e->config_size + AV_INPUT_BUFFER_PADDING_SIZE);
+    if (c->extradata == NULL) {
+        avcodec_free_context(&c);
+        return OS64_MEDIA_NO_MEMORY;
+    }
+    if (e->config_size) os64_memcpy(c->extradata, e->config, e->config_size);
+    c->extradata_size = (int)e->config_size;
+    if (sound) {
+        c->sample_rate = (int)e->sample_rate;
+        av_channel_layout_default(&c->ch_layout, e->channels ? e->channels : 2);
+    } else {
+        c->width = e->width;
+        c->height = e->height;
+    }
+    c->pkt_timebase = kNanoseconds;
+    c->thread_count = 1;
+    int r = avcodec_open2(c, d, NULL);
+    if (r < 0) {
+        avcodec_free_context(&c);
+        return r == AVERROR(ENOMEM) ? OS64_MEDIA_NO_MEMORY : OS64_MEDIA_UNSUPPORTED;
+    }
+    if (sound) m->codec = c;
+    else m->pcodec = c;
+    return 0;
+}
+
+// Kind k's decoder, drained, reopened from its next configuration; its
+// pending frame is read next. Under s_lock, which may wait out another
+// media's open in flight, as a close does (§ THREADS); not inlined, so
+// tools/test_av_audit.py sees who takes the lock.
+static int __attribute__((noinline)) fed_reopen(os64_media_t *m, int k)
+{
+    fed_kind_t *f = &m->fk[k];
+    f->entry = f->next;
+    if (f->next.config_size) os64_memcpy(f->config, f->next_config, f->next.config_size);
+    f->entry.config = f->config;
+    // The picture decoder's skip policy (os64_media_picture_skip) goes with
+    // it to the new one: a player catching up sets it once, not again.
+    enum AVDiscard skip = k == KIND_PICTURE && m->pcodec != NULL ? m->pcodec->skip_frame : AVDISCARD_DEFAULT;
+    os64_lock_acquire(&s_lock);
+    avcodec_free_context(k == KIND_SOUND ? &m->codec : &m->pcodec);
+    int r = fed_open_decoder_locked(m, k);
+    os64_lock_release(&s_lock);
+    if (r < 0) return r;
+    if (k == KIND_PICTURE) m->pcodec->skip_frame = skip;
+    f->generation = f->frame.generation;
+    f->entry_index = f->frame.entry;
+    f->reopen = false;
+    m->flushed[k] = false;
+    media_fed_lock(m->fed);
+    media_fed_count_reopen(m->fed);
+    media_fed_unlock(m->fed);
+    return 1;
+}
+
+// Outside the fed lock: each kind's pending frame let go.
+static void fed_drop_pending(os64_media_t *m)
+{
+    media_fed_lock(m->fed);
+    for (int k = 0; k < 2; k++)
+        if (m->fk[k].pending) {
+            os64_media_track_frame_done(&m->fk[k].frame);
+            m->fk[k].pending = false;
+        }
+    media_fed_unlock(m->fed);
+}
+
+static int fed_seek(os64_media_t *m, int64_t frame)
+{
+    drain_released(m);
+    int64_t target = FED_NS_PER_OUT(frame);
+    fed_drop_pending(m);
+    media_fed_lock(m->fed);
+    os64_media_track_t *t = media_fed_track(m->fed, OS64_MEDIA_FRAGMENT_AUDIO, NULL);
+    if (t != NULL) m->join_ns = 2 * t->interbuffer;
+    media_fed_unlock(m->fed);
+    list_clear(&m->list[KIND_SOUND]);
+    list_clear(&m->list[KIND_PICTURE]);
+    m->flushed[KIND_SOUND] = m->flushed[KIND_PICTURE] = false;
+    for (int k = 0; k < 2; k++) {
+        fed_kind_t *f = &m->fk[k];
+        f->done = f->resync = f->seeked = f->forward = false;
+        f->seek_ns = target;
+        f->seek_target_ns = OS64_MEDIA_NO_TIME;
+        f->position_ns = target;
+    }
+    if (m->codec != NULL) {
+        avcodec_flush_buffers(m->codec);
+        m->decoding_done = m->tail_done = false;
+        m->fk[KIND_SOUND].seek_ns = target - FED_RUN_IN * (m->join_ns / 2);
+        m->fk[KIND_SOUND].seek_target_ns = target;
+        os64_media_fed_sound_start(&m->place, m->rate, m->join_ns, target);
+        int r = resampler_start(m);
+        if (r < 0) return r;
+    }
+    m->out_at = m->out_len = 0;
+    if (m->pcodec != NULL) {
+        avcodec_flush_buffers(m->pcodec);
+        drop_unready(m);
+        m->picture_done = m->resync = false;
+        m->seek_picture = frame;
+    }
+    m->position = frame;
+    return 0;
+}
+
+static void fed_close(os64_media_t *m)
+{
+    if (m->fed == NULL) return;
+    fed_drop_pending(m);
+    for (int k = 0; k < 2; k++) {
+        av_buffer_unref(&m->fk[k].base);
+        os64_free(m->fk[k].config);
+        os64_free(m->fk[k].next_config);
+    }
+    for (uint32_t i = 0; i < m->spares; i++) av_packet_free(&m->spare[i]);
+    m->spares = 0;
+}
+
+int media_open_fed(os64_media_fed_t *fed, uint32_t want, os64_media_t **out, os64_media_info_t *info)
+{
+    if (fed == NULL || out == NULL || want == 0 || (want & ~(OS64_MEDIA_WANT_SOUND | OS64_MEDIA_WANT_PICTURE)) != 0)
+        return OS64_MEDIA_BAD_ARGS;
+    *out = NULL;
+    os64_media_info_t local;
+    if (info == NULL) info = &local;
+    os64_memset(info, 0, sizeof(*info));
+    os64_media_t *m = os64_calloc(1, sizeof(*m));
+    if (m == NULL) return OS64_MEDIA_NO_MEMORY;
+    m->fed = fed;
+    m->want = want;
+    m->stream = m->pstream = m->found[0] = m->found[1] = -1;
+    m->seek_target = m->seek_picture = -1;
+    m->frame = av_frame_alloc();
+    m->pframe = av_frame_alloc();
+    bool have[2] = { false, false };
+    int64_t picture_frame_ns = 0;       // a picture's duration, when frames are already held
+    int result = OS64_MEDIA_NO_MEMORY;
+    for (int k = 0; k < 2; k++) {
+        m->fk[k].track_kind = k == KIND_SOUND ? OS64_MEDIA_FRAGMENT_AUDIO : OS64_MEDIA_FRAGMENT_VIDEO;
+        m->fk[k].position_ns = OS64_MEDIA_NO_TIME;
+        m->fk[k].seek_target_ns = OS64_MEDIA_NO_TIME;
+        m->fk[k].config = os64_malloc(FED_CONFIG_MAX);
+        m->fk[k].next_config = os64_malloc(FED_CONFIG_MAX);
+        if (m->fk[k].config == NULL || m->fk[k].next_config == NULL) goto fail;
+    }
+    if (m->frame == NULL || m->pframe == NULL) goto fail;
+    // Each kind's configuration: its first frame's, or its latest.
+    result = OS64_MEDIA_DECODE;
+    media_fed_lock(fed);
+    for (int k = 0; k < 2; k++) {
+        fed_kind_t *f = &m->fk[k];
+        if (!(want & (k == KIND_SOUND ? OS64_MEDIA_WANT_SOUND : OS64_MEDIA_WANT_PICTURE))) continue;
+        os64_media_track_t *t = media_fed_track(fed, f->track_kind, NULL);
+        if (t == NULL || t->gen_count == 0) continue;
+        bool first = t->range_count > 0 && t->range[0].count > 0;
+        f->frame.generation = first ? t->range[0].frame[0].generation : t->gen[t->gen_count - 1].generation;
+        f->frame.entry = first ? t->range[0].frame[0].entry : 0;
+        if (!fed_copy_next_locked(f, t)) continue;
+        f->entry = f->next;
+        os64_memcpy(f->config, f->next_config, f->next.config_size);
+        f->entry.config = f->config;
+        f->generation = f->frame.generation;
+        f->entry_index = f->frame.entry;
+        if (k == KIND_SOUND) m->join_ns = 2 * t->interbuffer;
+        if (k == KIND_PICTURE && t->interbuffer > 0) picture_frame_ns = t->interbuffer;
+        have[k] = true;
+    }
+    double duration = media_fed_duration(fed);
+    media_fed_unlock(fed);
+    os64_lock_acquire(&s_lock);
+    ready_locked();
+    for (int k = 0; k < 2; k++)
+        if (have[k] && fed_open_decoder_locked(m, k) < 0) have[k] = false;
+    os64_lock_release(&s_lock);
+    if (!have[KIND_SOUND] && !have[KIND_PICTURE]) {
+        result = want == OS64_MEDIA_WANT_SOUND ? OS64_MEDIA_NO_SOUND : OS64_MEDIA_NO_PICTURE;
+        goto fail;
+    }
+    os64_strcopy(info->format, sizeof(info->format), "fed mp4");
+    info->seekable = true;
+    info->frames = duration == duration && duration < 1e15 ? (int64_t)(duration * OS64_AUDIO_RATE) : -1;
+    if (have[KIND_SOUND]) {
+        const os64_media_fragment_entry_t *e = &m->fk[KIND_SOUND].entry;
+        info->sound = OS64_MEDIA_PLAYABLE;
+        os64_strcopy(info->codec, sizeof(info->codec), "aac");
+        m->rate = info->rate = e->sample_rate;
+        info->channels = e->channels;
+        if ((result = resampler_start(m)) < 0) goto fail;
+        os64_media_fed_sound_start(&m->place, m->rate, m->join_ns, 0);
+    }
+    if (have[KIND_PICTURE]) {
+        const os64_media_fragment_entry_t *e = &m->fk[KIND_PICTURE].entry;
+        info->picture = OS64_MEDIA_PLAYABLE;
+        os64_strcopy(info->picture_codec, sizeof(info->picture_codec), "h264");
+        info->width = info->coded_width = e->width;
+        info->height = info->coded_height = e->height;
+        // Its rate, as a file states one, from the picture track's frame
+        // duration (the pace's period); none yet, the player takes the
+        // first picture's.
+        if (picture_frame_ns > 0 && picture_frame_ns < UINT32_MAX) {
+            info->rate_num = 1000000000u;
+            info->rate_den = (uint32_t)picture_frame_ns;
+        }
+    }
+    m->position = 0;
+    *out = m;
+    return 0;
+fail:
+    os64_media_close(m);
+    return result;
 }
 
 // ---------------------------------------------------------------- open, seek, close
@@ -1236,6 +1896,7 @@ static uint64_t gcd(uint64_t a, uint64_t b)
 int os64_media_seek(os64_media_t *m, int64_t frame)
 {
     if (m == NULL || frame < 0) return OS64_MEDIA_BAD_ARGS;
+    if (m->fed != NULL) return fed_seek(m, frame);
     if (m->src.seek == NULL) return OS64_MEDIA_CANNOT_SEEK;
     drain_released(m);
 
@@ -1316,8 +1977,9 @@ void os64_media_close(os64_media_t *m)
     // keeps its buffer alive after the decoder is gone).
     drain_released(m);
     drop_unready(m);
-    list_clear(&m->list[KIND_SOUND]);
-    list_clear(&m->list[KIND_PICTURE]);
+    fed_close(m);
+    list_free(&m->list[KIND_SOUND]);
+    list_free(&m->list[KIND_PICTURE]);
     avcodec_free_context(&m->codec);
     avcodec_free_context(&m->pcodec);
     avformat_close_input(&m->format);     // NULL already when open_input failed

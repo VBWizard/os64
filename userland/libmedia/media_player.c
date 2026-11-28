@@ -38,6 +38,9 @@
 #include "os64/os64.h"
 #include "os64/thread.h"
 
+#include "media_fed_internal.h"
+#include "os64/media_fed_sound.h"
+
 #define RATE OS64_AUDIO_RATE
 #define DECODED_DEPTH 8
 #define READY_DEPTH 3
@@ -49,6 +52,13 @@
 #define PCM_FRAMES (2u * RATE)            // two seconds of sound queued
 #define CHUNK_FRAMES 4096u                // what the decoding thread asks for at once
 #define BUFFER_SOUND (RATE / 2u)          // buffering ends with this much sound queued
+// A fed media's readiness (os64/media_fed.h § READINESS), from what both
+// kinds hold at the position: `future` with this much buffered ahead (or to
+// the end after endOfStream), `enough` with this much.
+#define FED_FUTURE (RATE / 4)             // 250 ms
+#define FED_ENOUGH (3 * RATE)             // 3 s
+#define FED_SLACK (RATE / 20)             // a position this close before a range is in it (a first picture late)
+#define FED_RANGES 16
 #define POSITION_LOOK_US 250000           // a sound alone rings `look` this often while it plays
 #define LENGTH_SLACK (RATE / 10)          // an end this near the stated length leaves it standing
 #define SOUND_FLOOR (RATE / 4u)           // under it is far behind (the pace's twin door)
@@ -90,6 +100,13 @@ struct os64_media_player {
     os64_media_info_t info;
     bool probed, has_sound, has_picture;
     int64_t length;
+    // A fed media's buffered intersection from a second before the
+    // position on, in output frames, copied from it by the decoding thread
+    // at each wake (an append, removal or end rings it). Readiness and
+    // buffering at a fed media's data's end read it.
+    int64_t fed_start[FED_RANGES], fed_end[FED_RANGES];
+    uint32_t fed_ranges;
+    bool fed_more;                        // more ranges follow the ones copied
     int64_t length_us, looked_us;         // when `length` was last set, and `look` last rung (facts)
 
     os64_media_pictures_entry_t decoded_slot[DECODED_DEPTH], ready_slot[READY_DEPTH];
@@ -365,10 +382,50 @@ static bool sound_all_queued(const os64_media_player_t *p)
     return os64_media_queue_ended(&p->pcm) || p->run_sound_done;
 }
 
+// A fed media's data at the position: how far it reaches past it (output
+// frames), or -1 with none there; *last says it is the last range, which
+// reaches the end once the fed media has ended. Under the lock.
+static int64_t fed_ahead(const os64_media_player_t *p, int64_t position, bool *last)
+{
+    *last = false;
+    for (uint32_t i = 0; i < p->fed_ranges; i++)
+        if (position >= p->fed_start[i] - FED_SLACK && position < p->fed_end[i]) {
+            *last = i + 1 == p->fed_ranges && !p->fed_more;
+            return p->fed_end[i] - position;
+        }
+    return -1;
+}
+
+// A fed media's readiness, as readiness() answers it: from its ranges.
+static uint32_t fed_readiness(const os64_media_player_t *p, int64_t now)
+{
+    bool last;
+    int64_t position = os64_media_clock_read(&p->clock, now);
+    int64_t ahead = fed_ahead(p, position, &last);
+    bool to_end = last && p->loaded;
+    // Ended, and nothing held reaches past the position (none at all, when
+    // what the kinds hold no longer overlaps): all there will be is there.
+    // A player that buffered there before the end was said plays on into
+    // its end.
+    bool beyond = p->loaded && !p->fed_more;
+    for (uint32_t i = 0; i < p->fed_ranges && beyond; i++)
+        beyond = p->fed_end[i] <= position;
+    if (beyond) {
+        ahead = 0;
+        to_end = true;
+    }
+    bool current = p->probed && p->failure == 0 && ahead >= 0;
+    bool future = current && (ahead >= FED_FUTURE || to_end);
+    bool enough = future && (ahead >= FED_ENOUGH || to_end);
+    return (current ? 1u : 0u) | (future ? 2u : 0u) | (enough ? 4u : 0u);
+}
+
 // Readiness at the position (facts' current, future, enough), as bits 0 to
 // 2. Under the lock.
 static uint32_t readiness(const os64_media_player_t *p)
 {
+    if (p->cfg.fed != NULL)
+        return fed_readiness(p, now_us());
     bool queued = os64_media_queue_count(&p->pcm) > 0 || sound_all_queued(p);
     bool current = p->probed && p->failure == 0 &&
                    (p->has_picture ? p->shown != NULL || os64_media_pictures_count(&p->ready) > 0 : queued);
@@ -403,7 +460,9 @@ static void service(os64_media_player_t *p, int64_t now)
         // sink's delay is known, which the start's hold bound is made from.
         bool sound = !audible(p) ||
                      ((os64_media_queue_count(&p->pcm) >= BUFFER_SOUND || sound_all_queued(p)) && p->voice.delay_known);
-        if (picture && sound)
+        // A fed media's data must also reach past the position (`future`).
+        bool fed = p->cfg.fed == NULL || (fed_readiness(p, now) & 2u) != 0;
+        if (picture && sound && fed)
             start_playing(p, now);
     } else if (p->state == OS64_MEDIA_PLAYER_PLAYING) {
         // A loop's sound that ran dry before its run's pictures ended
@@ -414,6 +473,16 @@ static void service(os64_media_player_t *p, int64_t now)
             os64_media_clock_read(&p->clock, now) >= os64_media_queue_front(&p->pcm)) {
             p->sound_over = false;
             os64_media_clock_source(&p->clock, audible(p) ? OS64_MEDIA_CLOCK_HEARD : OS64_MEDIA_CLOCK_MONOTONIC, now);
+            voice_asks(p);
+        }
+        // A fed media's data run out at the position, not at its end: it
+        // buffers, the clock held there, until an append reaches past it
+        // (other browsers' `waiting` at the end of a buffered range). Its
+        // clock may be monotonic (a refused device), which never starves.
+        if (p->cfg.fed != NULL && !p->loaded && (fed_readiness(p, now) & 1u) == 0) {
+            os64_media_clock_pause(&p->clock, now);
+            p->state = OS64_MEDIA_PLAYER_BUFFERING;
+            p->buffers++;
             voice_asks(p);
         }
         // A sound that stopped, said by the device (starved): at its end the
@@ -1197,6 +1266,8 @@ static void finish(os64_media_player_t *p)
         os64_free(p->frame[i].pixels);
     if (p->media != NULL)
         os64_media_close(p->media);
+    if (p->cfg.fed != NULL)
+        media_fed_release(p->cfg.fed);   // before the bell it rings is closed
     void (*finished)(void *) = p->cfg.finished;
     void *ctx = p->cfg.ctx;
     if (!p->bell_borrowed)
@@ -1208,6 +1279,56 @@ static void finish(os64_media_player_t *p)
         finished(ctx);
 }
 
+// A fed media's facts copied into the player, by the decoding thread, NOT
+// under the player's lock (the fed lock comes first): its end (the player
+// is loaded while it has ended, which lets `enough` hold at the end), the
+// duration the page set (the length; unknown or no end: -1) and what both
+// kinds hold (readiness). Nothing for a byte source.
+static void fed_refresh(os64_media_player_t *p)
+{
+    if (p->cfg.fed == NULL)
+        return;
+    // From a second before the position (read first, under the player's
+    // lock alone), so the ranges copied are the ones readiness reads now,
+    // however many the media holds.
+    os64_lock_acquire(&p->lock);
+    int64_t from = os64_media_clock_read(&p->clock, now_us()) - RATE;
+    os64_lock_release(&p->lock);
+    os64_media_time_range_t r[FED_RANGES];
+    media_fed_lock(p->cfg.fed);
+    bool ended = media_fed_ended(p->cfg.fed);
+    double duration = media_fed_duration(p->cfg.fed);
+    uint32_t n = media_fed_buffered(p->cfg.fed, from < 0 ? 0 : (from * 62500 / 3), r, FED_RANGES);
+    media_fed_unlock(p->cfg.fed);
+    bool more = n > FED_RANGES;
+    if (more)
+        n = FED_RANGES;
+    int64_t length = duration == duration && duration >= 0 && duration < 1e12
+                         ? (int64_t)(duration * OS64_AUDIO_RATE + 0.5)
+                         : -1;
+    os64_lock_acquire(&p->lock);
+    uint32_t was = readiness(p);
+    bool moved = p->loaded != ended || p->length != length || p->fed_ranges != n;
+    for (uint32_t i = 0; i < n; i++) {
+        int64_t s = os64_media_fed_sound_samples(r[i].start, OS64_AUDIO_RATE);
+        int64_t e = os64_media_fed_sound_samples(r[i].end, OS64_AUDIO_RATE);
+        moved |= p->fed_start[i] != s || p->fed_end[i] != e;
+        p->fed_start[i] = s;
+        p->fed_end[i] = e;
+    }
+    p->fed_ranges = n;
+    p->fed_more = more;
+    p->loaded = ended;
+    if (p->length != length) {
+        p->length = length;
+        p->length_us = now_us();
+    }
+    service(p, now_us());
+    if (moved || readiness(p) != was)
+        look(p);
+    unlock(p);
+}
+
 static int64_t decoding_thread(void *arg)
 {
     os64_media_player_t *p = arg;
@@ -1216,10 +1337,31 @@ static int64_t decoding_thread(void *arg)
     // The source made ready here, on this thread, when the caller asked
     // (a fetch whose head must be waited for): the source is this thread's
     // from now on, as the config says.
-    int r = want == 0 ? OS64_MEDIA_BAD_ARGS
+    int r;
+    if (p->cfg.fed != NULL) {
+        // A fed media opens once its tracks are picked: every buffer the
+        // page added holds an initialization segment. Until then, or a close.
+        r = OS64_MEDIA_IO;
+        for (;;) {
+            media_fed_lock(p->cfg.fed);
+            bool picked = media_fed_picked(p->cfg.fed);
+            media_fed_unlock(p->cfg.fed);
+            if (picked) {
+                r = want == 0 ? OS64_MEDIA_BAD_ARGS : media_open_fed(p->cfg.fed, want, &p->media, &p->info);
+                break;
+            }
+            os64_lock_acquire(&p->lock);
+            bool quit = p->quit;
+            os64_lock_release(&p->lock);
+            if (quit) break;
+            (void)os64_bell_wait(&p->decode_bell, 200);
+        }
+    } else {
+        r = want == 0 ? OS64_MEDIA_BAD_ARGS
             : p->cfg.prepare != NULL && !p->cfg.prepare(p->cfg.ctx, &p->cfg.source) ? OS64_MEDIA_IO
             : p->cfg.source.read == NULL ? OS64_MEDIA_BAD_ARGS
                                          : os64_media_open_for(&p->cfg.source, want, &p->media, &p->info);
+    }
     if (r == 0 && (p->cfg.want & OS64_MEDIA_WANT_PICTURE) != 0) {
         // A refused start ran nothing (a thread's handle is reserved before
         // the thread exists), so finish's join may skip it: no picture, no
@@ -1249,6 +1391,7 @@ static int64_t decoding_thread(void *arg)
     // its own, and the media when both have.
     bool resync_waiting = false, sound_done = false, pictures_done = false;
     uint32_t full = 0;                    // GOT_FULL's kind: park until it has room
+    bool fed_wait = false;                // GOT_WAIT: a fed media has nothing to read until rung
     // A loop's timeline (os64_media_player_loop): each run is queued after
     // the last, `base` frames on, and `run_end` is where this run reached.
     // `ended_queued`: the end was told to the queues with loop off.
@@ -1374,6 +1517,18 @@ static int64_t decoding_thread(void *arg)
             if (p->cfg.source.idle != NULL)
                 p->cfg.source.idle(p->cfg.source.ctx);
             (void)os64_bell_wait(&p->decode_bell, 200);
+            fed_refresh(p);
+            os64_lock_acquire(&p->lock);
+            continue;
+        }
+        if (fed_wait) {
+            // A fed media had nothing to read: until an append, a removal or
+            // the end rings the bell (os64/media_fed.h), or the next tick.
+            fed_wait = false;
+            service(p, now_us());
+            unlock(p);
+            (void)os64_bell_wait(&p->decode_bell, 200);
+            fed_refresh(p);
             os64_lock_acquire(&p->lock);
             continue;
         }
@@ -1383,6 +1538,7 @@ static int64_t decoding_thread(void *arg)
         r = os64_media_next(p->media, accept, pcm, CHUNK_FRAMES, &got);
         os64_media_counts_t counts;
         os64_media_counts(p->media, &counts);
+        fed_refresh(p);
         os64_lock_acquire(&p->lock);
         p->media_counts = counts;
         if (r < 0) {
@@ -1404,6 +1560,11 @@ static int64_t decoding_thread(void *arg)
                 look(p);
             }
         } else if (got.kind == OS64_MEDIA_GOT_PICTURE) {
+            // A media that states no rate (a fed media opened before its
+            // frames, a file without one) gives the pace its period from the
+            // first picture that has a duration.
+            if (p->pace.period == 0 && got.picture->duration > 0)
+                os64_media_pace_period(&p->pace, got.picture->duration);
             int pushed = os64_media_pictures_push(&p->decoded, gen_decoded, got.picture, got.picture->at + base,
                                                   got.picture->duration);
             int64_t ends = got.picture->at + (got.picture->duration > 0 ? got.picture->duration : 0);
@@ -1422,6 +1583,8 @@ static int64_t decoding_thread(void *arg)
             }
         } else if (got.kind == OS64_MEDIA_GOT_FULL) {
             full = got.full;
+        } else if (got.kind == OS64_MEDIA_GOT_WAIT) {
+            fed_wait = true;
         } else {
             if ((accept & OS64_MEDIA_WANT_SOUND) != 0)
                 sound_done = true;
@@ -1438,11 +1601,12 @@ static int64_t decoding_thread(void *arg)
             // which at the end of a file there is none of, so its last
             // pictures are never decoded. Within the slack the stated
             // length stands (streams end a frame or two from their
-            // container).
+            // container). A fed media's length is the page's duration, which
+            // its end never corrects.
             int64_t heard_end = p->has_sound && !p->has_picture && from_start ? run_sound_end : -1;
             bool corrected = heard_end > 0 && p->length >= 0 &&
                              (heard_end - p->length > LENGTH_SLACK || p->length - heard_end > LENGTH_SLACK);
-            if (all_done && run_end > 0 && (p->length < 0 || corrected)) {
+            if (all_done && run_end > 0 && (p->length < 0 || corrected) && p->cfg.fed == NULL) {
                 p->length = corrected ? heard_end : run_end;
                 p->length_us = now_us();
                 look(p);
@@ -1538,7 +1702,8 @@ static int64_t decoding_thread(void *arg)
 
 int os64_media_player_create(const os64_media_player_config_t *cfg, os64_media_player_t **out)
 {
-    if (cfg == NULL || out == NULL || (cfg->source.read == NULL && cfg->prepare == NULL) || cfg->want == 0)
+    if (cfg == NULL || out == NULL || (cfg->fed == NULL && cfg->source.read == NULL && cfg->prepare == NULL) ||
+        cfg->want == 0)
         return OS64_MEDIA_BAD_ARGS;
     *out = NULL;
     os64_media_player_t *p = os64_calloc(1, sizeof(*p));
@@ -1583,8 +1748,12 @@ int os64_media_player_create(const os64_media_player_config_t *cfg, os64_media_p
     // The decoding thread is never joined: it frees the player as its last
     // act. A thread's handle is reserved before the thread exists, so a
     // start that reports failure started nothing, and the player is freed.
+    if (cfg->fed != NULL)
+        media_fed_hold(cfg->fed, &p->decode_bell);
     int64_t h = os64_thread_named(decoding_thread, p, "decode");
     if (h < 0) {
+        if (cfg->fed != NULL)
+            media_fed_release(cfg->fed);
         if (!p->bell_borrowed)
             os64_bell_close(&p->decode_bell);
         os64_bell_close(&p->picture_bell);

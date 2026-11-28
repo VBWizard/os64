@@ -105,6 +105,8 @@ static void keys(void)
     CHECK(gplay_key(&s, ' ', 0x39, false) == GPLAY_KEY_PAUSE, "space");
     CHECK(gplay_key(&s, 'm', 0x32, false) == GPLAY_KEY_MUTE && gplay_key(&s, 'M', 0x32, true) == GPLAY_KEY_MUTE, "m");
     CHECK(gplay_key(&s, 'i', 0x17, false) == GPLAY_KEY_READOUT, "i");
+    CHECK(gplay_key(&s, 'w', 0x11, false) == GPLAY_KEY_SWITCH, "w");
+    CHECK(gplay_key(&s, 'e', 0x12, false) == GPLAY_KEY_EVICT, "e");
     CHECK(gplay_key(&s, '[', 0x1A, false) == GPLAY_KEY_SOUND_EARLIER &&
               gplay_key(&s, ']', 0x1B, false) == GPLAY_KEY_SOUND_LATER,
           "the sync dial");

@@ -92,6 +92,7 @@
 #include "os64/bell.h"
 #include "os64/media.h"
 #include "os64/media_clock.h"
+#include "os64/media_fed.h"
 #include "os64/media_output.h"
 #include "os64/media_pace.h"
 
@@ -116,6 +117,12 @@ typedef struct {
     // of which may block): it fills `source` in and answers true, or false
     // to fail the open (OS64_MEDIA_IO). With it `source` may start empty.
     bool (*prepare)(void *ctx, os64_media_source_t *source);
+    // NULL, or a fed media (os64/media_fed.h) to decode from instead of a
+    // byte source: `source` and `prepare` are then unused, the player holds
+    // the fed media until `finished`, its length is the fed media's duration
+    // and it is loaded while the fed media has ended (`loaded` below and
+    // os64_media_player_loaded are then not the caller's).
+    os64_media_fed_t *fed;
     uint32_t want;                  // OS64_MEDIA_WANT_SOUND and/or _PICTURE
     os64_media_output_t *output;    // NULL: the sound is not opened (the clock monotonic)
     int refused;                    // OS64_MEDIA_VOICE_WAIT or _PLAY_ON (os64/media_output.h); PLAY_ON is

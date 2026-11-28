@@ -6,10 +6,11 @@
 # behind it can change without a caller changing. tools/test_av_audit.py
 # holds that line. It resamples with libsound.so.
 # The programs that call it, its fixtures among them.
-LIBMEDIA_PROGRAMS := play gplay mediatest playertest yonder
+LIBMEDIA_PROGRAMS := play gplay mediatest playertest msetest yonder
 LIBMEDIA_SRCS := libmedia/media.c libmedia/media_scale.c libmedia/media_pcm.c libmedia/media_queue.c libmedia/media_mix.c \
                  libmedia/media_pictures.c libmedia/media_clock.c libmedia/media_pace.c libmedia/media_output.c libmedia/media_player.c \
-                 libmedia/media_show.c libmedia/media_fragment.c libmedia/media_track.c
+                 libmedia/media_show.c libmedia/media_fragment.c libmedia/media_track.c \
+                 libmedia/media_fed.c libmedia/media_fed_sound.c
 LIBMEDIA_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBMEDIA_SRCS))
 LIBMEDIA_SO   := $(BIN)/libmedia.so
 LIBMEDIA_BASE  = $(patsubst libmedia.so=%,%,$(filter libmedia.so=%,$(LIB_BASE_PAIRS)))
