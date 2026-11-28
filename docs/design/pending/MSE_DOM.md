@@ -228,7 +228,7 @@ holds a lock of the session's.
 | `fed_remove_buffer` | session, sb | — | frees them (§ 3.4) |
 | `evict` | session, sb, incoming bytes | true / false (FULL: QuotaExceededError, also for an append no buffer could ever hold) | MS § 4's eviction |
 | `take` | session, sb, bytes, length | true / false (no memory) | copies into the parser's input |
-| `parse` | session, sb, `out *` (an init segment whose duration is unknown, an mvhd duration of 0 included, reports NaN, which libdom takes as +Infinity) | DONE / PENDING / ERROR + INIT facts (duration, tracks of each kind) + group end + highest pts + the SB's `timestampOffset` as it stands after the append | the segment parser loop and coded frame processing |
+| `parse` | session, sb, `out *` (with several init segments in one parse, the FIRST one's duration and tracks, since only an unknown duration is set from an init; an init segment whose duration is unknown, an mvhd duration of 0 included, reports NaN, which libdom takes as +Infinity) | DONE / PENDING / ERROR + INIT facts (duration, tracks of each kind) + group end + highest pts + the SB's `timestampOffset` as it stands after the append | the segment parser loop and coded frame processing |
 | `fed_poll` | session, sb, `out *` | as `parse` | only when the parse runs elsewhere |
 | `reset` | session, sb, `out *` | the result's offset, highest pts and parsing flag after it | reset parser state (§ 5.5.2) |
 | `remove` | session, sb, start, end (seconds), `out *` | as `reset` | coded frame removal |

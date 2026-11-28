@@ -132,8 +132,10 @@ typedef enum {
 typedef struct {
     os64_dom_fed_status_t status;
     uint32_t inits;         /* initialization segments completed by this parse */
-    double init_duration;   /* the last one's duration; NaN when it gives none (an mvhd
-                             * duration of 0 means unknown: NaN) */
+    double init_duration;   /* the FIRST one's duration (only a duration still unknown is
+                             * set from an init, so the first decides, however the page cut
+                             * its appends); NaN when it gives none (an mvhd duration of 0
+                             * means unknown: NaN) */
     bool audio, video;      /* the tracks the buffer's first initialization segment holds */
     bool frames;            /* coded frames were added */
     bool parsing_media;     /* the parser stopped inside a media segment (PARSING_MEDIA_SEGMENT) */
