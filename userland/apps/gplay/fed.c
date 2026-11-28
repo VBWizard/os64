@@ -30,6 +30,7 @@ struct gplay_fed {
     bool quit, want_switch, want_evict;
     os64_media_fed_counts_t counts;
     uint32_t appends, switches, removes;
+    bool end_said;                      // the feeder's `ended`, for the readout
 };
 
 static uint8_t *slurp(const char *path, int64_t *size)
@@ -192,6 +193,7 @@ static int64_t feeder(void *arg)
                 if (i < g->sound.count && g->sound.start[i] + g->sound.duration[i] <= at - 1.0) g->appended_a[i] = false;
             }
             g->removes++;
+            g->ended = false;           // a removal reopens an ended source: the end is said again
         }
         // What the next four seconds need, from where the position is.
         const rendition_t *p = &g->pic[g->current];
@@ -201,15 +203,18 @@ static int64_t feeder(void *arg)
         for (int i = fragment_at(&g->sound, at); i < g->sound.count && g->sound.start[i] < until; i++)
             if (!g->appended_a[i])
                 g->appended_a[i] = append(g, g->a, &g->sound, g->sound.frag[i][0], g->sound.frag[i][1]);
+        // Everything from the position on appended (what was removed behind
+        // it is never appended again): then the end, as a page says it.
         bool all = true;
-        for (int i = 0; i < p->count; i++) all &= g->appended_v[i];
-        for (int i = 0; i < g->sound.count; i++) all &= g->appended_a[i];
+        for (int i = fragment_at(p, at); i < p->count; i++) all &= g->appended_v[i];
+        for (int i = fragment_at(&g->sound, at); i < g->sound.count; i++) all &= g->appended_a[i];
         if (all && !g->ended) os64_media_fed_end(g->fed);
         g->ended = all;
         os64_media_fed_counts_t c;
         os64_media_fed_counts(g->fed, &c);
         os64_lock_acquire(&g->lock);
         g->counts = c;
+        g->end_said = g->ended;
         os64_lock_release(&g->lock);
         os64_sleep(50);
     }
@@ -249,10 +254,12 @@ void gplay_fed_line(gplay_fed_t *g, char *line, size_t cap)
     os64_media_fed_counts_t c = g->counts;
     uint32_t appends = g->appends, switches = g->switches, removes = g->removes;
     int current = g->current;
+    bool end = g->end_said;
+    int64_t at = g->position;
     os64_lock_release(&g->lock);
-    os64_snprintf(line, cap, "fed %s: appends %u switches %u removes %u; reopens %lu resyncs %lu; slabs %lu KB",
-                  current ? "small" : "large", appends, switches, removes, (unsigned long)c.reopens,
-                  (unsigned long)c.resyncs, (unsigned long)(c.slab_bytes / 1024));
+    os64_snprintf(line, cap, "fed %s: appends %u sw %u rm %u%s; reopens %lu resyncs %lu; %lu KB; at %ld ms",
+                  current ? "small" : "large", appends, switches, removes, end ? ", end" : "", (unsigned long)c.reopens,
+                  (unsigned long)c.resyncs, (unsigned long)(c.slab_bytes / 1024), (long)(at * 1000 / RATE));
 }
 
 void gplay_fed_close(gplay_fed_t *g)
