@@ -27,6 +27,8 @@
 //     milliseconds apart while the other decodes, parked on GOT_WAIT; every
 //     picture comes out, bit-exact. ThreadSanitizer must see no race.
 //  5  TWO INITS IN ONE APPEND (seam change 10): the first one's duration.
+//  6  A SWITCH APPENDED OVER WHAT IS BUFFERED AHEAD of the decoder plays on
+//     to the end without waiting.
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -426,6 +428,58 @@ static void two_inits(void)
     free(both);
 }
 
+// Case 6: a switch appended OVER fragments already buffered ahead of the
+// decoder (gplay --fed's `w`, as a player switching quality refetches the
+// fragments after the one playing): 720p's first four fragments, part of
+// it decoded, then 480p's init and fragments 2 to 4 over them, and the
+// end. It plays on to the end without waiting, its last picture near 10 s.
+static void switch_over_buffered(void)
+{
+    os64_media_fed_t *fed;
+    os64_media_fed_create(&fed);
+    media_fed_hold(fed, NULL);
+    os64_media_fed_buffer_t *v = os64_media_fed_add(fed, "video/mp4; codecs=\"avc1.640020\"");
+    os64_media_fed_buffer_t *a = os64_media_fed_add(fed, "audio/mp4; codecs=\"mp4a.40.2\"");
+    append(fed, v, &s_720, s_720.init[0], s_720.init[1]);
+    append(fed, a, &s_a44, s_a44.init[0], s_a44.init[1]);
+    for (int i = 0; i < 4; i++) append_frag(fed, v, &s_720, i);
+    for (int i = 0; i < s_a44.count; i++) append_frag(fed, a, &s_a44, i);
+    os64_media_t *m = open_fed(fed);
+    if (m == NULL) return;
+    int16_t pcm[2 * 4096];
+    int pictures = 0, waits = 0;
+    int64_t last_at = -1;
+    bool ended = false, appended = false;
+    while (!ended && waits < 3) {
+        if (!appended && pictures >= 100) {
+            append(fed, v, &s_480, s_480.init[0], s_480.init[1]);
+            for (int i = 2; i < s_480.count; i++) append_frag(fed, v, &s_480, i);
+            os64_media_fed_end(fed);
+            appended = true;
+        }
+        os64_media_got_t got;
+        int r = os64_media_next(m, OS64_MEDIA_WANT_SOUND | OS64_MEDIA_WANT_PICTURE, pcm, 4096, &got);
+        CHECK(r == 0, "switch over: next %d", r);
+        if (r != 0) break;
+        if (got.kind == OS64_MEDIA_GOT_END) ended = true;
+        else if (got.kind == OS64_MEDIA_GOT_WAIT) waits++;
+        else if (got.kind == OS64_MEDIA_GOT_PICTURE) {
+            pictures++;
+            last_at = got.picture->at;
+            os64_media_picture_release(m, got.picture);
+        }
+    }
+    os64_media_fed_counts_t c;
+    os64_media_fed_counts(fed, &c);
+    CHECK(ended && waits == 0, "switch over: it played on to the end (ended %d, waits %d, %d pictures, last at %lld, "
+          "resyncs %llu, reopens %llu)", ended, waits, pictures, (long long)last_at, (unsigned long long)c.resyncs,
+          (unsigned long long)c.reopens);
+    CHECK(last_at > 9 * 48000, "switch over: the last picture near the end (%lld)", (long long)last_at);
+    os64_media_close(m);
+    media_fed_release(fed);
+    os64_media_fed_close(fed);
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 3) { printf("usage: test_media_fed_host <pages> <crcs>\n"); return 2; }
@@ -441,6 +495,7 @@ int main(int argc, char **argv)
     seek_unbuffered();
     two_threads();
     two_inits();
+    switch_over_buffered();
     printf("media fed: %u checks, %u failed\n", s_checks, s_failed);
     return s_failed != 0;
 }

@@ -39,6 +39,11 @@ bool media_fed_picked(os64_media_fed_t *fed);
 os64_media_track_t *media_fed_track(os64_media_fed_t *fed, int kind, uint64_t *changes);
 // Under the lock: endOfStream() was called and nothing has reopened it.
 bool media_fed_ended(const os64_media_fed_t *fed);
+// Under the lock: what both picked tracks hold, intersected (one track's
+// alone with one kind), up to `cap` ranges, and their count. After
+// endOfStream each track's last range first reaches the highest end of
+// either, as `buffered` reads (MSE § 3.1). Readiness is judged from it.
+uint32_t media_fed_buffered(os64_media_fed_t *fed, os64_media_time_range_t *out, uint32_t cap);
 // Under the lock: the duration (NaN unknown, INFINITY none).
 double media_fed_duration(const os64_media_fed_t *fed);
 // Under the lock: the counts the decoding side keeps.

@@ -19,12 +19,16 @@
 // for one 64 KiB piece of input at a time.
 //
 // READINESS (HTML's readyState) is the player's: os64_media_player_facts'
-// `current`, `future` and `enough` (os64/media_player.h), computed by the
-// player as for any media, from its queues, which a fed media fills only
-// from what both kinds' ranges hold at the position; `enough` also holds
-// once endOfStream has been called (the player is then loaded). The
-// player's length is the duration last given. A host copies them and
-// derives nothing of its own.
+// `current`, `future` and `enough` (os64/media_player.h), which for a fed
+// media are judged from what both kinds hold, intersected, at the
+// position, never from how far the decoder has got: `current` while the
+// position is in a range, `future` with a quarter second buffered past it,
+// `enough` with three seconds, each also once the range reaches the end
+// after endOfStream. A playing player whose position leaves what is
+// buffered (before the end) BUFFERS, its clock held there, and plays on
+// once `future` holds again, as other browsers fire `waiting` only when a
+// buffered range runs out. The player's length is the duration last given.
+// A host copies all of it and derives nothing of its own.
 //
 // LIFETIME: the fed media has two holders, its creator and the player made
 // over it. The creator lets go with os64_media_fed_close; the player lets

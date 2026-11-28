@@ -620,3 +620,42 @@ void media_fed_slab_drop(os64_media_fragment_slab_t *slab)
     os64_media_fragment_slab_drop(slab);
     media_fed_unlock(fed);
 }
+
+uint32_t media_fed_buffered(os64_media_fed_t *fed, os64_media_time_range_t *out, uint32_t cap)
+{
+    os64_media_time_range_t r[2][16];
+    uint32_t n[2] = { 0, 0 }, kinds = 0;
+    int64_t highest = OS64_MEDIA_NO_TIME;
+    for (int k = 0; k < 2; k++) {
+        os64_media_track_t *t = media_fed_track(fed, k == 0 ? OS64_MEDIA_FRAGMENT_VIDEO : OS64_MEDIA_FRAGMENT_AUDIO, 0);
+        if (t == 0)
+            continue;
+        uint32_t got = os64_media_track_ranges(t, r[kinds], 16);
+        n[kinds] = got < 16 ? got : 16;
+        if (n[kinds] && r[kinds][n[kinds] - 1].end > highest)
+            highest = r[kinds][n[kinds] - 1].end;
+        kinds++;
+    }
+    if (fed->ended)
+        for (uint32_t k = 0; k < kinds; k++)
+            if (n[k]) r[k][n[k] - 1].end = highest;
+    if (kinds < 2) {
+        uint32_t m = kinds ? n[0] : 0;
+        for (uint32_t i = 0; i < m && i < cap; i++)
+            out[i] = r[0][i];
+        return m;
+    }
+    uint32_t i = 0, j = 0, m = 0;
+    while (i < n[0] && j < n[1]) {
+        int64_t s = r[0][i].start > r[1][j].start ? r[0][i].start : r[1][j].start;
+        int64_t e = r[0][i].end < r[1][j].end ? r[0][i].end : r[1][j].end;
+        if (s < e) {
+            if (m < cap)
+                out[m] = (os64_media_time_range_t){ s, e };
+            m++;
+        }
+        if (r[0][i].end < r[1][j].end) i++;
+        else j++;
+    }
+    return m;
+}
