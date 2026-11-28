@@ -891,10 +891,11 @@ interrupts off is heard.
   leaves the box, drawn not at all and taking no clicks, only its
   rectangle repainted. A real pointer move, a click on the picture and a
   key the strip handles are moves; a scroll's re-hit is not, and the
-  pointer leaving the window is leaving the box. A strip that hides while
-  focused keeps the keys while nothing else is focused (libui lets a
-  hidden widget's focus go; yonder's `strip_key` keeps it), and a key it
-  handles brings it back. A click on the picture plays or pauses after the
+  pointer leaving the window is leaving the box. A strip its rules hide
+  stays in the keyboard's order, seen nowhere (an empty clip: it paints
+  nothing and takes no pointer), so Tab reaches it and the keyboard's
+  focus pins it shown, and one that hides while focused keeps the focus,
+  a key it handles bringing it back. A click on the picture plays or pauses after the
   page's listeners, unless one prevented it (both pointer paths:
   `inputs_run`'s and `pointer_default`'s); one on a drawn strip is the
   strip's own. The buffering mark, a dark square with three

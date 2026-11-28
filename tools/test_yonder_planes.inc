@@ -1135,15 +1135,17 @@ static void plane_strip_cases(void)
           "planes, strip: the mark gone leaves no overlay where it was, the band's stay");
     planes_commit();
     planes_release();
-    /* The strip hidden by its rules marks only its own rectangle: the
-     * band's whole tiles clear, and a tile it covers only in part may stay
-     * inked (a part paint can ink a tile, never clear it: VIDEO_PLANE.md
-     * § 5), its pixels see-through. */
+    /* The strip hidden by its rules is a ghost (players_place): not
+     * hidden, seen nowhere. It marks only its own rectangle: the band's
+     * whole tiles clear, and a tile it covers only in part may stay inked
+     * (a part paint can ink a tile, never clear it: VIDEO_PLANE.md § 5),
+     * its pixels see-through. */
     g.ui.damage_count = 0;
     g.ui.any_dirty = false;
     pl->strip.state = YONDER_STRIP_HIDDEN;
     players_place();
-    check(w->hidden, "planes, strip: hidden by its rules");
+    check(!w->hidden && w->clipped && w->clip.w == 0 && w->clip.h == 0,
+          "planes, strip: hidden by its rules, a ghost: unhidden, its clip empty");
     planes_prepare();
     nd = plane_damage_now(dd);
     (void)plane_render();
@@ -1166,6 +1168,25 @@ static void plane_strip_cases(void)
           "planes, strip: hidden, the band's whole tiles leave no overlay and the band is see-through");
     planes_commit();
     planes_release();
+    /* A ghost takes no pointer, and Tab still reaches it: on a playing
+     * video, the keyboard's focus is what pins the strip shown. */
+    {
+        int32_t cx = band.x + band.w / 2, cy = band.y + band.h / 2;
+        pl->p.view.paused = false;          /* playing: only the focus can pin it */
+        check(!player_holds(pl, cx, cy), "planes, strip: a ghost holds no point of its band");
+        g.ui.focus = NULL;
+        bool reached = false;
+        for (int32_t k = 0; k < 64 && !reached; k++) {
+            (void)os64_ui_focus_next(&g.ui, false, true);
+            reached = g.ui.focus == w;
+        }
+        check(reached, "planes, strip: Tab reaches a strip its rules hid");
+        strips_turn(false);
+        check(yonder_strip_drawn(&pl->strip) && pl->strip.state == YONDER_STRIP_PINNED && !w->hidden &&
+                  w->clip.w > 0,
+              "planes, strip: the keyboard's focus pins it shown, seen again");
+        g.ui.focus = NULL;
+    }
     plane_drop();
 }
 
