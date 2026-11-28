@@ -1070,6 +1070,93 @@ static void scripted(void)
     m_evict(&p.m.t[0], m_bytes(&p.m.t[0]) + 25000 - p.m.t[0].quota, OS64_MEDIA_NO_TIME);
     END();
 
+    // A group that goes on after something took its last kept frame (a
+    // remove; a new init segment; a switch to sequence mode) goes on only
+    // from a random access point: the frames between are dropped.
+    for (int how = 0; how < 3; how++) {
+        static const char *const names[] = { "a group after its last frame went", "a group after an init segment",
+                                             "a group after sequence mode began" };
+        START(names[how], 1, 90000, 0);
+        // After a remove, another group already holds frames 15-29, so a
+        // frame about to be dropped would show if it cut anything first.
+        // (Not before sequence mode: its group start would be that group's
+        // end, and the jump there is a discontinuity of its own.)
+        if (how == 0) {
+            n = make_group(f, 0, 15 * 3000, 15, 3000, 5, 0, 60);
+            pair_frames(&p, 0, f, n);
+            os64_media_buffer_reset_parser(&p.b);
+            m_unset(&p.m.t[0]);
+        }
+        n = make_group(f, 0, 0, 25, 3000, 10, 0, 100);       // I at 0, 10, 20
+        pair_frames(&p, 0, f, 15);
+        if (how == 0) {
+            os64_media_buffer_remove(&p.b, 12 * 3000 * 1000000ll / 90, 15 * 3000 * 1000000ll / 90);
+            m_cut(&p.m.t[0], 12 * 3000 * 1000000ll / 90, 15 * 3000 * 1000000ll / 90);
+        } else if (how == 1) {
+            pair_init_segment(&p, 90000, 0);
+        } else {
+            os64_media_buffer_set_mode(&p.b, OS64_MEDIA_SEQUENCE);
+            p.m.mode = OS64_MEDIA_SEQUENCE;
+            p.m.gs = p.m.ge;
+        }
+        compare(&p.b, &p.m);
+        pair_frames(&p, 0, f + 15, 10);                      // 15..19 depend on what is gone; 20 is an I frame
+        END();
+    }
+
+    // A group joins a range in presentation as well as in decode: a lone I
+    // frame, then a group with B-frames whose decode gap is within the join
+    // and whose gap on the screen is not.
+    START("a group joins in presentation too", 1, 90000, 0);
+    n = make_group(f, 0, 0, 10, 3000, 10, 0, 100);
+    pair_frames(&p, 0, f, n);
+    os64_media_buffer_remove(&p.b, 3000 * 1000000ll / 90, 10 * 3000 * 1000000ll / 90);
+    m_cut(&p.m.t[0], 3000 * 1000000ll / 90, 10 * 3000 * 1000000ll / 90);
+    os64_media_buffer_reset_parser(&p.b);
+    m_unset(&p.m.t[0]);
+    n = make_group(f, 0, 5 * 3000, 10, 3000, 10, 2, 100);     // decode from frame 3, presented from 5
+    pair_frames(&p, 0, f, n);
+    END();
+
+    // The join counts decode steps as well as durations: a group with a
+    // frame missing inside (a step of two) joins a gap of three frames.
+    START("the join counts decode steps", 1, 90000, 0);
+    n = make_group(f, 0, 0, 10, 3000, 10, 0, 100);
+    for (int i = 5; i < n - 1; i++) f[i] = f[i + 1];
+    pair_frames(&p, 0, f, n - 1);
+    os64_media_buffer_reset_parser(&p.b);
+    m_unset(&p.m.t[0]);
+    n = make_group(f, 0, 13 * 3000, 10, 3000, 10, 0, 100);
+    pair_frames(&p, 0, f, n);
+    END();
+
+    // A muxed append's bytes shared by the tracks' quotas.
+    START("muxed quota shares", 2, 90000, 48000);
+    p.b.track[0].quota = p.m.t[0].quota = 30000;
+    p.b.track[1].quota = p.m.t[1].quota = 3000;
+    for (int s = 0; s < 6; s++) {
+        n = make_group(f, 0, (int64_t)s * 90000, 30, 3000, 10, 0, 200);
+        int n2 = make_group(f + n, 1, (int64_t)s * 48000, 47, 1024, 1, 0, 20);
+        uint32_t incoming = 0;
+        for (int i = 0; i < n + n2; i++) incoming += f[i].size;
+        os64_media_track_rule_t r = os64_media_buffer_make_room(&p.b, incoming, OS64_MEDIA_NO_TIME);
+        bool mfits = true;
+        for (int k = 0; k < 2; k++) {
+            mtrack_t *mt = &p.m.t[k];
+            uint64_t share = incoming / 33000 * mt->quota + incoming % 33000 * mt->quota / 33000;
+            if (m_bytes(mt) + share > mt->quota) m_evict(mt, m_bytes(mt) + share - mt->quota, OS64_MEDIA_NO_TIME);
+            if (m_bytes(mt) + share > mt->quota) mfits = false;
+        }
+        check((r == OS64_MEDIA_TRACK_OK) == mfits, "muxed quota shares, segment %d: %s, the model %s", s,
+              os64_media_track_rule_name(r), mfits ? "fits" : "does not");
+        compare(&p.b, &p.m);
+        if (r == OS64_MEDIA_TRACK_OK) {
+            pair_frames(&p, 0, f, n);
+            pair_frames(&p, 1, f + n, n2);
+        }
+    }
+    END();
+
     // Refused: a timescale finer than a nanosecond; a frame for a track the buffer has not got.
     {
         os64_media_buffer_t b;

@@ -632,9 +632,11 @@ os64_media_track_rule_t os64_media_buffer_frame(os64_media_buffer_t *b, const os
     if (t->append_range != 0) {
         r = range_by_id(t, t->append_range, &ri);
         if (r == 0 || !group_intact(t, r)) {
-            // This frame's own removal (CFP 1.15) took the group's last kept
-            // frame: what follows depended on it, so only a random access
-            // point goes on, and it starts a range.
+            // This frame's own removal took the group's last kept frame:
+            // what follows depended on it, so only a random access point
+            // goes on, and it starts a range. A cut's span never reaches a
+            // group's frames (they begin at its own random access point) but
+            // when a split cannot get memory and the tail goes with the cut.
             t->append_range = 0;
             if (!rap) {
                 t->need_rap = true;
