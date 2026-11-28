@@ -295,6 +295,11 @@ void os64_media_fragment_init(os64_media_fragment_t *p, const os64_media_fragmen
 // OS64_MEDIA_FRAGMENT_MORE, or -1 with os64_media_fragment_error saying which rule.
 int os64_media_fragment_append(os64_media_fragment_t *p, const uint8_t *bytes, size_t length);
 os64_media_fragment_rule_t os64_media_fragment_error(const os64_media_fragment_t *p);
+// The spec's "parsing media segment" flag (MSE § 3.5.1): true from a moof's
+// header until its last frame is handed out (bytes of an mdat after that
+// carry nothing); false before, after, after a reset and in an error. A
+// page may not change `timestampOffset` or `mode` while it is true.
+bool os64_media_fragment_parsing_media(const os64_media_fragment_t *p);
 const char *os64_media_fragment_rule_name(os64_media_fragment_rule_t rule);
 // The spec's reset parser state (MSE § 5.5.2): a partial box and an
 // unfinished mdat are dropped, the error is cleared, and the init segment

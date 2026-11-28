@@ -1401,6 +1401,54 @@ static void holds_and_reset(void)
     model_free(&m);
 }
 
+// ── The parsing-media-segment flag ─────────────────────────────────────────
+
+static void parsing_media_flag(void)
+{
+    model_t m = { 0 };
+    dinit_t d = av_init();
+    write_init(&m, &d);
+    size_t init_end = m.out.n;
+    dseg_t s = { .n = 1, .spare_mdat = 1 };
+    s.f[0] = full_traf(1, 0, 6, 512);
+    write_segment(&m, &s);
+    size_t spare_start = m.out.n - 12;          // the spare mdat: a header and four bytes
+    sink_ctx_t c = { 0 };
+    os64_media_fragment_t p;
+    os64_media_fragment_sink_t sink = { on_init, on_frame, &c };
+    long live0 = s_live;
+    os64_media_fragment_init(&p, &kMemory, &sink);
+    unsigned wrong = 0;
+    for (size_t at = 0; at < m.out.n; at++) {
+        os64_media_fragment_append(&p, m.out.d + at, 1);
+        size_t fed = at + 1;
+        bool want = fed >= init_end + 8 && fed < spare_start;
+        if (os64_media_fragment_parsing_media(&p) != want && wrong++ < 3)
+            printf("  parsing media after %zu bytes: %d, want %d\n", fed, !want, want);
+    }
+    check(wrong == 0, "the parsing-media-segment flag: %u bytes with it wrong", wrong);
+    // Mid-segment, a reset clears it.
+    os64_media_fragment_reset(&p);
+    os64_media_fragment_append(&p, m.out.d + init_end, (spare_start - init_end) / 2);
+    check(os64_media_fragment_parsing_media(&p), "mid-segment the flag is up");
+    os64_media_fragment_reset(&p);
+    check(!os64_media_fragment_parsing_media(&p), "a reset clears the flag");
+    // An error while the moof's frames are still owed lowers it: the moof,
+    // then a box of size 4 where its mdat should be.
+    size_t moof_size = (size_t)m.out.d[init_end] << 24 | (size_t)m.out.d[init_end + 1] << 16 |
+                       (size_t)m.out.d[init_end + 2] << 8 | m.out.d[init_end + 3];
+    os64_media_fragment_append(&p, m.out.d + init_end, moof_size);
+    check(os64_media_fragment_parsing_media(&p), "after a moof, frames owed: the flag is up");
+    uint8_t bad[8] = { 0, 0, 0, 4, 'm', 'd', 'a', 't' };
+    check(os64_media_fragment_append(&p, bad, 8) < 0 && !os64_media_fragment_parsing_media(&p),
+          "an error lowers the flag");
+    os64_media_fragment_destroy(&p);
+    check(s_live == live0, "parsing media: %ld blocks not given back", s_live - live0);
+    free(c.got.e);
+    free(c.held);
+    model_free(&m);
+}
+
 // ── Corrupted bytes: every outcome allowed except a read past what was given ──
 
 static void corruption(void)
@@ -1442,6 +1490,7 @@ int main(void)
     rules();
     raw_rules();
     holds_and_reset();
+    parsing_media_flag();
     corruption();
     printf("media fragment: %lu checks, %lu failed\n", s_checks, s_failed);
     return s_failed != 0;

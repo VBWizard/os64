@@ -137,6 +137,11 @@ so no field is used before it is checked against the box it sits in. The
 held boxes and the mdats holding frames have caps (4 MB and 128 MB to
 begin with, set by the caller), and a moof may name at most 65,536 frames.
 
+**The parsing-media-segment flag** (`os64_media_fragment_parsing_media`)
+is true from a moof's header until its last frame is handed out, and false
+after a reset or in an error: the page may not change `timestampOffset` or
+`mode` while it is up.
+
 **The sink may reset or destroy the parser** from inside a callback (a
 track buffer that fails mid-append runs the append error algorithm, which
 resets the parser): the append in progress ends there, the rest of its

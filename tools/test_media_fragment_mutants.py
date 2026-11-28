@@ -152,6 +152,10 @@ mutants = [
     ('samples-are-not-sorted', F,
      '    if (sorted)\n        return OS64_MEDIA_FRAGMENT_OK;  // the usual case', '    if (1)\n        return OS64_MEDIA_FRAGMENT_OK;  // the usual case'),
     ('a-moof-with-no-traf-is-taken', F, '    if (walk.bad || first)              // a moof with no traf', '    if (walk.bad)              // a moof with no traf'),
+    # The parsing-media-segment flag.
+    ('parsing-media-ignores-owed-frames', F, '    if (samples_pending(p))\n        return true;', '    if (0)\n        return true;'),
+    ('parsing-media-ignores-a-moof-arriving', F, '    return p->state == IN_BOX && p->box_have >= 8 &&', '    return 0 && p->box_have >= 8 &&'),
+    ('parsing-media-survives-an-error', F, 'bool os64_media_fragment_parsing_media(const os64_media_fragment_t *p)\n{\n    if (p->error != OS64_MEDIA_FRAGMENT_OK)\n        return false;', 'bool os64_media_fragment_parsing_media(const os64_media_fragment_t *p)\n{'),
     # The slab's holds, and reset.
     ('the-parser-keeps-its-hold', F,
      '        p->slab = 0;\n        os64_media_fragment_slab_drop(slab);\n        p->state = WAIT_HEADER;', '        p->slab = 0;\n        p->state = WAIT_HEADER;'),

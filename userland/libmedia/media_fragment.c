@@ -1055,6 +1055,17 @@ int os64_media_fragment_append(os64_media_fragment_t *p, const uint8_t *bytes, s
     return OS64_MEDIA_FRAGMENT_MORE;
 }
 
+bool os64_media_fragment_parsing_media(const os64_media_fragment_t *p)
+{
+    if (p->error != OS64_MEDIA_FRAGMENT_OK)
+        return false;
+    if (samples_pending(p))
+        return true;
+    // A moof whose header is in and whose body is still arriving.
+    return p->state == IN_BOX && p->box_have >= 8 &&
+           ((uint32_t)p->box[4] << 24 | (uint32_t)p->box[5] << 16 | (uint32_t)p->box[6] << 8 | p->box[7]) == BOX_MOOF;
+}
+
 os64_media_fragment_rule_t os64_media_fragment_error(const os64_media_fragment_t *p)
 {
     return p->error;
