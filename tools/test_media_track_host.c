@@ -445,11 +445,16 @@ static void m_evict(mtrack_t *t, uint64_t need, int64_t play)
         }
     }
     int *st = malloc(sizeof(int) * (size_t)(t->n + 2));
-    // Behind: the first unit in decode order, while it is not the play position's.
+    // Behind: the first unit in decode order, while it is not the play
+// position's and (with a play position) is presented wholly before it.
     while (start - m_bytes(t) < need && t->n > 0) {
         int nu = m_units(t, st);
         if (play_unit_serial > 0 && t->f[st[0]].serial == play_serial) break;
         int e = nu > 1 ? st[1] : t->n;
+        bool behind = true;                 // presented wholly before the play position
+        for (int i = 0; i < e && play_unit_serial > 0; i++)
+            if (!(t->f[i].flags & OS64_MEDIA_FRAME_PRELOAD) && t->f[i].pts + t->f[i].dur > play) behind = false;
+        if (!behind) break;
         bool *rm = calloc((size_t)t->n, 1);
         for (int i = 0; i < e; i++) rm[i] = true;
         m_remove_marked(t, rm);
@@ -1078,6 +1083,89 @@ static void scripted(void)
     }
     END();
 
+    // Codex #769 rd4: a range earlier in decode order but presented after
+    // the play position is not behind it. A RAP at dts 0 s presented at
+    // 1 s, then (a parser reset) one at dts 1 s presented at 0 s; playing
+    // at 0 s, a quota of two one-byte frames, and one byte more asked: both
+    // are protected, so QUOTA, and nothing goes.
+    START("eviction: a range earlier in decode order presented ahead", 1, 1, 0);
+    p.b.track[0].quota = p.m.t[0].quota = 2;
+    {
+        tf_t a1 = { 0, 1, 1, true, 1 };
+        pair_frames(&p, 0, &a1, 1);
+        os64_media_buffer_reset_parser(&p.b);
+        m_unset(&p.m.t[0]);
+        tf_t a2 = { 1, 0, 1, true, 1 };
+        pair_frames(&p, 0, &a2, 1);
+        os64_media_track_rule_t r = os64_media_buffer_make_room(&p.b, 1, 0);
+        mtrack_t *mt = &p.m.t[0];
+        m_evict(mt, m_bytes(mt) + 1 - mt->quota, 0);
+        check(r == OS64_MEDIA_TRACK_QUOTA, "the protected frames are kept: QUOTA (%s)", os64_media_track_rule_name(r));
+        check(p.b.track[0].bytes == 2, "both frames kept (%llu bytes)", (unsigned long long)p.b.track[0].bytes);
+        compare(&p.b, &p.m);
+    }
+    END();
+
+    // The play position's unit is kept even when the position is in a
+    // joined gap past it (so the unit ends before the position): one-second
+    // RAPs at 0 s and 1 s, then (a parser reset) one at 3 s; the join is
+    // 2 s, so [0 s, 4 s) is buffered, and playing at 2.5 s the unit at 1 s
+    // holds the position. Two bytes asked of a full three-byte quota: the
+    // unit at 0 s goes, the one at 1 s stays, so QUOTA.
+    START("eviction: the play position in a joined gap", 1, 1, 0);
+    p.b.track[0].quota = p.m.t[0].quota = 3;
+    {
+        tf_t a1[2] = { { 0, 0, 1, true, 1 }, { 1, 1, 1, true, 1 } };
+        pair_frames(&p, 0, a1, 2);
+        os64_media_buffer_reset_parser(&p.b);
+        m_unset(&p.m.t[0]);
+        tf_t a2 = { 3, 3, 1, true, 1 };
+        pair_frames(&p, 0, &a2, 1);
+        os64_media_track_rule_t r = os64_media_buffer_make_room(&p.b, 2, 2500000000ll);
+        mtrack_t *mt = &p.m.t[0];
+        m_evict(mt, m_bytes(mt) + 2 - mt->quota, 2500000000ll);
+        check(r == OS64_MEDIA_TRACK_QUOTA, "the play position's unit is kept: QUOTA (%s)", os64_media_track_rule_name(r));
+        check(p.b.track[0].bytes == 2, "one frame went (%llu bytes left)", (unsigned long long)p.b.track[0].bytes);
+        compare(&p.b, &p.m);
+    }
+    END();
+
+    // Codex #769 rd4: the cursor reaches what `buffered` joins across a
+    // range inside another's extent. I (pts 0) and P (pts 3) kept after a
+    // B frame (pts 1) is removed: a range [0 s, 4 s). Then, each after a
+    // parser reset, RAPs presenting [1 s, 2 s) and [5 s, 6 s): the join is
+    // 2 s, so `buffered` is [0 s, 6 s), and the cursor reads 0, 3, 1, 5.
+    START("cursor: a range inside another's extent", 1, 1, 0);
+    {
+        tf_t g[3] = { { 0, 0, 1, true, 10 }, { 1, 3, 1, false, 10 }, { 2, 1, 1, false, 10 } };
+        pair_frames(&p, 0, g, 3);
+        os64_media_buffer_remove(&p.b, 1000000000ll, 2000000000ll);
+        m_cut(&p.m.t[0], 1000000000ll, 2000000000ll);
+        os64_media_buffer_reset_parser(&p.b);
+        m_unset(&p.m.t[0]);
+        tf_t h1 = { 10, 1, 1, true, 10 };
+        pair_frames(&p, 0, &h1, 1);
+        os64_media_buffer_reset_parser(&p.b);
+        m_unset(&p.m.t[0]);
+        tf_t h2 = { 20, 5, 1, true, 10 };
+        pair_frames(&p, 0, &h2, 1);
+        os64_media_time_range_t br[4];
+        uint32_t nb = os64_media_buffer_buffered(&p.b, br, 4, false);
+        check(nb == 1 && br[0].start == 0 && br[0].end == 6000000000ll, "buffered is [0 s, 6 s) (%u ranges)", nb);
+        os64_media_track_cursor_t c;
+        const os64_media_track_t *v = &p.b.track[0];
+        check(os64_media_track_seek(v, 0, &c) == OS64_MEDIA_TRACK_FRAME, "a seek to 0 lands");
+        static const int64_t want[4] = { 0, 3000000000ll, 1000000000ll, 5000000000ll };
+        for (int i = 0; i < 4; i++) {
+            os64_media_track_frame_t fr;
+            int r = os64_media_track_next(v, &c, &fr);
+            check(r == OS64_MEDIA_TRACK_FRAME && fr.pts == want[i], "frame %d presented at %lld (got %d, %lld)", i,
+                  (long long)want[i], r, r == OS64_MEDIA_TRACK_FRAME ? (long long)fr.pts : -1ll);
+            if (r == OS64_MEDIA_TRACK_FRAME) os64_media_track_frame_done(&fr);
+        }
+    }
+    END();
+
     // Eviction with no play position: oldest first. And QuotaExceeded.
     START("eviction with no play position", 1, 90000, 0);
     p.b.track[0].quota = p.m.t[0].quota = 20000;
@@ -1581,6 +1669,45 @@ static void out_of_memory(void)
         slab_end(slab);
         os64_media_buffer_destroy(&b);
         check(s_live == live0, "out of memory at allocation %ld: %ld blocks not given back", k, s_live - live0);
+    }
+
+    // Codex #769 rd3: a preload is never kept without its frame. Sixty-three
+    // one-second sound frames fill the range's 64 places; with the window at
+    // 64 s the frame at 63 s is held as the preload of the frame at 64 s,
+    // and the allocation that grows the range for the pair fails. Then a
+    // frame at 65 s, which the preload does not end at.
+    for (long k = 1; k <= 3; k++) {
+        os64_media_buffer_t b;
+        os64_media_buffer_init(&b, &kMemory);
+        os64_media_fragment_init_t init = { .generation = 1, .track_count = 1 };
+        static const uint8_t config[] = { 0x12, 0x10 };
+        init.track[0] = (os64_media_fragment_track_t){ .id = 1, .kind = OS64_MEDIA_FRAGMENT_AUDIO, .timescale = 1,
+                                                       .entry_count = 1 };
+        init.track[0].entry[0].config = config;
+        init.track[0].entry[0].config_size = 2;
+        os64_media_buffer_init_segment(&b, &init);
+        os64_media_fragment_slab_t *slab = slab_new(1000);
+        for (int i = 0; i <= 65; i++) {
+            if (i == 63) b.window_start = 64000000000ll;
+            if (i == 64) s_fail_countdown = k;
+            os64_media_fragment_frame_t ff = { .track_id = 1, .kind = OS64_MEDIA_FRAGMENT_AUDIO, .generation = 1,
+                                               .timescale = 1, .dts = i, .pts = i, .duration = 1, .rap = true,
+                                               .slab = slab, .offset = 0, .size = 10 };
+            (void)os64_media_buffer_frame(&b, &ff);
+            s_fail_countdown = 0;
+            const os64_media_track_t *a = &b.track[0];
+            for (uint32_t ri = 0; ri < a->range_count; ri++) {
+                const os64_media_track_range_t *r = &a->range[ri];
+                for (uint32_t j = 0; j < r->count; j++) {
+                    if (!(r->frame[j].flags & OS64_MEDIA_FRAME_PRELOAD)) continue;
+                    check(j + 1 < r->count && r->frame[j].pts + r->frame[j].duration == r->frame[j + 1].pts,
+                          "out of memory at %ld, frame %d: a preload kept without the frame it ends at", k, i);
+                }
+            }
+        }
+        slab_end(slab);
+        os64_media_buffer_destroy(&b);
+        check(s_live == live0, "out of memory at allocation %ld: %ld blocks not given back (preload)", k, s_live - live0);
     }
 }
 
