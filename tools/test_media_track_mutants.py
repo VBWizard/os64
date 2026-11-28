@@ -85,6 +85,8 @@ mutants = [
     ('each-track-takes-the-whole-append', F, '        uint64_t share = total_quota == 0 ? incoming', '        uint64_t share = 1 ? incoming'),
     ('a-preload-with-a-frame-decoded-between-is-kept', F, '                            t->preload.dts > dts || decoded_between(t, t->preload.dts, dts)))', '                            t->preload.dts > dts || (decoded_between(t, t->preload.dts, dts) && 0)))'),
     ('a-preload-is-kept-without-room-for-its-frame', F, 'if (!range_reserve(t, r, r->count + (t->have_preload ? 2u : 1u))) {', 'if (!range_reserve(t, r, r->count + 1u)) {'),
+    ('eviction-takes-a-unit-presented-ahead', F, '            if (pr && !unit_behind(r, cut, n, play))\n                break;\n', ''),
+    ('the-hop-measures-from-the-range-end', F, '    if (r->end > frontier)\n        frontier = r->end;\n    for', '    frontier = r->end;\n    for'),
     ('a-group-presented-earlier-joins', F, ' &&\n            pts >= unit_pts(p, unit_of(p, p->count - 1))) {', ') {'),
     ('the-highest-pts-is-the-first', F, '                if (!(f->flags & OS64_MEDIA_FRAME_PRELOAD) && f->pts > pts)\n                    pts = f->pts;', '                if (!(f->flags & OS64_MEDIA_FRAME_PRELOAD) && pts == OS64_MEDIA_NO_TIME)\n                    pts = f->pts;'),
     # Reading.

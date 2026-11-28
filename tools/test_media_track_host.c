@@ -445,11 +445,16 @@ static void m_evict(mtrack_t *t, uint64_t need, int64_t play)
         }
     }
     int *st = malloc(sizeof(int) * (size_t)(t->n + 2));
-    // Behind: the first unit in decode order, while it is not the play position's.
+    // Behind: the first unit in decode order, while it is not the play
+// position's and (with a play position) is presented wholly before it.
     while (start - m_bytes(t) < need && t->n > 0) {
         int nu = m_units(t, st);
         if (play_unit_serial > 0 && t->f[st[0]].serial == play_serial) break;
         int e = nu > 1 ? st[1] : t->n;
+        bool behind = true;                 // presented wholly before the play position
+        for (int i = 0; i < e && play_unit_serial > 0; i++)
+            if (!(t->f[i].flags & OS64_MEDIA_FRAME_PRELOAD) && t->f[i].pts + t->f[i].dur > play) behind = false;
+        if (!behind) break;
         bool *rm = calloc((size_t)t->n, 1);
         for (int i = 0; i < e; i++) rm[i] = true;
         m_remove_marked(t, rm);
@@ -1075,6 +1080,65 @@ static void scripted(void)
               os64_media_track_rule_name(r), mfits ? "fits" : "does not fit");
         compare(&p.b, &p.m);
         if (r == OS64_MEDIA_TRACK_OK) pair_frames(&p, 0, f, n);
+    }
+    END();
+
+    // Codex #769 rd4: a range earlier in decode order but presented after
+    // the play position is not behind it. A RAP at dts 0 s presented at
+    // 1 s, then (a parser reset) one at dts 1 s presented at 0 s; playing
+    // at 0 s, a quota of two one-byte frames, and one byte more asked: both
+    // are protected, so QUOTA, and nothing goes.
+    START("eviction: a range earlier in decode order presented ahead", 1, 1, 0);
+    p.b.track[0].quota = p.m.t[0].quota = 2;
+    {
+        tf_t a1 = { 0, 1, 1, true, 1 };
+        pair_frames(&p, 0, &a1, 1);
+        os64_media_buffer_reset_parser(&p.b);
+        m_unset(&p.m.t[0]);
+        tf_t a2 = { 1, 0, 1, true, 1 };
+        pair_frames(&p, 0, &a2, 1);
+        os64_media_track_rule_t r = os64_media_buffer_make_room(&p.b, 1, 0);
+        mtrack_t *mt = &p.m.t[0];
+        m_evict(mt, m_bytes(mt) + 1 - mt->quota, 0);
+        check(r == OS64_MEDIA_TRACK_QUOTA, "the protected frames are kept: QUOTA (%s)", os64_media_track_rule_name(r));
+        check(p.b.track[0].bytes == 2, "both frames kept (%llu bytes)", (unsigned long long)p.b.track[0].bytes);
+        compare(&p.b, &p.m);
+    }
+    END();
+
+    // Codex #769 rd4: the cursor reaches what `buffered` joins across a
+    // range inside another's extent. I (pts 0) and P (pts 3) kept after a
+    // B frame (pts 1) is removed: a range [0 s, 4 s). Then, each after a
+    // parser reset, RAPs presenting [1 s, 2 s) and [5 s, 6 s): the join is
+    // 2 s, so `buffered` is [0 s, 6 s), and the cursor reads 0, 3, 1, 5.
+    START("cursor: a range inside another's extent", 1, 1, 0);
+    {
+        tf_t g[3] = { { 0, 0, 1, true, 10 }, { 1, 3, 1, false, 10 }, { 2, 1, 1, false, 10 } };
+        pair_frames(&p, 0, g, 3);
+        os64_media_buffer_remove(&p.b, 1000000000ll, 2000000000ll);
+        m_cut(&p.m.t[0], 1000000000ll, 2000000000ll);
+        os64_media_buffer_reset_parser(&p.b);
+        m_unset(&p.m.t[0]);
+        tf_t h1 = { 10, 1, 1, true, 10 };
+        pair_frames(&p, 0, &h1, 1);
+        os64_media_buffer_reset_parser(&p.b);
+        m_unset(&p.m.t[0]);
+        tf_t h2 = { 20, 5, 1, true, 10 };
+        pair_frames(&p, 0, &h2, 1);
+        os64_media_time_range_t br[4];
+        uint32_t nb = os64_media_buffer_buffered(&p.b, br, 4, false);
+        check(nb == 1 && br[0].start == 0 && br[0].end == 6000000000ll, "buffered is [0 s, 6 s) (%u ranges)", nb);
+        os64_media_track_cursor_t c;
+        const os64_media_track_t *v = &p.b.track[0];
+        check(os64_media_track_seek(v, 0, &c) == OS64_MEDIA_TRACK_FRAME, "a seek to 0 lands");
+        static const int64_t want[4] = { 0, 3000000000ll, 1000000000ll, 5000000000ll };
+        for (int i = 0; i < 4; i++) {
+            os64_media_track_frame_t fr;
+            int r = os64_media_track_next(v, &c, &fr);
+            check(r == OS64_MEDIA_TRACK_FRAME && fr.pts == want[i], "frame %d presented at %lld (got %d, %lld)", i,
+                  (long long)want[i], r, r == OS64_MEDIA_TRACK_FRAME ? (long long)fr.pts : -1ll);
+            if (r == OS64_MEDIA_TRACK_FRAME) os64_media_track_frame_done(&fr);
+        }
     }
     END();
 

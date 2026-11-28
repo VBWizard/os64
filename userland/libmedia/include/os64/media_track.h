@@ -72,7 +72,12 @@
 //
 // THE PLAYER'S CURSOR reads a track in decode order, from a range's end on
 // into the range the join joins to it (media_track.c's opening comment
-// says why ranges never merge). Overlaps, removes and
+// says why ranges never merge), the join measured from its FRONTIER, the
+// furthest presentation end of the ranges it has read across, as
+// `buffered`'s union measures from its own furthest end: a range inside
+// another's extent (a hole a cut left) does not shorten the reach. After
+// frames move under it, the frontier is its own range's end again, so a
+// range removed since cannot carry the cursor across a hole. Overlaps, removes and
 // evictions move frames under it; the cursor carries the serial of the
 // frame it returned last and of the frame that followed it, and after any
 // such change it is re-found by them. RESYNC ONLY WHEN IT MUST: if either
@@ -197,6 +202,7 @@ typedef struct {
     uint64_t edits;                     // the track's, when index was last right
     uint64_t last_serial, next_serial;  // returned last; followed it then (0: none)
     int64_t last_dts;
+    int64_t frontier;                   // the furthest presentation end of the ranges read across since the seek
 } os64_media_track_cursor_t;
 
 enum { OS64_MEDIA_TRACK_FRAME = 1, OS64_MEDIA_TRACK_WAIT = 0, OS64_MEDIA_TRACK_RESYNC = -1 };

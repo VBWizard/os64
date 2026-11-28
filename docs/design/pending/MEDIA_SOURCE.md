@@ -222,7 +222,7 @@ processing, list item n of step 1.
 | a group whose last kept frame was removed goes on only from a random access point | — | `os64_media_buffer_frame` | a group after its last frame went |
 | kept; last decode time, last duration, highest end, group end | CFP 1.16–1.20 | `os64_media_buffer_frame` | every case |
 | `remove(start, end)`: frames presented in it and what depended on them | range removal | `os64_media_buffer_remove` | remove |
-| eviction and QuotaExceededError | eviction; prepare append 6–7 | `os64_media_buffer_make_room` | eviction around the play position; with none; muxed shares |
+| eviction and QuotaExceededError | eviction; prepare append 6–7 | `os64_media_buffer_make_room` | eviction around the play position; with none; muxed shares; a range earlier in decode order presented ahead |
 | `buffered`: the intersection of the tracks' ranges; once the MediaSource has ended, each track's last range first reaches the highest end across tracks | track buffer ranges; `buffered` | `os64_media_buffer_buffered` | every case, both ways, beside the model |
 | an assignment to `timestampOffset` in sequence mode starts the next coded frame group at it, the value unchanged or not | `timestampOffset` setter | `os64_media_buffer_set_offset` | sequence: the offset assigned again |
 | `mode`: setting `sequence` sets the group start to the group end; a parser reset in sequence mode does too | `mode` setter; reset parser state | `os64_media_buffer_set_mode`, `_reset_parser` | sequence mode |
@@ -245,9 +245,13 @@ later frames interleave in decode time with the next range's (a rendition
 without B-frames ending where one with them begins), and a cut of one
 chain then runs on through the other. The join is applied when ranges are
 READ instead: `buffered` joins a range that begins no later than the join
-past another's end, and a cursor at a range's end goes on into the earliest
-range beginning after its own by that same rule. So `buffered` and what
-plays agree by construction. A range's extent
+past the union's furthest end, and a cursor at a range's end goes on into
+the earliest range beginning after its own by that same rule, measured
+from the furthest end it has read across (its frontier: a range inside
+another's extent does not shorten its reach). So `buffered` and what plays
+agree by construction. After frames move under a cursor, its frontier is
+its own range's end again, so a range removed since cannot carry it
+across a hole. A range's extent
 runs from its earliest presentation to its latest end, so a hole a cut
 leaves inside it counts as held, as Chromium counts it (DEBTS).
 
@@ -316,7 +320,10 @@ bytes are shared between a muxed SourceBuffer's tracks by their quotas.
 
 **Eviction** frees whole units:
 1. **First behind the play position:** the front of the earliest range,
-   never into the unit holding the play position.
+   while each unit is presented wholly before the play position (a range
+   earlier in decode order can be presented later, after a parser reset
+   moved the times back; then nothing goes from behind), never into the
+   unit holding the play position.
 2. **Then far ahead:** the back of the latest ranges, never into the play
    position's unit through 10 s past it.
 
