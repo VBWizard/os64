@@ -183,6 +183,7 @@ static int64_t feeder(void *arg)
             (void)append(g, g->v, p, p->init[0], p->init[1]);
             for (int i = fragment_at(p, at) + 1; i < p->count; i++) g->appended_v[i] = false;
             g->switches++;
+            g->ended = false;           // the append reopened an ended source: the end is said again
         }
         if (ev && at > 1.0) {
             os64_media_fed_result_t res;

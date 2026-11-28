@@ -100,11 +100,13 @@ struct os64_media_player {
     os64_media_info_t info;
     bool probed, has_sound, has_picture;
     int64_t length;
-    // A fed media's buffered intersection, in output frames, copied from it
-    // by the decoding thread at each wake (an append, removal or end rings
-    // it). Readiness and buffering at a fed media's data's end read it.
+    // A fed media's buffered intersection from a second before the
+    // position on, in output frames, copied from it by the decoding thread
+    // at each wake (an append, removal or end rings it). Readiness and
+    // buffering at a fed media's data's end read it.
     int64_t fed_start[FED_RANGES], fed_end[FED_RANGES];
     uint32_t fed_ranges;
+    bool fed_more;                        // more ranges follow the ones copied
     int64_t length_us, looked_us;         // when `length` was last set, and `look` last rung (facts)
 
     os64_media_pictures_entry_t decoded_slot[DECODED_DEPTH], ready_slot[READY_DEPTH];
@@ -388,7 +390,7 @@ static int64_t fed_ahead(const os64_media_player_t *p, int64_t position, bool *l
     *last = false;
     for (uint32_t i = 0; i < p->fed_ranges; i++)
         if (position >= p->fed_start[i] - FED_SLACK && position < p->fed_end[i]) {
-            *last = i + 1 == p->fed_ranges;
+            *last = i + 1 == p->fed_ranges && !p->fed_more;
             return p->fed_end[i] - position;
         }
     return -1;
@@ -405,7 +407,7 @@ static uint32_t fed_readiness(const os64_media_player_t *p, int64_t now)
     // what the kinds hold no longer overlaps): all there will be is there.
     // A player that buffered there before the end was said plays on into
     // its end.
-    bool beyond = p->loaded;
+    bool beyond = p->loaded && !p->fed_more;
     for (uint32_t i = 0; i < p->fed_ranges && beyond; i++)
         beyond = p->fed_end[i] <= position;
     if (beyond) {
@@ -1286,13 +1288,20 @@ static void fed_refresh(os64_media_player_t *p)
 {
     if (p->cfg.fed == NULL)
         return;
+    // From a second before the position (read first, under the player's
+    // lock alone), so the ranges copied are the ones readiness reads now,
+    // however many the media holds.
+    os64_lock_acquire(&p->lock);
+    int64_t from = os64_media_clock_read(&p->clock, now_us()) - RATE;
+    os64_lock_release(&p->lock);
     os64_media_time_range_t r[FED_RANGES];
     media_fed_lock(p->cfg.fed);
     bool ended = media_fed_ended(p->cfg.fed);
     double duration = media_fed_duration(p->cfg.fed);
-    uint32_t n = media_fed_buffered(p->cfg.fed, r, FED_RANGES);
+    uint32_t n = media_fed_buffered(p->cfg.fed, from < 0 ? 0 : (from * 62500 / 3), r, FED_RANGES);
     media_fed_unlock(p->cfg.fed);
-    if (n > FED_RANGES)
+    bool more = n > FED_RANGES;
+    if (more)
         n = FED_RANGES;
     int64_t length = duration == duration && duration >= 0 && duration < 1e12
                          ? (int64_t)(duration * OS64_AUDIO_RATE + 0.5)
@@ -1308,6 +1317,7 @@ static void fed_refresh(os64_media_player_t *p)
         p->fed_end[i] = e;
     }
     p->fed_ranges = n;
+    p->fed_more = more;
     p->loaded = ended;
     if (p->length != length) {
         p->length = length;
