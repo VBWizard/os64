@@ -31,7 +31,7 @@ mutants = [
     ('negative-remainder-kept', F, '    if (r < 0) {\n        r += 1000000000;\n        q--;\n    }\n', ''),
     ('no-tolerance', F, '    if (s->tolerance < 1)\n        s->tolerance = 1;', '    s->tolerance = 0;'),
     ('a-tenth-of-the-tolerance', F, 's->tolerance = (int64_t)rate * OS64_MEDIA_FED_SOUND_TOLERANCE_US / 1000000;', 's->tolerance = (int64_t)rate * OS64_MEDIA_FED_SOUND_TOLERANCE_US / 10000000;'),
-    ('no-bound', F, '    s->bound = join_ns > 0 ? os64_media_fed_sound_samples(join_ns, rate) : 0;', '    s->bound = INT64_MAX;'),
+    ('no-bound', F, '    s->bound = join_ns > 0 ? os64_media_fed_sound_samples(join_ns, rate) : 0;', '    s->bound = join_ns > 0 ? INT64_MAX : INT64_MAX;'),
     ('the-target-ignored', F, '        s->count = os64_media_fed_sound_samples(target_ns, rate);\n        s->placed = true;', '        (void)target_ns;'),
     ('the-first-frame-at-zero', F, '    if (!s->placed) {\n        s->count = place;', '    if (!s->placed) {\n        s->count = 0;'),
     ('a-gap-of-the-bound-restarts', F, '        if (d <= s->bound) {', '        if (d < s->bound) {'),

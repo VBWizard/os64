@@ -153,10 +153,13 @@ static void sink_init(void *context, const os64_media_fragment_init_t *init)
         b->refused = r;
         return;
     }
-    b->inits++;
-    b->init_duration = init->duration == 0 || init->movie_timescale == 0
-                           ? __builtin_nan("")
-                           : (double)init->duration / (double)init->movie_timescale;
+    // The first initialization segment a parse completes gives its
+    // duration: the spec takes one only while the duration is unknown, so
+    // two appended together answer as the same two appended apart.
+    if (b->inits++ == 0)
+        b->init_duration = init->duration == 0 || init->movie_timescale == 0
+                               ? __builtin_nan("")
+                               : (double)init->duration / (double)init->movie_timescale;
     if (!b->have_init) {
         b->have_init = true;
         for (uint32_t i = 0; i < init->track_count; i++) {
