@@ -545,3 +545,23 @@ Not for now, on Chris's word; for the list.
   with gplay on one clip, which is how it came up. **PDF** is named by
   Chris for the same door and is not the same work: nothing in os64
   draws one, so it is an arc of its own with a design before it.
+
+## Added 2026-11-27, from Chris's button run on the P5
+
+- **A `<button>` given a width too narrow for its caption wraps it.**
+  yonder draws a button the page leaves unstyled with its own widget, as
+  wide as its caption in the controls' face (fonts.conf's `web.face` and
+  `web.size`). A width the page gives is the box whatever the caption
+  needs, and a caption wider than it is drawn on one line from the left
+  and cut at the right edge. Other browsers lay a `<button>`'s content out
+  as text (white-space normal): the caption wraps at its spaces onto more
+  lines, each centred, and the button grows taller to hold them, its
+  height left to the content unless the page gives one. An `<input
+  type=button>`, `submit` or `reset` keeps its value on one line
+  (white-space pre) and clips it. Found on the P5, whose fonts.conf draws
+  the controls at 21 px in DejaVu Sans Mono Bold, so a caption the test
+  page took for narrower than 300 px needed 328
+  (`tools/pages/button-width.html`, whose rows now take their widths from
+  the caption itself). The row: the widget wraps a `<button>`'s caption to
+  the box it is given, and its height (button_size) follows the lines the
+  given width makes; an input button stays as it is.
