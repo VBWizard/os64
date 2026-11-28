@@ -237,6 +237,7 @@ holds a lock of the session's.
 | `fed_duration` | session, seconds | — | the player's end |
 | `fed_end` | session | — | no more frames: the end of the highest range is `ended` |
 | `fed_close` | session | — | detach: the session and every SB freed |
+| `type_supported` (optional) | MIME type with its parameters, no session | yes / no | whether the host plays a SourceBuffer of that type (libmedia's `os64_media_fed_type_supported`); isTypeSupported and addSourceBuffer say yes only when § 7's table and this both do; absent, the table alone answers |
 | (existing) `play`, `pause`, `seek`, `settings`, `facts` | session | as today | as today; `facts` fills current/future/enough from the ranges and the play position (MS § 5), the two playback-quality counters (`frames_shown`, `frames_dropped`), and `error` = `OS64_DOM_MEDIA_ERR_DECODE` when the decoder refuses a frame; `probed`, `duration` and `seekable` are not read |
 
 | Kept by | What |
@@ -272,6 +273,10 @@ holds a lock of the session's.
 | VideoPlaybackQuality class | `video.c` |
 
 ## 7. isTypeSupported (and addSourceBuffer's type check)
+
+The table below is libdom's own half; a host with § 4's optional
+`type_supported` call is asked too, and the answer is yes only when both
+say yes (Fable, 2026-11-28).
 
 Parse: `type/subtype` (case-insensitive) then `;`-separated parameters
 (`name=value`, value quoted or bare, names case-insensitive). Only `codecs`

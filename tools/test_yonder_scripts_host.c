@@ -53,9 +53,10 @@ yonder_media_t *yonder_media_open(const yonder_media_request_t *r)
     return fake_media_on ? (yonder_media_t *)&fake_media_session : NULL;
 }
 void yonder_media_close(yonder_media_t *m) { (void)m; }
-/* A fed session never opens either (os64/media_fed.h's calls below refuse
- * whatever they are asked), so a page's MediaSource fails to attach, as it
- * does against libmedia's stub. `isTypeSupported` still asks the host. */
+/* A fed session never opens either (yonder_media_open above answers NULL),
+ * so a page's MediaSource fails to attach; os64/media_fed.h's calls, which
+ * yonder's fed provider links against, refuse whatever they are asked, and
+ * the host's type answer is yes for MP4. */
 os64_media_fed_t *yonder_media_fed(yonder_media_t *m) { (void)m; return NULL; }
 double yonder_media_position(yonder_media_t *m) { (void)m; return NAN; }
 bool os64_media_fed_type_supported(const char *type) { return strstr(type, "mp4") != NULL; }
@@ -13920,10 +13921,10 @@ static void fairness_cases(void)
 }
 
 /* THE MSE SWITCH (yonder.conf's `mse`, `--mse=`): off, a page sees no
- * MediaSource at all, as before Media Source Extensions; on, it has them,
- * isTypeSupported asks libdom's table and the host, and a source that
- * cannot attach (a fed session that never opens, as here) fails the
- * element as a source that cannot be fetched. */
+ * MediaSource at all, as before Media Source Extensions; on, it has them
+ * and isTypeSupported answers, and a source that cannot attach (a fed
+ * session that never opens, as here) fails the element as a source that
+ * cannot be fetched. */
 static void mse_switch_cases(void)
 {
     bool was = s_mse;

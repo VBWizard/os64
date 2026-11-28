@@ -285,9 +285,6 @@ static bool mse_entropy(void *opaque, uint8_t *out, size_t length)
     return true;
 }
 
-/* media_fixture's page with Media Source Extensions' switch on (dom.h's
- * media_source, which is what makes the interfaces), randomness for the
- * object URLs, and the fake fed host. */
 /* A host that plays no AAC (its type_supported): libdom's table says yes,
  * this says no. */
 static bool fed_no_aac(void *opaque, const char *type)
@@ -300,6 +297,9 @@ static const os64_dom_fed_provider_t fed_provider_no_aac = {
     fed_remove, fed_set, fed_ranges, fed_duration, fed_end, fed_no_aac,
 };
 
+/* media_fixture's page with Media Source Extensions' switch on (dom.h's
+ * media_source, which is what makes the interfaces), randomness for the
+ * object URLs, and the fake fed host. */
 static DomFixture mse_fixture(DomFixture *slot)
 {
     memset(fed_sessions, 0, sizeof(fed_sessions));

@@ -17057,9 +17057,10 @@ static int media_can_play(void *opaque, const char *type)
 //
 // With the `mse` switch on, a page's MediaSource attaches to a fed session:
 // a media session whose player decodes from a fed media (media.c § A FED
-// SESSION), and every call here is os64/media_fed.h's of the same name on
-// it, on the window thread, holding no lock of yonder's. The session is
-// also the media provider's for play, pause, seek, settings and facts.
+// SESSION). `open` and `close` make and end that session; every other call
+// is os64/media_fed.h's of the same name on its fed media (type_supported
+// on none), on the window thread, holding no lock of yonder's. The session
+// is also the media provider's for play, pause, seek, settings and facts.
 
 static void *fed_open(void *opaque, const os64_html_node_t *node)
 {
@@ -17092,7 +17093,9 @@ static void fed_remove_buffer(void *opaque, void *session, void *buffer)
 static bool fed_evict(void *opaque, void *session, void *buffer, size_t incoming)
 {
     (void)opaque;
-    return os64_media_fed_evict(yonder_media_fed(session), buffer, incoming, yonder_media_position(session));
+    // Before the player has its position, play begins at the start.
+    double play = yonder_media_position(session);
+    return os64_media_fed_evict(yonder_media_fed(session), buffer, incoming, isnan(play) ? 0 : play);
 }
 static bool fed_take(void *opaque, void *session, void *buffer, const uint8_t *bytes, size_t length)
 {

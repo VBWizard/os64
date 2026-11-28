@@ -43,7 +43,9 @@
 // they are done as their last touch of the session, and a player says
 // `finished`; only then is the session freed. LOCK ORDER: s_audio.lock, then the output's, then
 // a player's, then a session's; never the other way, so no call into the
-// output or a player is made with a session's lock held. A bell is rung
+// output or a player is made with a session's lock held. A fed media's own
+// lock (os64/media_fed.h) comes before a player's, and the window holds none
+// of yonder's across a call into it. A bell is rung
 // only with the lock that guards its owner's right to close it held
 // (os64/bell.h): a session's under its lock.
 
@@ -1044,7 +1046,10 @@ static void session_facts(yonder_media_t *m, os64_dom_media_facts_t *out)
         // it fails as the open's code says (open_error); a failure
         // after it is a decode's; the bytes' own failure is the network's.
         bool opened = f.info.sound == OS64_MEDIA_PLAYABLE || f.info.picture == OS64_MEDIA_PLAYABLE;
-        out->error = opened ? OS64_DOM_MEDIA_ERR_DECODE : open_error(f.failure);
+        // A fed player opens once libdom has every initialization segment
+        // (HAVE_METADATA), so any failure of it is the media's: a decode
+        // error, which is what ends a fed source (dom/media.h).
+        out->error = opened || m->fed != NULL ? OS64_DOM_MEDIA_ERR_DECODE : open_error(f.failure);
         os64_lock_acquire(&m->lock);
         if (m->facts.error == 0 && m->open_result == 0) {
             m->open_result = f.failure;
@@ -1162,7 +1167,8 @@ static void session_facts(yonder_media_t *m, os64_dom_media_facts_t *out)
     out->height = out->picture ? f.info.height : 0;
     // A fed media's picture changes size at a quality switch (a new
     // initialization segment), and videoWidth is the current picture's: the
-    // size of the last one converted, the next the screen shows.
+    // size of the last one converted, which runs a few pictures ahead of the
+    // screen (the player's ready queue), so resize may come that early.
     if (out->picture && m->fed != NULL && f.convert.count > 0 && f.convert.src_w > 0 && f.convert.src_h > 0) {
         out->width = f.convert.src_w;
         out->height = f.convert.src_h;
@@ -1204,6 +1210,8 @@ static bool threads_done_locked(const yonder_media_t *m)
 // Frees a session no thread is using any more (threads_done_locked).
 static void session_free(yonder_media_t *m)
 {
+    if (m->fed != NULL)
+        os64_media_fed_close(m->fed);   // the page's hold, if the close never came
     if (m->file >= 0)
         os64_close(m->file);        // the player never reads it again (player_finished)
     yonder_fetch_release(m->job, m->product);
@@ -1447,7 +1455,8 @@ bool yonder_media_report(uint32_t i, char *out, size_t cap)
     os64_media_player_facts_t f = {0};
     if (p != NULL)
         os64_media_player_facts(p, &f);
-    const char *kind = m->blob != NULL ? "blob" : is_scheme(m->url, "file:") ? "file" : "network";
+    const char *kind = is_scheme(m->url, "mediasource:") ? "fed"
+                       : m->blob != NULL ? "blob" : is_scheme(m->url, "file:") ? "file" : "network";
     // The bytes' scalars belong to the decoding thread, which writes them
     // without a lock: read as they stand, for a record, nothing decided
     // on them.
@@ -1495,7 +1504,9 @@ bool yonder_media_failure_take(yonder_media_t *m, int code, char *out, size_t ca
     if (!take)
         return false;
     yonder_media_failure_t f = {
-        .element = m->element, .error = error, .reason = reason, .fetched = !is_scheme(m->named, "file:"),
+        // A fed session (url "mediasource:") fetched nothing, as a file did not.
+        .element = m->element, .error = error, .reason = reason,
+        .fetched = !is_scheme(m->named, "file:") && !is_scheme(m->url, "mediasource:"),
         .status = heard.status, .type = heard.type, .received = heard.received, .range_from = heard.from,
         .said = result != 0 ? os64_media_strerror(result) : "", .format = info.format, .sound = info.codec,
         .picture = info.picture_codec, .sound_unplayable = info.sound == OS64_MEDIA_UNPLAYABLE,

@@ -53,8 +53,7 @@ typedef struct {
 // is recorded by (yonder_media_failure_take), copied; NULL takes the
 // element's kind and the address. `fed`: the session plays a fed media
 // (os64/media_fed.h, a page's MediaSource) that it makes and holds the
-// page's hold of, so there is nothing to fetch, and `url` (the MediaSource's
-// object URL) only names it in the record.
+// page's hold of, so there is nothing to fetch and `url` is never opened.
 typedef struct {
     const char *url;
     const char *page_url;

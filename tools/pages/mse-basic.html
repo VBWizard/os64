@@ -10,7 +10,8 @@
   What to look for: the flash and the beep in step (the clip is the sync
   dial's, tools/pages/sync-720p60.mp4), the controls' bar filling, and once a
   second the buffered ranges and getVideoPlaybackQuality's counts in the
-  log. PASS once `ended` fires with all ten seconds buffered and no error.
+  log. PASS once `ended` fires with all ten seconds buffered, pictures
+  shown, and no error.
   Unmute with the controls to hear it.
 -->
 <style>
@@ -41,7 +42,7 @@
     v.addEventListener('ended', () => {
       const q = v.getVideoPlaybackQuality();
       const whole = v.buffered.length === 1 && v.buffered.start(0) < 0.1 && v.buffered.end(0) > 9.9;
-      MSE.verdict(whole && !v.error, 'ended at ' + v.currentTime.toFixed(2) + ', buffered ' + MSE.ranges(v.buffered) +
+      MSE.verdict(whole && q.totalVideoFrames > 0 && !v.error, 'ended at ' + v.currentTime.toFixed(2) + ', buffered ' + MSE.ranges(v.buffered) +
                   ', pictures ' + q.totalVideoFrames + ', dropped ' + q.droppedVideoFrames);
     });
     v.addEventListener('error', () => MSE.verdict(false, 'the element failed, code ' + v.error.code));

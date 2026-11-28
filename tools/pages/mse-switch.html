@@ -10,7 +10,7 @@
 
   What to look for: at four seconds the picture sharpens with no stall,
   `resize` says 854x480 then 1280x720, and the sound runs on unbroken. PASS
-  once `ended` fires having seen both sizes.
+  once `ended` fires having seen 854x480 and then 1280x720.
 -->
 <style>
   body { font: 16px sans-serif; margin: 16px; }
@@ -23,8 +23,8 @@
 <script src="mse-common.js"></script>
 <script>
   const v = document.getElementById('v');
-  const sizes = new Set();
-  v.addEventListener('resize', () => sizes.add(v.videoWidth + 'x' + v.videoHeight));
+  const sizes = [];
+  v.addEventListener('resize', () => sizes.push(v.videoWidth + 'x' + v.videoHeight));
   MSE.watch(v, 40);
   (async () => {
     const [low, high, sound] = await Promise.all([MSE.clip('sync-fed-480p'), MSE.clip('sync-fed-720p'),
@@ -40,8 +40,9 @@
     MSE.note('720p from 4 s: buffered ' + MSE.ranges(v.buffered));
     ms.endOfStream();
     v.addEventListener('ended', () => {
-      const both = sizes.has('854x480') && sizes.has('1280x720');
-      MSE.verdict(both && !v.error, 'ended at ' + v.currentTime.toFixed(2) + ', sizes seen ' + [...sizes].join(' then '));
+      const first = sizes.indexOf('854x480'), then = sizes.lastIndexOf('1280x720');
+      MSE.verdict(first >= 0 && then > first && !v.error, 'ended at ' + v.currentTime.toFixed(2) + ', sizes seen ' +
+                  sizes.join(' then '));
     });
     v.addEventListener('error', () => MSE.verdict(false, 'the element failed, code ' + v.error.code));
   })().catch(e => MSE.verdict(false, e.message));
