@@ -118,6 +118,7 @@ page_fault_handler:
     mov rdx, [rsp + 136]     # Faulting RIP
     mov rax, cr2
     mov rdi, rax
+    xor ecx, ecx             # no frame to hand over: nothing resumes elsewhere on this path
 
     call handle_page_fault
 

@@ -83,12 +83,6 @@ void exception_report_registers(const exception_context_t *ctx, bool dying);
 // sends the rest to the wire and the log.
 void exception_glass_mute(bool mute);
 
-// The context the shared prologue registered for THIS core, or NULL when the
-// running exception arrived through the old (EXCOLD) stubs — which is exactly
-// the question the shared demand pager asks to decide which reporter owns a
-// fatal fault. Set on dispatch entry, cleared when a resolved fault returns.
-exception_context_t *exception_current_context(void);
-
 // The wire lock: exactly one core narrates at a time. Take it around a WHOLE
 // multi-line report (fault reports, panics, probe dumps), release when the
 // story ends — and always release before halting, so the next core can speak.
