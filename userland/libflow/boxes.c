@@ -259,6 +259,29 @@ bool f_audio_controls(const flow_env_t *env, const os64_html_node_t *n)
     return env->media && is(n, OS64_HTML_TAG_AUDIO) && os64_html_attr(n, "controls") != NULL;
 }
 
+// A box the face's widget fills has a size and no ratio: a page that
+// widens a button, a field, a list or an audio's player leaves it as tall
+// as it was, as other browsers do. An image input is a picture, and keeps
+// its picture's ratio.
+bool f_shapeless(const flow_env_t *env, const os64_html_node_t *n)
+{
+    if (f_audio_controls(env, n))
+        return true;
+    if (n->ns != OS64_HTML_NS_HTML)
+        return false;
+    switch (n->tag) {
+    case OS64_HTML_TAG_BUTTON: case OS64_HTML_TAG_SELECT: case OS64_HTML_TAG_TEXTAREA:
+    case OS64_HTML_TAG_METER: case OS64_HTML_TAG_PROGRESS:
+        return true;
+    case OS64_HTML_TAG_INPUT: {
+        const os64_html_attr_t *type = os64_html_attr(n, "type");
+        return type == NULL || type->value == NULL || !f_eq_nocase(type->value, "image");
+    }
+    default:
+        return false;
+    }
+}
+
 static bool replaced(const B *b, const os64_html_node_t *n)
 {
     const FStyled *s = styled(b, n);

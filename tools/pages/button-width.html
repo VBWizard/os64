@@ -1,0 +1,55 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Buttons as wide as their captions</title>
+<!--
+  A button the page leaves alone is drawn by yonder's own widget, and is as
+  wide as its caption needs, as other browsers draw it. Each row names what
+  to see. The controls' face is the machine's (fonts.conf's web.face and
+  web.size), so the two rows given a width take it from the first row's
+  caption once the page has loaded: one 120 px wider than the caption needs,
+  one half as wide. Once loaded, the page prints the caption's width and
+  each button's box (its getBoundingClientRect) on yonder's output, so a run
+  leaves numbers beside what the glass showed.
+-->
+<style>
+  body { font: 16px sans-serif; margin: 16px; }
+  .row { margin: 12px 0; }
+  .note { color: #555; font-size: 14px; }
+</style>
+<h1>Buttons as wide as their captions</h1>
+
+<div class="row"><button id="fit">Full screen, then remove</button>
+  <div class="note">A long caption: every word shows, "remove" included.</div></div>
+
+<div class="row"><button>Go</button>
+  <div class="note">A short caption: the button is narrow, not the old fixed width.</div></div>
+
+<div class="row"><input type="button" value="">
+  <div class="note">An input with an empty value: yonder shows "Button" in it.</div></div>
+
+<div class="row"><input type="submit">
+  <div class="note">A submit with no value: it says "Submit".</div></div>
+
+<div class="row"><button id="wide" style="width: 600px">Full screen, then remove</button>
+  <div class="note">A width the page gave, 120 pixels wider than the caption needs: the caption centred with room either side, no taller than the others.</div></div>
+
+<div class="row"><button id="cut" style="width: 120px">Full screen, then remove</button>
+  <div class="note">A width the page gave, half what the caption needs: the button is that wide and no taller, its caption begun at the left and cut at the right edge (other browsers wrap it onto a second line: YONDER_HONEY_DO.md).</div></div>
+
+<div class="row"><button>Full screen</button> <button>Full screen, then remove</button>
+  <div class="note">Side by side, as on the full screen page: each as wide as its own caption.</div></div>
+
+<script>
+  addEventListener('load', () => {
+    const caption = document.getElementById('fit').getBoundingClientRect().width;
+    document.getElementById('wide').style.width = (caption + 120) + 'px';
+    document.getElementById('cut').style.width = Math.round(caption / 2) + 'px';
+    console.log('button-width: the caption needs ' + caption.toFixed(1) + ' px');
+    const all = document.querySelectorAll('button, input');
+    all.forEach((b, i) => {
+      const r = b.getBoundingClientRect();
+      console.log('button-width: ' + i + ' "' + (b.textContent || b.value || b.type) + '" ' +
+                  r.left.toFixed(1) + ',' + r.top.toFixed(1) + ' ' + r.width.toFixed(1) + 'x' + r.height.toFixed(1));
+    });
+  });
+</script>
