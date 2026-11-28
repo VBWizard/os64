@@ -1419,8 +1419,32 @@ static int64_t decoding_thread(void *arg)
         r = os64_media_next(p->media, accept, pcm, CHUNK_FRAMES, &got);
         os64_media_counts_t counts;
         os64_media_counts(p->media, &counts);
+        // A fed media's end and duration are the page's (os64/media_fed.h),
+        // read under its lock before the player's (the fed lock comes first).
+        bool fed_ended = false;
+        double fed_duration = 0;
+        if (p->cfg.fed != NULL) {
+            media_fed_lock(p->cfg.fed);
+            fed_ended = media_fed_ended(p->cfg.fed);
+            fed_duration = media_fed_duration(p->cfg.fed);
+            media_fed_unlock(p->cfg.fed);
+        }
         os64_lock_acquire(&p->lock);
         p->media_counts = counts;
+        if (p->cfg.fed != NULL) {
+            // Loaded once nothing more is coming, which is what lets
+            // `enough` hold at the end; the length is the duration the page
+            // set (unknown or no end: -1).
+            int64_t length = fed_duration == fed_duration && fed_duration >= 0 && fed_duration < 1e12
+                                 ? (int64_t)(fed_duration * OS64_AUDIO_RATE + 0.5)
+                                 : -1;
+            if (p->loaded != fed_ended || p->length != length) {
+                p->loaded = fed_ended;
+                p->length = length;
+                p->length_us = now_us();
+                look(p);
+            }
+        }
         if (r < 0) {
             if (got.kind == OS64_MEDIA_GOT_PICTURE && got.picture != NULL)
                 collect_add(&c, got.picture);
@@ -1476,11 +1500,12 @@ static int64_t decoding_thread(void *arg)
             // which at the end of a file there is none of, so its last
             // pictures are never decoded. Within the slack the stated
             // length stands (streams end a frame or two from their
-            // container).
+            // container). A fed media's length is the page's duration, which
+            // its end never corrects.
             int64_t heard_end = p->has_sound && !p->has_picture && from_start ? run_sound_end : -1;
             bool corrected = heard_end > 0 && p->length >= 0 &&
                              (heard_end - p->length > LENGTH_SLACK || p->length - heard_end > LENGTH_SLACK);
-            if (all_done && run_end > 0 && (p->length < 0 || corrected)) {
+            if (all_done && run_end > 0 && (p->length < 0 || corrected) && p->cfg.fed == NULL) {
                 p->length = corrected ? heard_end : run_end;
                 p->length_us = now_us();
                 look(p);
