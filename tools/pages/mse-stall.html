@@ -39,7 +39,17 @@
     await MSE.append(vb, MSE.init(video));
     await MSE.append(ab, MSE.init(sound));
     await add(0, 2);
-    await new Promise(r => v.addEventListener('waiting', () => { stalledAt = v.currentTime; r(); }, {once: true}));
+    // The stall at the end of what was appended: a `waiting` as play
+    // begins (before the first picture is ready) is not it.
+    await new Promise(r => {
+      const waiting = () => {
+        if (v.currentTime < 3) return;
+        stalledAt = v.currentTime;
+        v.removeEventListener('waiting', waiting);
+        r();
+      };
+      v.addEventListener('waiting', waiting);
+    });
     MSE.note('stalled at ' + stalledAt.toFixed(2) + ': buffered ' + MSE.ranges(v.buffered));
     await new Promise(r => setTimeout(r, 2000));
     v.addEventListener('playing', () => { resumed = true; }, {once: true});

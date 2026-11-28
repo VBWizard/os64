@@ -1160,6 +1160,13 @@ static void session_facts(yonder_media_t *m, os64_dom_media_facts_t *out)
     out->picture = m->picture && f.info.picture == OS64_MEDIA_PLAYABLE;
     out->width = out->picture ? f.info.width : 0;
     out->height = out->picture ? f.info.height : 0;
+    // A fed media's picture changes size at a quality switch (a new
+    // initialization segment), and videoWidth is the current picture's: the
+    // size of the last one converted, the next the screen shows.
+    if (out->picture && m->fed != NULL && f.convert.count > 0 && f.convert.src_w > 0 && f.convert.src_h > 0) {
+        out->width = f.convert.src_w;
+        out->height = f.convert.src_h;
+    }
     // With loop on the player runs on from its start (os64_media_player_loop)
     // and never ends, so libdom hears no end.
     out->ended = f.state == OS64_MEDIA_PLAYER_ENDED;
