@@ -31,6 +31,8 @@
 //     to the end without waiting.
 //  7  A RESYNC IN THE MIDDLE OF A GROUP drops pictures to the next keyframe,
 //     which comes out next, and goes on to the end.
+//  8  A REMOVAL PAST WHERE A DECODER FALLEN BEHIND IS READING: its cursors
+//     resync on to the first data after the cut, and it plays to the end.
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -526,6 +528,59 @@ static void resync_mid_group(void)
     os64_media_fed_close(fed);
 }
 
+// Case 8: a removal past where a decoder fallen behind is reading (a
+// player far behind, the page removing what is behind ITS position):
+// 30 pictures of the 720p and its sound decoded, then [0 s, 4 s) of both
+// removed. Each cursor resyncs, on to the first data after the cut, and it
+// plays on to the end without waiting.
+static void remove_under_decoder(void)
+{
+    os64_media_fed_t *fed;
+    os64_media_fed_create(&fed);
+    media_fed_hold(fed, NULL);
+    os64_media_fed_buffer_t *v = os64_media_fed_add(fed, "video/mp4; codecs=\"avc1.640020\"");
+    os64_media_fed_buffer_t *a = os64_media_fed_add(fed, "audio/mp4; codecs=\"mp4a.40.2\"");
+    append(fed, v, &s_720, s_720.init[0], s_720.init[1]);
+    append(fed, a, &s_a44, s_a44.init[0], s_a44.init[1]);
+    for (int i = 0; i < s_720.count; i++) append_frag(fed, v, &s_720, i);
+    for (int i = 0; i < s_a44.count; i++) append_frag(fed, a, &s_a44, i);
+    os64_media_fed_end(fed);
+    os64_media_t *m = open_fed(fed);
+    if (m == NULL) return;
+    int16_t pcm[2 * 4096];
+    int pictures = 0, waits = 0;
+    int64_t last_at = -1;
+    bool ended = false, removed = false;
+    while (!ended && waits < 3) {
+        if (!removed && pictures == 30) {
+            os64_media_fed_result_t res;
+            os64_media_fed_remove(fed, v, 0, 4.0, &res);
+            os64_media_fed_remove(fed, a, 0, 4.0, &res);
+            os64_media_fed_end(fed);            // a removal reopens an ended source
+            removed = true;
+        }
+        os64_media_got_t got;
+        int r = os64_media_next(m, OS64_MEDIA_WANT_SOUND | OS64_MEDIA_WANT_PICTURE, pcm, 4096, &got);
+        CHECK(r == 0, "remove under: next %d", r);
+        if (r != 0) break;
+        if (got.kind == OS64_MEDIA_GOT_END) ended = true;
+        else if (got.kind == OS64_MEDIA_GOT_WAIT) waits++;
+        else if (got.kind == OS64_MEDIA_GOT_PICTURE) {
+            pictures++;
+            last_at = got.picture->at;
+            os64_media_picture_release(m, got.picture);
+        }
+    }
+    os64_media_fed_counts_t c;
+    os64_media_fed_counts(fed, &c);
+    CHECK(ended && waits == 0 && c.resyncs >= 1, "remove under: on to the end (ended %d, waits %d, resyncs %llu)",
+          ended, waits, (unsigned long long)c.resyncs);
+    CHECK(last_at > 9 * 48000, "remove under: the last picture near the end (%lld)", (long long)last_at);
+    os64_media_close(m);
+    media_fed_release(fed);
+    os64_media_fed_close(fed);
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 3) { printf("usage: test_media_fed_host <pages> <crcs>\n"); return 2; }
@@ -543,6 +598,7 @@ int main(int argc, char **argv)
     two_inits();
     switch_over_buffered();
     resync_mid_group();
+    remove_under_decoder();
     printf("media fed: %u checks, %u failed\n", s_checks, s_failed);
     return s_failed != 0;
 }

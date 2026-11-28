@@ -144,6 +144,7 @@ typedef struct {
     os64_media_track_cursor_t cursor;
     bool seeked;                     // the cursor is placed; else it is to be, at seek_ns
     int64_t seek_ns;
+    bool forward;                    // a resync's placing: the first data at or after seek_ns, however far
     bool pending;                    // `frame` taken from the cursor, not yet a packet (it holds its slab)
     os64_media_track_frame_t frame;
     bool done;                       // its input has ended (the end, or its buffer gone)
@@ -1067,9 +1068,12 @@ void os64_media_counts(const os64_media_t *m, os64_media_counts_t *out)
 //   target, the sound's FED_RUN_IN of its frames earlier (the decoder's
 //   run-in), and starts the sound's placement at the target, which cuts
 //   what comes before it. A cursor that cannot be placed (unbuffered) is
-//   placed at each read until it can. A cursor that loses its place
+//   placed at each read until it can, or at the first range starting
+//   within the join after the target. A cursor that loses its place
 //   (RESYNC: its frames removed under it) is placed again where its kind
-//   stands, its decoder flushed.
+//   stood, its decoder flushed, or at the first data after that, however
+//   far, since what was removed under a decoder fallen behind will not come
+//   back.
 // - A kind ENDS when its cursor has nothing to read after endOfStream, or
 //   its buffer is gone; an append or removal reopens the fed media, and a
 //   seek reads an ended kind again.
@@ -1132,15 +1136,20 @@ static int fed_pull_locked(os64_media_t *m, int k)
             // the seek lands (a picture with B-frames starts a frame or two
             // after 0 when its file has no edit list), as `buffered` joins
             // a gap that narrow and other browsers seek across it.
+            // A resync goes on to the first data after its place, however
+            // far: what it stood on was removed under a decoder that had
+            // fallen behind, and nothing will come back there.
             os64_media_time_range_t r[8];
             uint32_t n = os64_media_track_ranges(t, r, 8);
             int64_t at = OS64_MEDIA_NO_TIME;
             for (uint32_t i = 0; i < n && i < 8 && at == OS64_MEDIA_NO_TIME; i++)
-                if (r[i].start > f->seek_ns && r[i].start - f->seek_ns <= 2 * t->interbuffer) at = r[i].start;
+                if (r[i].start > f->seek_ns && (f->forward || r[i].start - f->seek_ns <= 2 * t->interbuffer))
+                    at = r[i].start;
             if (at == OS64_MEDIA_NO_TIME || os64_media_track_seek(t, at, &f->cursor) != OS64_MEDIA_TRACK_FRAME)
                 return 0;               // not buffered there yet
         }
         f->seeked = true;
+        f->forward = false;
     }
     int r = os64_media_track_next(t, &f->cursor, &f->frame);
     if (r == OS64_MEDIA_TRACK_FRAME) {
@@ -1170,6 +1179,7 @@ static void fed_resync(os64_media_t *m, int k)
     fed_kind_t *f = &m->fk[k];
     f->resync = false;
     f->seeked = false;
+    f->forward = true;
     list_clear(&m->list[k]);
     m->flushed[k] = false;
     if (k == KIND_SOUND) {
@@ -1377,7 +1387,7 @@ static int fed_seek(os64_media_t *m, int64_t frame)
     m->flushed[KIND_SOUND] = m->flushed[KIND_PICTURE] = false;
     for (int k = 0; k < 2; k++) {
         fed_kind_t *f = &m->fk[k];
-        f->done = f->resync = f->seeked = false;
+        f->done = f->resync = f->seeked = f->forward = false;
         f->seek_ns = target;
         f->position_ns = target;
     }
