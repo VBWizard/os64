@@ -79,12 +79,13 @@ static uint64_t take(in_t *in, int bytes)
 static int64_t take_time(in_t *in)
 {
     // Mostly small, sometimes anything: a byte chooses the scale.
+    // Built unsigned, so that every pattern, INT64_MIN's included, is a value.
     uint8_t scale = (uint8_t)take(in, 1);
-    int64_t v = (int64_t)take(in, 4);
-    if (scale & 0x80) v = (int64_t)take(in, 8);          // any 64-bit pattern
+    uint64_t v = take(in, 4);
+    if (scale & 0x80) v = take(in, 8);                   // any 64-bit pattern
     else if (scale & 0x40) v *= 1000;
-    if (scale & 1) v = -v;
-    return v;
+    if (scale & 1) v = 0 - v;
+    return (int64_t)v;
 }
 
 static void check(os64_media_buffer_t *b)
