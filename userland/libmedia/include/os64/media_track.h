@@ -60,6 +60,16 @@
 // functions see every slab made and freed, the caller can count the slab
 // bytes really held beside the frame bytes the buffer counts.
 //
+// PREROLL: a sound frame dropped because it starts before appendWindowStart
+// is held aside, and kept, flagged OS64_MEDIA_FRAME_PRELOAD (decoded, its
+// output discarded), ahead of the next kept frame of its track when all of
+// these hold: that frame is a sound frame it ends at (within a
+// microsecond); the preload does not decode after it; and no kept frame of
+// the track decodes after the preload and no later than it. Otherwise it is
+// nobody's. AAC overlaps each frame's transform with the one before, so
+// without its priming frame the frames after it sound different. A preload
+// goes wherever the frame after it goes, and is never in `buffered`.
+//
 // THE PLAYER'S CURSOR reads a track in decode order, from a range's end on
 // into the range the join joins to it (media_track.c's opening comment
 // says why ranges never merge). Overlaps, removes and

@@ -1305,6 +1305,14 @@ static void scripted(void)
     }
     END();
 
+    // A picture gets no preload, even where one would fit: pictures every
+    // one a random access point, starting a frame before the window.
+    START("no preload for a picture", 1, 90000, 0);
+    p.b.window_start = p.m.ws = 0;
+    n = make_group(f, 0, -3000, 10, 3000, 1, 0, 100);
+    pair_frames(&p, 0, f, n);
+    END();
+
     // A muxed append's bytes shared by the tracks' quotas.
     START("muxed quota shares", 2, 90000, 48000);
     p.b.track[0].quota = p.m.t[0].quota = 30000;
