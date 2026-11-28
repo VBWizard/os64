@@ -24,7 +24,8 @@
 // position, never from how far the decoder has got: `current` while the
 // position is in a range, `future` with a quarter second buffered past it,
 // `enough` with three seconds, each also once the range reaches the end
-// after endOfStream. A playing player whose position leaves what is
+// after endOfStream, or the position is past the last range then (all
+// there will be is there). A playing player whose position leaves what is
 // buffered (before the end) BUFFERS, its clock held there, and plays on
 // once `future` holds again, as other browsers fire `waiting` only when a
 // buffered range runs out. The player's length is the duration last given.

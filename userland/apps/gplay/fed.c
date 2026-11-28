@@ -30,6 +30,7 @@ struct gplay_fed {
     bool quit, want_switch, want_evict;
     os64_media_fed_counts_t counts;
     uint32_t appends, switches, removes;
+    bool end_said;                      // the feeder's `ended`, for the readout
 };
 
 static uint8_t *slurp(const char *path, int64_t *size)
@@ -213,6 +214,7 @@ static int64_t feeder(void *arg)
         os64_media_fed_counts(g->fed, &c);
         os64_lock_acquire(&g->lock);
         g->counts = c;
+        g->end_said = g->ended;
         os64_lock_release(&g->lock);
         os64_sleep(50);
     }
@@ -252,10 +254,12 @@ void gplay_fed_line(gplay_fed_t *g, char *line, size_t cap)
     os64_media_fed_counts_t c = g->counts;
     uint32_t appends = g->appends, switches = g->switches, removes = g->removes;
     int current = g->current;
+    bool end = g->end_said;
+    int64_t at = g->position;
     os64_lock_release(&g->lock);
-    os64_snprintf(line, cap, "fed %s: appends %u switches %u removes %u; reopens %lu resyncs %lu; slabs %lu KB",
-                  current ? "small" : "large", appends, switches, removes, (unsigned long)c.reopens,
-                  (unsigned long)c.resyncs, (unsigned long)(c.slab_bytes / 1024));
+    os64_snprintf(line, cap, "fed %s: appends %u sw %u rm %u%s; reopens %lu resyncs %lu; %lu KB; at %ld ms",
+                  current ? "small" : "large", appends, switches, removes, end ? ", end" : "", (unsigned long)c.reopens,
+                  (unsigned long)c.resyncs, (unsigned long)(c.slab_bytes / 1024), (long)(at * 1000 / RATE));
 }
 
 void gplay_fed_close(gplay_fed_t *g)

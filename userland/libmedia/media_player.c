@@ -398,8 +398,16 @@ static int64_t fed_ahead(const os64_media_player_t *p, int64_t position, bool *l
 static uint32_t fed_readiness(const os64_media_player_t *p, int64_t now)
 {
     bool last;
-    int64_t ahead = fed_ahead(p, os64_media_clock_read(&p->clock, now), &last);
+    int64_t position = os64_media_clock_read(&p->clock, now);
+    int64_t ahead = fed_ahead(p, position, &last);
     bool to_end = last && p->loaded;
+    // Ended, and at or past the end of what is held: all there will be is
+    // there. A player that buffered there before the end was said plays on
+    // into its end.
+    if (p->loaded && p->fed_ranges > 0 && position >= p->fed_end[p->fed_ranges - 1]) {
+        ahead = 0;
+        to_end = true;
+    }
     bool current = p->probed && p->failure == 0 && ahead >= 0;
     bool future = current && (ahead >= FED_FUTURE || to_end);
     bool enough = future && (ahead >= FED_ENOUGH || to_end);
