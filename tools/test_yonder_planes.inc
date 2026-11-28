@@ -129,6 +129,7 @@ static const char *const kPlanePage =
     "#v{position:absolute;left:40px;top:40px;width:320px;height:180px}</style><video id=v></video>";
 
 static void plane_fullscreen_container(void);
+static void plane_strip_cases(void);
 static void plane_cases(void)
 {
     Video *v = &s_videos[0];
@@ -1011,7 +1012,121 @@ static void plane_cases(void)
         check(os64_memcmp(&whole, &part, sizeof(part)) == 0, "planes: after its poster was painted, the whole box");
     }
     plane_drop();
+    plane_strip_cases();
     plane_fullscreen_container();
+}
+
+/* A <video controls>' strip and buffering mark over a placed video
+ * (VIDEO.md § 8 on VIDEO_PLANE.md § 5.2). The strip is a widget libui
+ * paints after the view, its band black at BAND_ALPHA; the mark is painted
+ * with the box (video_mark). Both are a layer over the picture inside the
+ * edit's overlays, at the coverage they were drawn with; a strip its rules
+ * hide leaves no overlay where it was. */
+static void plane_strip_cases(void)
+{
+    Video *v = &s_videos[0];
+    plane_page("<!doctype html><style>body{margin:0;background:#123}"
+               "#v{position:absolute;left:40px;top:40px;width:320px;height:180px}</style>"
+               "<video id=v controls></video>");
+    players_build();
+    page_widgets_chain();
+    check(g.nplayers == 1 && g.players[0]->video && g.players[0]->p.over_picture,
+          "planes, strip: the video's strip is a player over its picture");
+    if (g.nplayers != 1) {
+        plane_drop();
+        return;
+    }
+    Player *pl = g.players[0];
+    pl->p.view.paused = true;                   /* no duration: the band has no bar */
+    pl->strip.state = YONDER_STRIP_PINNED;
+    pl->strip.mark = YONDER_MARK_SHOWN;
+    players_place();
+    os64_ui_widget_t *w = &pl->p.w;
+    check(!w->hidden && w->bounds.h > 0, "planes, strip: drawn along the foot of the box");
+    os64_gui_plane_edit_t edits[OS64_GUI_PLANE_EDITS_MAX];
+    planes_prepare();
+    os64_gui_rect_t d = plane_render();
+    w->cls->paint(w, &plane_screen, &g.ui.theme);  /* the render's widget, after the view */
+    planes_judge(&d, 0, 1);
+    planes_hole(&d, 1);
+    os64_gui_rect_t all = d;
+    uint32_t n = planes_edits(edits, &all, true, edit_clips, &nedit_clips);
+    check(v->place && n == 1 && !edits[0].hide && edits[0].noverlays >= 1,
+          "planes, strip: placed, with overlays in the edit");
+    bool overlaid = true;
+    {
+        /* The mark's middle dot (light, opaque) and its square beside it
+         * (black at 160), at the box's centre. */
+        int32_t cx = v->clip.x + v->clip.w / 2, cy = v->clip.y + v->clip.h / 2;
+        int32_t side = (int32_t)zoomed_px(56, g.page.laid_zoom);
+        uint32_t dot = plane_screen.surf.pixels[(size_t)cy * 800 + cx];
+        uint32_t square = plane_screen.surf.pixels[(size_t)(cy - side / 2 + 2) * 800 + cx];
+        check(dot == 0xfff2f2f2u && (square >> 24) >= 159 && (square >> 24) <= 161 && (square & 0xffffffu) == 0,
+              "planes, strip: the buffering mark's pixels are in the hole: its dot opaque, its square at 160");
+        int32_t pts[2][2] = {{cx, cy}, {cx, cy - side / 2 + 2}};
+        for (int32_t k = 0; k < 2; k++) {
+            bool in = false;
+            for (uint32_t o = 0; o < edits[0].noverlays && !in; o++)
+                in = pts[k][0] >= edits[0].overlay[o].x && pts[k][0] < edits[0].overlay[o].x + edits[0].overlay[o].w &&
+                     pts[k][1] >= edits[0].overlay[o].y && pts[k][1] < edits[0].overlay[o].y + edits[0].overlay[o].h;
+            overlaid &= in;
+        }
+    }
+    {
+        /* The band where the bar would be: plain band, black at 160. */
+        yonder_player_parts_t parts;
+        yonder_player_parts(w->bounds, &parts);
+        int32_t bx = parts.seek.x + parts.seek.w / 2, by = w->bounds.y + 1;
+        uint32_t band = plane_screen.surf.pixels[(size_t)by * 800 + bx];
+        check(parts.seek.w > 0 && (band >> 24) >= 159 && (band >> 24) <= 161 && (band & 0xffffffu) == 0,
+              "planes, strip: the band in the hole at coverage 160");
+        bool in = false;
+        for (uint32_t o = 0; o < edits[0].noverlays && !in; o++)
+            in = bx >= edits[0].overlay[o].x && bx < edits[0].overlay[o].x + edits[0].overlay[o].w &&
+                 by >= edits[0].overlay[o].y && by < edits[0].overlay[o].y + edits[0].overlay[o].h;
+        overlaid &= in;
+    }
+    check(overlaid, "planes, strip: the mark and the band inside the edit's overlays");
+    {
+        /* The picture's corner, under neither: the mark's square alone is
+         * noted over the picture, not the whole clip. */
+        int32_t qx = v->clip.x + 10, qy = v->clip.y + 10;
+        bool in = false;
+        for (uint32_t o = 0; o < edits[0].noverlays && !in; o++)
+            in = qx >= edits[0].overlay[o].x && qx < edits[0].overlay[o].x + edits[0].overlay[o].w &&
+                 qy >= edits[0].overlay[o].y && qy < edits[0].overlay[o].y + edits[0].overlay[o].h;
+        check(!in && plane_screen.surf.pixels[(size_t)qy * 800 + qx] == 0,
+              "planes, strip: the picture's corner, away from both, is no overlay and see-through");
+    }
+    planes_commit();
+    planes_release();
+
+    /* The strip hidden by its rules and the mark gone: the next paint's
+     * overlays meet neither the band nor the box's middle. */
+    os64_gui_rect_t band = w->bounds;
+    pl->strip.state = YONDER_STRIP_HIDDEN;
+    pl->strip.mark = YONDER_MARK_NONE;
+    players_place();
+    check(w->hidden, "planes, strip: hidden by its rules");
+    planes_prepare();
+    d = plane_render();
+    planes_judge(&d, 0, 1);
+    planes_hole(&d, 1);
+    all = d;
+    n = planes_edits(edits, &all, true, edit_clips, &nedit_clips);
+    bool met = false;
+    for (uint32_t e = 0; e < n; e++)
+        for (uint32_t o = 0; o < edits[e].noverlays; o++) {
+            os64_gui_rect_t m;
+            met |= os64_rect_intersect(edits[e].overlay[o], band, &m) ||
+                   os64_rect_intersect(edits[e].overlay[o],
+                                       (os64_gui_rect_t){v->clip.x + v->clip.w / 2 - 28, v->clip.y + v->clip.h / 2 - 28, 56, 56},
+                                       &m);
+        }
+    check(v->place && !met, "planes, strip: a hidden strip and a gone mark leave no overlay");
+    planes_commit();
+    planes_release();
+    plane_drop();
 }
 
 /* A CONTAINER full screen (the web's common shape: a player's div, not its
