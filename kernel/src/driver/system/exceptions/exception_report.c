@@ -18,6 +18,7 @@
 #include "exceptions.h"
 #include "smp.h"
 #include "smp_core.h"
+#include "scheduler.h"  // Last scheduler return target for the faulting core.
 #include "msr.h"        // rdmsr64 — the GS_BASE sanity check
 #include "driver/system/x86_64.h"   // rdtsc — the wire lock's barge timer
 #include "paging.h"
@@ -273,8 +274,8 @@ static void exc_pager_line(void)
 // CR3, and those two only describe the same memory in the shared upper half.
 // A garbage RBP pointing at a lower-half VA could pass the walk (the vestigial
 // low identity window is mapped in kKernelPML4) and then read whatever the
-// faulting task maps there — or nothing. Ring-0 chains never legitimately
-// leave the upper half, so refusing the lower half loses no real frames.
+// faulting task maps there. Task-local kernel stacks use the separate
+// bounded physical alias check in exc_read_stack_word().
 static bool exc_kernel_half(uint64_t address)
 {
 	return (address >> 47) == 0x1FFFF;
@@ -293,6 +294,51 @@ static bool exc_readable(uint64_t address)
 	}
 	uintptr_t phys = paging_walk_paging_table((pt_entry_t *)kKernelPML4v, address);
 	return phys != 0 && phys != 0xbadbadba;
+}
+
+typedef struct {
+	uintptr_t base, phys;
+} exc_task_stack_t;
+
+static exc_task_stack_t exc_task_stack(const exception_context_t *ctx,
+                                       const thread_t *thread, const task_t *task, uint64_t cr3)
+{
+	// Match the live address space and trust only the recorded kernel
+	// stack allocation. The general-purpose fault addresses are untrusted.
+	if ((ctx->cs & 3) != 0 ||
+	    !exc_readable((uintptr_t)&task->pml4) || (uintptr_t)task->pml4 != (cr3 & PAGE_ADDRESS_MASK) ||
+	    !exc_readable((uintptr_t)&thread->esp0BaseV) ||
+	    !exc_readable((uintptr_t)&thread->esp0BaseP) ||
+	    !exc_readable((uintptr_t)&thread->esp0Size))
+		return (exc_task_stack_t){0};
+
+	uintptr_t base = thread->esp0BaseV;
+	uintptr_t phys = thread->esp0BaseP;
+	if (thread->esp0Size != THREAD_KERNEL_STACK_SIZE || base < PAGE_SIZE ||
+	    base > USER_CANONICAL_MAX - THREAD_KERNEL_STACK_SIZE ||
+	    phys == 0 || phys > UINT64_MAX - kHHDMOffset - THREAD_KERNEL_STACK_SIZE ||
+	    ((base | phys) & (PAGE_SIZE - 1)) != 0)
+		return (exc_task_stack_t){0};
+	return (exc_task_stack_t){ .base = base, .phys = phys };
+}
+
+static bool exc_read_stack_word(exc_task_stack_t stack, uint64_t va, uint64_t *word)
+{
+	if (stack.base != 0 && va >= stack.base &&
+	    va - stack.base <= THREAD_KERNEL_STACK_SIZE - sizeof(*word)) {
+		// Stack frames are contiguous allocator memory. Check the alias
+		// before reading in case the recorded allocation is stale.
+		uintptr_t phys = stack.phys + (va - stack.base);
+		uintptr_t alias = PHYS_TO_VIRT(phys);
+		if ((alias & 7) != 0 || !exc_kernel_half(alias) ||
+		    paging_walk_paging_table((pt_entry_t *)kKernelPML4v, alias) != phys)
+			return false;
+		va = alias;
+	} else if (!exc_readable(va)) {
+		return false;
+	}
+	*word = *(const volatile uint64_t *)va;
+	return true;
 }
 
 const char *exception_vector_name(uint64_t vector)
@@ -357,7 +403,7 @@ static void exc_emit_frame(bool dying, int level, uint64_t addr, const char *tag
 /// Presumed hostile, every frame re-validated. The monotonicity test does most
 /// of the work: stacks grow down, so each caller's frame must sit above its
 /// callee's, and that single check ends every kind of broken chain there is.
-static void exc_walk_chain(const exception_context_t *ctx, bool dying)
+static void exc_walk_chain(const exception_context_t *ctx, bool dying, exc_task_stack_t stack)
 {
 	EXC_EMIT(dying, "  Call chain (most recent first):\n");
 	exc_emit_frame(dying, 1, ctx->rip, "   <-- faulted here");
@@ -371,13 +417,13 @@ static void exc_walk_chain(const exception_context_t *ctx, bool dying)
 
 	uint64_t frame = ctx->rbp;
 	for (int level = 2; level <= EXC_MAX_FRAMES; level++) {
-		if (!exc_readable(frame) || !exc_readable(frame + 8)) {
+		uint64_t saved_rbp, ret;
+		if (frame > UINT64_MAX - 8 ||
+		    !exc_read_stack_word(stack, frame, &saved_rbp) ||
+		    !exc_read_stack_word(stack, frame + 8, &ret)) {
 			EXC_EMIT(dying, "   ... (frame 0x%016lx not readable — chain ends)\n", frame);
 			return;
 		}
-		uint64_t saved_rbp = *(volatile uint64_t *)frame;
-		uint64_t ret       = *(volatile uint64_t *)(frame + 8);
-
 		if (ret == 0) {
 			return;   // a clean chain terminates
 		}
@@ -524,6 +570,10 @@ void exception_report(const exception_context_t *ctx, const char *why)
 	EXC_EMIT(dying, ">>> CR3 0x%016lx  CR4 0x%016lx <<<\n", cr3, cr4);
 
 	exception_report_registers(ctx, dying);
+	if (dying && cls != NULL && (ctx->cs & 3) == 0) {
+		EXC_EMIT(dying, ">>> Scheduler last return RIP 0x%016lx  in scheduler=%u <<<\n",
+		         mp_lastIretqRIP[excCore], (unsigned)mp_inScheduler[excCore]);
+	}
 
 	// CONVICTED OF FAULTING MID-REPORT (2026-08-11 soak): this block read
 	// cls->currentThread->ownerTask through a POISONED currentThread and
@@ -534,6 +584,7 @@ void exception_report(const exception_context_t *ctx, const char *why)
 	// around, it is a finding about the fault — often the headline finding.
 	// (exc_readable wants 8-aligned addresses; the &~7 masks check the
 	// containing qword, which is the same page.)
+	exc_task_stack_t stack = {0};
 	{
 		thread_t *thread = (cls != NULL) ? cls->currentThread : NULL;
 		if (thread == NULL) {
@@ -551,6 +602,8 @@ void exception_report(const exception_context_t *ctx, const char *why)
 				EXC_EMIT(dying, ">>> Excepting task: UNREADABLE — ownerTask 0x%016lx is POISONED (thread 0x%016lx) <<<\n",
 				         (uint64_t)task, (uint64_t)thread);
 			} else {
+				if (dying)
+					stack = exc_task_stack(ctx, thread, task, cr3);
 				// exename copied BOUNDED, each byte's page proven readable,
 				// NUL forced — a garbage name must yield a short string,
 				// never a strlen walking off the mapped world inside %s.
@@ -578,15 +631,18 @@ void exception_report(const exception_context_t *ctx, const char *why)
 	EXC_EMIT(dying, ">>> Stack at 0x%016lx: <<<\n", ctx->rsp);
 	for (int i = 0; i < EXC_STACK_WORDS; i += 2) {
 		uint64_t va = ctx->rsp + (uint64_t)i * 8;
-		if (!exc_readable(va) || !exc_readable(va + 8)) {
+		uint64_t word0, word1;
+		if (va < ctx->rsp || va > UINT64_MAX - 8 ||
+		    !exc_read_stack_word(stack, va, &word0) ||
+		    !exc_read_stack_word(stack, va + 8, &word1)) {
 			EXC_EMIT(dying, ">>>   +0x%02x: <unreadable — stopping> <<<\n", i * 8);
 			break;
 		}
 		EXC_EMIT(dying, ">>>   +0x%02x: 0x%016lx  0x%016lx <<<\n", i * 8,
-		         *(volatile uint64_t *)va, *(volatile uint64_t *)(va + 8));
+		         word0, word1);
 	}
 
-	exc_walk_chain(ctx, dying);
+	exc_walk_chain(ctx, dying, stack);
 
 	// Best-effort drain of the log backlog, so the CONTEXT leading up to the
 	// exception makes it out with us. Try-lock inside — if another core holds
