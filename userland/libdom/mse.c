@@ -88,6 +88,7 @@ typedef struct {
 
 typedef struct {
     DValue target;
+    os64_dom_t *dom;                /* the binding that made it, whichever realm reads it */
     JSValue source;                 /* the MediaSource it lists (held) */
     bool active;                    /* activeSourceBuffers, else sourceBuffers */
 } DSourceBufferList;
@@ -447,10 +448,11 @@ static void parsed(os64_dom_t *dom, DSourceBuffer *b, const os64_dom_fed_result_
         b->polling = true;
         return;
     }
-    if (r->status == OS64_DOM_FED_ERROR) {
-        append_error(dom, s, b);
-        return;
-    }
+    /* What the parse completed before any error it met is applied first:
+     * the segment parser loop has received an initialization segment (and
+     * processed frames) before it reaches bytes that break a rule, so the
+     * element's state and the error's class do not depend on where the
+     * page cut its appends. */
     take_result(b, r);
     if (r->inits > 0) {
         if (isnan(s->duration)) (void)duration_change(dom, NULL, s, isnan(r->init_duration) ? INFINITY : r->init_duration);
@@ -471,6 +473,10 @@ static void parsed(os64_dom_t *dom, DSourceBuffer *b, const os64_dom_fed_result_
      * to the group's end. */
     if (r->frames && !isnan(r->group_end) && (isnan(s->duration) || r->group_end > s->duration))
         (void)duration_change(dom, NULL, s, r->group_end);
+    if (r->status == OS64_DOM_FED_ERROR) {
+        append_error(dom, s, b);
+        return;
+    }
     b->updating = false;
     buffer_event(dom, b, "update");
     buffer_event(dom, b, "updateend");
@@ -718,6 +724,7 @@ static JSValue list_new(os64_dom_t *dom, JSContext *ctx, JSValueConst source, bo
         return JS_EXCEPTION;
     }
     d_event_target_init(dom, &l->target, o);
+    l->dom = dom;
     l->source = JS_DupValue(ctx, source);
     l->active = active;
     JS_SetOpaque(o, l);
@@ -1009,6 +1016,11 @@ static void buffer_finalizer(JSRuntime *rt, JSValue value)
 
 enum { L_LENGTH };
 
+static DSourceBufferList *list_of(JSValueConst value)
+{
+    return JS_GetOpaque(value, os64_js_class_id(&source_buffer_list_slot));
+}
+
 static uint32_t list_length(DMediaSource *s, const DSourceBufferList *l)
 {
     uint32_t n = 0;
@@ -1019,21 +1031,20 @@ static uint32_t list_length(DMediaSource *s, const DSourceBufferList *l)
 static JSValue list_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic, JSValue *data)
 {
     (void)argc; (void)argv; (void)magic;
-    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
-    if (dom == NULL || dom->mse == NULL) return JS_EXCEPTION;
-    DSourceBufferList *l = JS_GetOpaque(self, dom->mse->list_class);
-    DMediaSource *s = l != NULL ? source_of(dom, l->source) : NULL;
+    (void)data;
+    DSourceBufferList *l = list_of(self);
+    DMediaSource *s = l != NULL ? source_of(l->dom, l->source) : NULL;
     if (s == NULL) return JS_ThrowTypeError(ctx, "Illegal invocation");
     return JS_NewUint32(ctx, list_length(s, l));
 }
 
-/* The list's indexed getter: [index] for an index below its length. */
+/* The list's indexed getter: [index] for an index below its length. The
+ * list's own binding answers, not the reading realm's: a parent window may
+ * read a frame's list. */
 static int list_own(JSContext *ctx, JSPropertyDescriptor *desc, JSValueConst obj, JSAtom prop)
 {
-    os64_dom_t *dom = d_binding(ctx);
-    if (dom == NULL || dom->mse == NULL) return 0;
-    DSourceBufferList *l = JS_GetOpaque(obj, dom->mse->list_class);
-    DMediaSource *s = l != NULL ? source_of(dom, l->source) : NULL;
+    DSourceBufferList *l = list_of(obj);
+    DMediaSource *s = l != NULL ? source_of(l->dom, l->source) : NULL;
     uint32_t index;
     int numeric = s != NULL ? d_index_key(ctx, prop, &index) : 0;
     if (numeric <= 0) return numeric;
@@ -1052,9 +1063,8 @@ static int list_own(JSContext *ctx, JSPropertyDescriptor *desc, JSValueConst obj
 
 static int list_names(JSContext *ctx, JSPropertyEnum **table, uint32_t *length, JSValueConst obj)
 {
-    os64_dom_t *dom = d_binding(ctx);
-    DSourceBufferList *l = dom != NULL && dom->mse != NULL ? JS_GetOpaque(obj, dom->mse->list_class) : NULL;
-    DMediaSource *s = l != NULL ? source_of(dom, l->source) : NULL;
+    DSourceBufferList *l = list_of(obj);
+    DMediaSource *s = l != NULL ? source_of(l->dom, l->source) : NULL;
     return d_index_names(ctx, s != NULL ? list_length(s, l) : 0, table, length);
 }
 

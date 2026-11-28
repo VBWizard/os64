@@ -499,6 +499,17 @@ static void dom_mse_buffer_cases(void)
         "ms.duration=3.8;assert(ms.duration===4&&v.duration===4,'raised to the highest end: '+ms.duration);",
         "mse: buffered, seekable, the duration's floor");
     media_turn(&f, "mse: duration turn");
+    {
+        /* The controls' view takes buffered and seekable from the
+         * MediaSource, never from the session's facts (this fake's say
+         * nothing of either). */
+        mse_script(&f, "heard();v.id='fedv';document.body.appendChild(v);", "mse: the video in the document");
+        const os64_html_node_t *node = media_by_id(f.document->document, "fedv");
+        os64_dom_media_view_t view;
+        check(node != NULL && os64_dom_media_view(f.binding, node, &view) && view.seekable && view.arrived == 4 &&
+                  view.arrived_from == 0,
+              "mse: the controls' view is the MediaSource's buffered and seekable");
+    }
     /* remove(): its argument checks, then the removal as a task. */
     mse_script(&f, "heard();throws('TypeError',()=>sb.remove(NaN,1));throws('TypeError',()=>sb.remove(5,6));"
                    "throws('TypeError',()=>sb.remove(1,1));sb.remove(1,2);assert(sb.updating);"
@@ -662,6 +673,21 @@ static void dom_mse_end_cases(void)
           "mse: the next <source> is opened");
     mse_script(&f, "assert(ms.readyState==='closed'&&v.error===null,'detached, no error: '+heard());",
                "mse: no error while a child remains");
+    fixture_free(&f);
+
+    /* An initialization segment and broken bytes in one append: the init
+     * is applied first, so the element has its metadata and the error is
+     * a decode error, as if the page had cut the append between them. */
+    mse_fixture(&f);
+    if (!fixture_ready(&f)) return;
+    mse_with_buffer(&f, "mse: init then error");
+    mse_script(&f, "heard();sb.appendBuffer(B('init:v:10 error'));", "mse: an init and broken bytes in one append");
+    media_turn(&f, "mse: init then error turn");
+    mse_script(&f, "const h=heard();assert(h==='sb:updatestart v:durationchange active:addsourcebuffer v:loadedmetadata "
+                   "sb:error sb:updateend ms:sourceended v:error',h);"
+                   "assert(v.error.code===3&&ms.readyState==='ended'&&ms.activeSourceBuffers.length===1,"
+                   "'metadata kept, a decode error, still attached');",
+               "mse: the init is applied before the error");
     fixture_free(&f);
 
     /* A decode error in play, long after its append succeeded, ends the

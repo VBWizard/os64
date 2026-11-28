@@ -1588,13 +1588,34 @@ bool os64_dom_media_view(os64_dom_t *dom, const os64_html_node_t *node, os64_dom
     DMediaElement *m = record_of(dom, node, false);
     if (m == NULL) return false;
     os64_dom_media_facts_t f = {0};
+    /* A fed element's buffered and seekable are its MediaSource's, never
+     * the session's facts (dom/media.h § THE FED SOURCE). */
+    bool fed = !JS_IsUndefined(m->fed);
+    os64_dom_fed_range_t fed_buffered[D_RANGES_MAX], fed_seekable;
+    uint32_t fed_buffered_count = 0, fed_seekable_count = 0;
     if (d_provider_enter(dom)) {
         out->position = fresh_position(dom, m);
         if (m->session != NULL && dom->media_provider.facts != NULL)
             dom->media_provider.facts(dom->media_provider.opaque, m->session, &f);
+        if (fed) {
+            fed_buffered_count = d_mse_buffered(dom, m->fed, fed_buffered, D_RANGES_MAX);
+            fed_seekable_count = d_mse_seekable(dom, m->fed, &fed_seekable);
+        }
         d_provider_leave(dom);
     } else {
         out->position = m->position;
+    }
+    if (fed) {
+        /* The bar's arrived span: the first buffered range that ends
+         * after the position (the one it is in, or the next past a gap),
+         * else the last one. */
+        f.arrived = f.arrived_from = 0;
+        for (uint32_t i = 0; i < fed_buffered_count; i++) {
+            f.arrived_from = fed_buffered[i].start;
+            f.arrived = fed_buffered[i].end;
+            if (out->position < fed_buffered[i].end) break;
+        }
+        f.seekable = fed_seekable_count != 0;
     }
     out->paused = m->paused;
     out->ended = m->ended && !loops(m);
