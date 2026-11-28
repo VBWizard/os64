@@ -63,7 +63,7 @@ void os64_media_fed_sound_start(os64_media_fed_sound_t *s, uint32_t rate, int64_
 void os64_media_fed_sound_place(os64_media_fed_sound_t *s, int64_t pts_ns, uint32_t samples,
                                 os64_media_fed_place_t *out);
 
-// Nanoseconds as the media's samples, nearest.
+// Nanoseconds as the media's samples, nearest (a half rounded up).
 int64_t os64_media_fed_sound_samples(int64_t ns, uint32_t rate);
 
 #pragma GCC visibility pop

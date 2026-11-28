@@ -53,6 +53,14 @@ int main(int argc, char **argv)
 {
     unsigned seconds = argc > 1 ? (unsigned)atoi(argv[1]) : 2;
 
+    // The conversion, nearest, a half up, on both sides of zero.
+    check(os64_media_fed_sound_samples(20833, 48000) == 1, "20,833 ns is one sample at 48 kHz");
+    check(os64_media_fed_sound_samples(-20833, 48000) == -1, "-20,833 ns is minus one sample");
+    check(os64_media_fed_sound_samples(-1000000000, 44100) == -44100, "minus a second is minus a second's samples");
+    check(os64_media_fed_sound_samples(10416, 48000) == 0 && os64_media_fed_sound_samples(10417, 48000) == 1,
+          "half a sample rounds up");
+    check(os64_media_fed_sound_samples(4611686018427387904ll, 48000) == 221360928884515ll, "2^62 ns, exactly");
+
     // The properties: an hour of contiguous sound gives no silence, no
     // cut and no drift, whatever timescale its times were written in.
     contiguous_hour("AAC 44.1 kHz, timescale 44100", 44100, 1024, 44100);

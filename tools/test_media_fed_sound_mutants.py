@@ -27,8 +27,8 @@ F = 'userland/libmedia/media_fed_sound.c'
 CASES = 'bash tools/test_media_fed_sound_host.sh 2'
 
 mutants = [
-    ('samples-truncate', F, '    __int128 half = 500000000;', '    __int128 half = 0;'),
-    ('negative-samples-rounded-up', F, ': -((-n + half) / 1000000000)', ': (n + half) / 1000000000'),
+    ('samples-truncate', F, '(uint64_t)r * rate + 500000000u)', '(uint64_t)r * rate + 0u)'),
+    ('negative-remainder-kept', F, '    if (r < 0) {\n        r += 1000000000;\n        q--;\n    }\n', ''),
     ('no-tolerance', F, '    if (s->tolerance < 1)\n        s->tolerance = 1;', '    s->tolerance = 0;'),
     ('a-tenth-of-the-tolerance', F, 's->tolerance = (int64_t)rate * OS64_MEDIA_FED_SOUND_TOLERANCE_US / 1000000;', 's->tolerance = (int64_t)rate * OS64_MEDIA_FED_SOUND_TOLERANCE_US / 10000000;'),
     ('no-bound', F, '    s->bound = join_ns > 0 ? os64_media_fed_sound_samples(join_ns, rate) : 0;', '    s->bound = INT64_MAX;'),

@@ -3,11 +3,17 @@
 #include "os64/media_fed_sound.h"
 #include "os64/media_track.h"
 
+// Whole seconds and a remainder, so nothing needs 128-bit division (the
+// library links no compiler runtime): the remainder times a rate fits in 64
+// bits. Nearest, a half rounded up.
 int64_t os64_media_fed_sound_samples(int64_t ns, uint32_t rate)
 {
-    __int128 n = (__int128)ns * rate;
-    __int128 half = 500000000;
-    return (int64_t)(n >= 0 ? (n + half) / 1000000000 : -((-n + half) / 1000000000));
+    int64_t q = ns / 1000000000, r = ns % 1000000000;
+    if (r < 0) {
+        r += 1000000000;
+        q--;
+    }
+    return q * (int64_t)rate + (int64_t)(((uint64_t)r * rate + 500000000u) / 1000000000u);
 }
 
 void os64_media_fed_sound_start(os64_media_fed_sound_t *s, uint32_t rate, int64_t join_ns, int64_t target_ns)
