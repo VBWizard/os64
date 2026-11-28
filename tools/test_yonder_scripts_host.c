@@ -47,23 +47,37 @@ static bool fake_media_failing, fake_media_failure_taken;
 static uint64_t fake_media_began;
 static int fake_media_session;
 uint64_t yonder_now_ms(void);
+/* Unless `fake_fed_on`: then a fed session opens (a MediaSource
+ * attaches), its buffers are made, and every buffer is full (evict answers
+ * false), for the provider's QuotaExceededError case. */
+static bool fake_fed_on;
+static int fake_fed_session, fake_fed_media, fake_fed_buffer, fake_fed_evicts;
 yonder_media_t *yonder_media_open(const yonder_media_request_t *r)
 {
-    (void)r;
+    if (r->fed)
+        return fake_fed_on ? (yonder_media_t *)&fake_fed_session : NULL;
     return fake_media_on ? (yonder_media_t *)&fake_media_session : NULL;
 }
 void yonder_media_close(yonder_media_t *m) { (void)m; }
-/* A fed session never opens either (yonder_media_open above answers NULL),
- * so a page's MediaSource fails to attach; os64/media_fed.h's calls, which
- * yonder's fed provider links against, refuse whatever they are asked, and
- * the host's type answer is yes for MP4. */
-os64_media_fed_t *yonder_media_fed(yonder_media_t *m) { (void)m; return NULL; }
+/* A fed session opens only with `fake_fed_on` (yonder_media_open above),
+ * else a page's MediaSource fails to attach. os64/media_fed.h's calls, which
+ * yonder's fed provider links against: with the fake on, a buffer is made
+ * and has no room for anything (evict false); otherwise they refuse. The
+ * host's type answer is yes for MP4. */
+os64_media_fed_t *yonder_media_fed(yonder_media_t *m)
+{
+    return m == (yonder_media_t *)&fake_fed_session ? (os64_media_fed_t *)&fake_fed_media : NULL;
+}
 double yonder_media_position(yonder_media_t *m) { (void)m; return NAN; }
 bool os64_media_fed_type_supported(const char *type) { return strstr(type, "mp4") != NULL; }
-os64_media_fed_buffer_t *os64_media_fed_add(os64_media_fed_t *fed, const char *type) { (void)fed; (void)type; return NULL; }
+os64_media_fed_buffer_t *os64_media_fed_add(os64_media_fed_t *fed, const char *type)
+{
+    (void)type;
+    return fed == (os64_media_fed_t *)&fake_fed_media ? (os64_media_fed_buffer_t *)&fake_fed_buffer : NULL;
+}
 void os64_media_fed_remove_buffer(os64_media_fed_t *fed, os64_media_fed_buffer_t *buf) { (void)fed; (void)buf; }
 bool os64_media_fed_evict(os64_media_fed_t *fed, os64_media_fed_buffer_t *buf, size_t incoming, double play)
-{ (void)fed; (void)buf; (void)incoming; (void)play; return false; }
+{ (void)fed; (void)buf; (void)incoming; (void)play; fake_fed_evicts++; return false; }
 bool os64_media_fed_take(os64_media_fed_t *fed, os64_media_fed_buffer_t *buf, const uint8_t *bytes, size_t length)
 { (void)fed; (void)buf; (void)bytes; (void)length; return false; }
 static void fed_refused(os64_media_fed_result_t *out) { memset(out, 0, sizeof(*out)); out->status = OS64_MEDIA_FED_ERROR; }
@@ -13954,6 +13968,28 @@ static void mse_switch_cases(void)
     check(os64_streq(text, "true false error 4"), "mse switch on: the types answered, an unopened source fails the element");
     if (!os64_streq(text, "true false error 4")) printf("  saw '%s'\n", text);
     probe_drop();
+    /* Through yonder's provider: a fed session that opens, a buffer made, and
+     * an append it has no room for (os64_media_fed_evict false) thrown as
+     * QuotaExceededError, nothing taken. */
+    fake_fed_on = true;
+    fake_fed_evicts = 0;
+    probe_page("<!doctype html><video id=v></video><p id=out>-</p><script>"
+               "const o=document.getElementById('out'),v=document.getElementById('v'),ms=new MediaSource();"
+               "ms.onsourceopen=()=>{const sb=ms.addSourceBuffer('video/mp4; codecs=\"avc1.640020\"');"
+               "try{sb.appendBuffer(new Uint8Array(16));o.textContent='taken'}"
+               "catch(e){o.textContent='open '+e.name+' '+sb.updating}};"
+               "v.src=URL.createObjectURL(ms);</script>", true);
+    for (int i = 0; i < 12; i++) {
+        script_turn();
+        media_turn();
+    }
+    p = probe_id("out");
+    text = p && p->first_child ? p->first_child->text : "";
+    check(os64_streq(text, "open QuotaExceededError false") && fake_fed_evicts == 1,
+          "mse provider: a full buffer's append is QuotaExceededError, nothing taken");
+    if (!os64_streq(text, "open QuotaExceededError false")) printf("  saw '%s'\n", text);
+    probe_drop();
+    fake_fed_on = false;
     s_mse = was;
 }
 
