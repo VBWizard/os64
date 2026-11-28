@@ -401,10 +401,14 @@ static uint32_t fed_readiness(const os64_media_player_t *p, int64_t now)
     int64_t position = os64_media_clock_read(&p->clock, now);
     int64_t ahead = fed_ahead(p, position, &last);
     bool to_end = last && p->loaded;
-    // Ended, and at or past the end of what is held: all there will be is
-    // there. A player that buffered there before the end was said plays on
-    // into its end.
-    if (p->loaded && p->fed_ranges > 0 && position >= p->fed_end[p->fed_ranges - 1]) {
+    // Ended, and nothing held reaches past the position (none at all, when
+    // what the kinds hold no longer overlaps): all there will be is there.
+    // A player that buffered there before the end was said plays on into
+    // its end.
+    bool beyond = p->loaded;
+    for (uint32_t i = 0; i < p->fed_ranges && beyond; i++)
+        beyond = p->fed_end[i] <= position;
+    if (beyond) {
         ahead = 0;
         to_end = true;
     }
