@@ -1106,6 +1106,30 @@ static void scripted(void)
     }
     END();
 
+    // The play position's unit is kept even when the position is in a
+    // joined gap past it (so the unit ends before the position): one-second
+    // RAPs at 0 s and 1 s, then (a parser reset) one at 3 s; the join is
+    // 2 s, so [0 s, 4 s) is buffered, and playing at 2.5 s the unit at 1 s
+    // holds the position. Two bytes asked of a full three-byte quota: the
+    // unit at 0 s goes, the one at 1 s stays, so QUOTA.
+    START("eviction: the play position in a joined gap", 1, 1, 0);
+    p.b.track[0].quota = p.m.t[0].quota = 3;
+    {
+        tf_t a1[2] = { { 0, 0, 1, true, 1 }, { 1, 1, 1, true, 1 } };
+        pair_frames(&p, 0, a1, 2);
+        os64_media_buffer_reset_parser(&p.b);
+        m_unset(&p.m.t[0]);
+        tf_t a2 = { 3, 3, 1, true, 1 };
+        pair_frames(&p, 0, &a2, 1);
+        os64_media_track_rule_t r = os64_media_buffer_make_room(&p.b, 2, 2500000000ll);
+        mtrack_t *mt = &p.m.t[0];
+        m_evict(mt, m_bytes(mt) + 2 - mt->quota, 2500000000ll);
+        check(r == OS64_MEDIA_TRACK_QUOTA, "the play position's unit is kept: QUOTA (%s)", os64_media_track_rule_name(r));
+        check(p.b.track[0].bytes == 2, "one frame went (%llu bytes left)", (unsigned long long)p.b.track[0].bytes);
+        compare(&p.b, &p.m);
+    }
+    END();
+
     // Codex #769 rd4: the cursor reaches what `buffered` joins across a
     // range inside another's extent. I (pts 0) and P (pts 3) kept after a
     // B frame (pts 1) is removed: a range [0 s, 4 s). Then, each after a
