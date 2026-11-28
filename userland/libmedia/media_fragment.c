@@ -796,18 +796,19 @@ static bool in_this_mdat(const os64_media_fragment_t *p, const os64_media_fragme
 }
 
 // Hand out every sample of the moof whose bytes are now all in this mdat.
-// A sink that resets the parser (or destroys it) ends the hand-out there.
-static void deliver(os64_media_fragment_t *p, uint32_t resets)
+// A sink that resets the parser (or destroys it) empties the sample table,
+// which ends the hand-out there.
+static void deliver(os64_media_fragment_t *p)
 {
     uint64_t have = p->mdat_start + p->slab->filled;
     while (p->sample_next < p->sample_count) {
         // Samples run in stream order and the first one pending was checked
         // to lie inside this mdat when the mdat began (begin_box), so none
-        // here starts before it; one that runs past its end never completes,
-        // and the mdat's end says so.
+        // here starts before it. One that is not all in waits: a later
+        // mdat's starts past this mdat's end, which `have` never passes, and
+        // one that runs past the end never completes, which the mdat's end
+        // reports.
         const os64_media_fragment_sample_t *s = &p->sample[p->sample_next];
-        if (!in_this_mdat(p, s))
-            return;                     // a later mdat's
         if (s->start > have || s->size > have - s->start)
             return;                     // not all in yet (a gap may lie before it)
         if (!s->ignored) {
@@ -831,8 +832,6 @@ static void deliver(os64_media_fragment_t *p, uint32_t resets)
             };
             if (p->sink.frame)
                 p->sink.frame(p->sink.context, &frame);
-            if (p->resets != resets)
-                return;
         }
         p->sample_next++;
     }
@@ -843,7 +842,7 @@ static void deliver(os64_media_fragment_t *p, uint32_t resets)
 static int mdat_progress(os64_media_fragment_t *p, uint32_t resets)
 {
     os64_media_fragment_slab_t *slab = p->slab;
-    deliver(p, resets);
+    deliver(p);
     if (p->resets != resets)
         return 0;                       // the slab was the reset's to let go of
     if (slab->filled == slab->size) {
@@ -868,7 +867,7 @@ static int begin_box(os64_media_fragment_t *p, uint32_t resets)
     if (p->header_size == 16)
         for (int i = 8; i < 16; i++)
             size = i == 8 ? h[i] : size << 8 | h[i];
-    if (size == 0 || size < p->header_size)
+    if (size < p->header_size)          // zero among them: "to the end of the file"
         return fail(p, OS64_MEDIA_FRAGMENT_BOX_SIZE);
     p->box_size = size;
     uint64_t payload = size - p->header_size;

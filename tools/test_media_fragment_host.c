@@ -1199,11 +1199,14 @@ static void rules(void)
     write_segment(&m, &s);
     expect_rule("frames in no mdat before the next moof", &m, OS64_MEDIA_FRAGMENT_SAMPLE_OUTSIDE_MDAT, mem);
 
-    FRESH(); write_init(&m, &d); s.f[0].tfdt_version = 1; s.f[0].base_time = (uint64_t)INT64_MAX - 1000;
+    // No edit list on the picture: an edit's subtraction would overflow too,
+    // and hide which check caught it.
+    FRESH(); d.t[0].elst = 0; write_init(&m, &d); s.f[0].tfdt_version = 1; s.f[0].base_time = (uint64_t)INT64_MAX - 1000;
     write_segment(&m, &s);
     expect_rule("times past 63 bits", &m, OS64_MEDIA_FRAGMENT_TIME_OVERFLOW, mem);
 
-    FRESH(); write_init(&m, &d); s.f[0].tfdt_version = 1; s.f[0].base_time = (uint64_t)INT64_MAX + 1;
+    FRESH(); d.t[0].elst = 0; write_init(&m, &d); s.f[0].tfdt_version = 1; s.f[0].base_time = (uint64_t)INT64_MAX + 1;
+    s.f[0].trun_fields = 0x700;             // no composition offsets either: nothing else can overflow
     write_segment(&m, &s);
     expect_rule("a tfdt past 63 bits", &m, OS64_MEDIA_FRAGMENT_TIME_OVERFLOW, mem);
 
