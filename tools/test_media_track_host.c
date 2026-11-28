@@ -307,8 +307,11 @@ static void m_frame(model_t *m, uint32_t id, int64_t pts0, int64_t dts0, int64_t
         t->run = ++t->runs;
     }
     if (t->have_preload && (t->preload.pts + t->preload.dur < pts - 1000 || t->preload.pts + t->preload.dur > pts + 1000 ||
-                            t->preload.dts > dts || (t->last_dts != NONE && t->preload.dts < t->last_dts)))
+                            t->preload.dts > dts))
         t->have_preload = false;
+    for (int i = 0; t->have_preload && i < t->n; i++)       // no kept frame decoded between it and its frame
+        if (t->f[i].dts > t->preload.dts && t->f[i].dts <= dts)
+            t->have_preload = false;
     if (t->have_preload) {
         t->preload.serial = ++t->next_serial;
         t->preload.group = t->group;
@@ -1269,6 +1272,32 @@ static void scripted(void)
     pair_frames(&p, 0, f + 2, 10);                            // 2..9 dropped, 10 an I frame
     END();
 
+    // A preload is nobody's when a kept frame decodes between it and its
+    // frame (the random scripts' find, 2026-11-28): sound kept to 1.1 s, a
+    // window from 1 s, and a group whose offset puts its frames a
+    // nanosecond earlier than the kept ones. Its frame at 1.0 s joins the
+    // kept range after the frame at 0.978666667 s, which decodes after the
+    // would-be preload at 0.978666666 s: no preload.
+    START("a preload with a frame decoded between", 2, 90000, 1000000000);
+    {
+        tf_t k[2] = { { 978666667, 978666667, 21333333, true, 30 }, { 1000000000, 1000000000, 21333334, true, 30 } };
+        pair_frames(&p, 1, k, 2);                             // the kept: 0.978666667 s, then 1.0 s
+    }
+    os64_media_buffer_reset_parser(&p.b);
+    for (int k = 0; k < 2; k++) { m_unset(&p.m.t[k]); p.m.t[k].have_preload = false; }
+    p.b.window_start = p.m.ws = MS(1000);
+    {
+        tf_t g[2] = { { 978666666, 978666666, 21333334, true, 30 }, { 1000000000, 1000000000, 21333333, true, 30 } };
+        pair_frames(&p, 1, g, 2);
+        const os64_media_track_t *a = &p.b.track[1];
+        bool preload = false;
+        for (uint32_t ri = 0; ri < a->range_count; ri++)
+            for (uint32_t i = 0; i < a->range[ri].count; i++)
+                preload |= (a->range[ri].frame[i].flags & OS64_MEDIA_FRAME_PRELOAD) != 0;
+        check(!preload, "no preload is kept with a frame decoded between it and its frame");
+    }
+    END();
+
     // A muxed append's bytes shared by the tracks' quotas.
     START("muxed quota shares", 2, 90000, 48000);
     p.b.track[0].quota = p.m.t[0].quota = 30000;
@@ -1558,7 +1587,10 @@ static void random_script(void)
     for (int op = 0; op < 120; op++, s_ops++) {
         if (dumping) {
             printf("--- before op %d\n", op);
-            dump_track(&p.b.track[0]);
+            for (uint32_t k = 0; k < p.b.track_count; k++) {
+                printf("  track %u\n", k);
+                dump_track(&p.b.track[k]);
+            }
         }
         switch (rnd() % 12) {
         case 0: case 1: case 2: case 3: case 4: {   // append a segment to a track

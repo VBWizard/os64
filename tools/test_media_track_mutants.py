@@ -83,6 +83,7 @@ mutants = [
     ('eviction-ahead-ignores-the-protection', F, '            if (unit_pts(r, u) < protect_end)\n                break;\n', '            if (unit_pts(r, u) < protect_end && 0)\n                break;\n'),
     ('the-quota-is-never-exceeded', F, '        if (t->bytes + share > t->quota)\n            fits = false;', '        (void)0;'),
     ('each-track-takes-the-whole-append', F, '        uint64_t share = total_quota == 0 ? incoming', '        uint64_t share = 1 ? incoming'),
+    ('a-preload-with-a-frame-decoded-between-is-kept', F, '                            t->preload.dts > dts || decoded_between(t, t->preload.dts, dts)))', '                            t->preload.dts > dts || (decoded_between(t, t->preload.dts, dts) && 0)))'),
     # Reading.
     ('a-joined-gap-is-not-held', F, '    if (before != OS64_MEDIA_NO_TIME && sat_sub(next->start, before) <= join_of(t))\n        return next;\n    return 0;', '    return 0;'),
     ('a-gap-is-measured-from-the-time', F, 'if (before != OS64_MEDIA_NO_TIME && sat_sub(next->start, before) <= join_of(t))', 'if (before != OS64_MEDIA_NO_TIME && sat_sub(next->start, time) <= join_of(t))'),

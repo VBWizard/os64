@@ -477,6 +477,17 @@ static bool range_push(os64_media_track_t *t, os64_media_track_range_t *r, const
     return true;
 }
 
+// Whether a kept frame of the track decodes after `after` and no later than
+// `upto`. A scan of every frame; asked only when a preload is to be kept.
+static bool decoded_between(const os64_media_track_t *t, int64_t after, int64_t upto)
+{
+    for (uint32_t ri = 0; ri < t->range_count; ri++)
+        for (uint32_t i = 0; i < t->range[ri].count; i++)
+            if (t->range[ri].frame[i].dts > after && t->range[ri].frame[i].dts <= upto)
+                return true;
+    return false;
+}
+
 static void preload_clear(os64_media_track_t *t)
 {
     if (t->have_preload)
@@ -770,11 +781,13 @@ static os64_media_track_rule_t buffer_frame(os64_media_buffer_t *b, const os64_m
     t->append_range = r->id;
     // The preload is the preroll of the frame it ends at: one that ends
     // anywhere else (a frame dropped long ago, before other appends) is
-    // nobody's (Chromium's rule for its preroll buffer). And it goes in
-    // decode order: not after its frame, not before the range's last.
+    // nobody's (Chromium's rule for its preroll buffer). And it is the frame
+    // decoded just before its frame or nobody's: not after it, and with no
+    // kept frame decoded between the two (that includes the last frame of
+    // the range the frame joins, so the range stays in decode order).
     if (t->have_preload && (t->preload.pts + t->preload.duration < sat_sub(pts, ONE_MICROSECOND) ||
                             t->preload.pts + t->preload.duration > sat_add(pts, ONE_MICROSECOND) ||
-                            t->preload.dts > dts || (r->count && t->preload.dts < r->frame[r->count - 1].dts)))
+                            t->preload.dts > dts || decoded_between(t, t->preload.dts, dts)))
         preload_clear(t);
     if (t->have_preload) {
         t->preload.serial = ++t->next_serial;
