@@ -161,11 +161,13 @@ static void run(const uint8_t *data, size_t size)
             *slab = (os64_media_fragment_slab_t){ .data = (uint8_t *)(slab + 1), .size = count * 4, .filled = count * 4,
                                                   .holds = 1, .release = f_release };
             for (uint32_t i = 0; i < count; i++) {
-                int64_t dts = start + (int64_t)i * step;
-                int64_t pts = dts + ((pattern & 1) ? (int64_t)((i * 7) % 3) * step : 0);
-                if (pattern & 0x20) pts = dts - (int64_t)((i * 5) % 3) * step;     // decoded after presented
-                if (pattern & 0x10) dts += INT64_MAX / 2;                          // decode times near the top
-                if (pattern & 2) dts -= (int64_t)(take(&in, 1) % 4) * step;   // steps back
+                // The fuzzer's own arithmetic wraps (unsigned): any int64 is a fair input.
+                uint64_t ud = (uint64_t)start + (uint64_t)i * (uint64_t)step;
+                uint64_t up = ud + ((pattern & 1) ? (uint64_t)((i * 7) % 3) * (uint64_t)step : 0);
+                if (pattern & 0x20) up = ud - (uint64_t)((i * 5) % 3) * (uint64_t)step;   // decoded after presented
+                if (pattern & 0x10) ud += (uint64_t)INT64_MAX / 2;                        // decode times near the top
+                if (pattern & 2) ud -= (take(&in, 1) % 4) * (uint64_t)step;              // steps back
+                int64_t dts = (int64_t)ud, pts = (int64_t)up;
                 os64_media_fragment_frame_t f = {
                     .track_id = (uint32_t)track + 1 + ((pattern & 0x40) ? 5 : 0), .kind = track + 1, .generation = gen,
                     .timescale = timescale[track], .dts = dts, .pts = pts, .duration = (uint32_t)dur,
