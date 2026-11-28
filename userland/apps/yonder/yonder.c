@@ -17046,6 +17046,130 @@ static int media_can_play(void *opaque, const char *type)
     return yonder_media_can_play(type);
 }
 
+// ── The fed source's host (dom/media.h § THE FED SOURCE) ─────────────────
+//
+// With the `mse` switch on, a page's MediaSource attaches to a fed session:
+// a media session whose player decodes from a fed media (media.c § A FED
+// SESSION), and every call here is os64/media_fed.h's of the same name on
+// it, on the window thread, holding no lock of yonder's. The session is
+// also the media provider's for play, pause, seek, settings and facts.
+
+static void *fed_open(void *opaque, const os64_html_node_t *node)
+{
+    uint64_t serial = (uint64_t)(uintptr_t)opaque;
+    yonder_scripts_t *host = scripts_for(serial);
+    const char *page = host != NULL ? yonder_scripts_url(host) : "about:blank";
+    bool picture = is_video_node(node);
+    char element[32];
+    media_element_name(node, element, sizeof(element));
+    yonder_media_request_t r = {"mediasource:", page, serial, OS64_DOM_MEDIA_NO_CORS, g.way.agent, g.way.identity,
+                                NULL, picture, element, "a MediaSource", true};
+    yonder_media_t *session = yonder_media_open(&r);
+    if (session == NULL)
+        media_refused(node, "a MediaSource could not begin: no memory, no thread or no sound output");
+    if (session != NULL && picture)
+        video_add(node, session);
+    return session;
+}
+static void fed_close(void *opaque, void *session) { media_close(opaque, session); }
+static void *fed_add(void *opaque, void *session, const char *type)
+{
+    (void)opaque;
+    return os64_media_fed_add(yonder_media_fed(session), type);
+}
+static void fed_remove_buffer(void *opaque, void *session, void *buffer)
+{
+    (void)opaque;
+    os64_media_fed_remove_buffer(yonder_media_fed(session), buffer);
+}
+static bool fed_evict(void *opaque, void *session, void *buffer, size_t incoming)
+{
+    (void)opaque;
+    return os64_media_fed_evict(yonder_media_fed(session), buffer, incoming, yonder_media_position(session));
+}
+static bool fed_take(void *opaque, void *session, void *buffer, const uint8_t *bytes, size_t length)
+{
+    (void)opaque;
+    return os64_media_fed_take(yonder_media_fed(session), buffer, bytes, length);
+}
+// libmedia's result in libdom's words, field for field.
+static void fed_result(const os64_media_fed_result_t *from, os64_dom_fed_result_t *to)
+{
+    to->status = from->status == OS64_MEDIA_FED_DONE ? OS64_DOM_FED_DONE
+                 : from->status == OS64_MEDIA_FED_PENDING ? OS64_DOM_FED_PENDING : OS64_DOM_FED_ERROR;
+    to->inits = from->inits;
+    to->init_duration = from->init_duration;
+    to->audio = from->audio;
+    to->video = from->video;
+    to->frames = from->frames;
+    to->parsing_media = from->parsing_media;
+    to->group_end = from->group_end;
+    to->highest_pts = from->highest_pts;
+    to->timestamp_offset = from->timestamp_offset;
+    os64_strcopy(to->message, sizeof(to->message), from->message);
+}
+static void fed_parse(void *opaque, void *session, void *buffer, os64_dom_fed_result_t *out)
+{
+    (void)opaque;
+    os64_media_fed_result_t r;
+    os64_media_fed_parse(yonder_media_fed(session), buffer, &r);
+    fed_result(&r, out);
+}
+static void fed_poll(void *opaque, void *session, void *buffer, os64_dom_fed_result_t *out)
+{
+    (void)opaque;
+    os64_media_fed_result_t r;
+    os64_media_fed_poll(yonder_media_fed(session), buffer, &r);
+    fed_result(&r, out);
+}
+static void fed_reset(void *opaque, void *session, void *buffer, os64_dom_fed_result_t *out)
+{
+    (void)opaque;
+    os64_media_fed_result_t r;
+    os64_media_fed_reset(yonder_media_fed(session), buffer, &r);
+    fed_result(&r, out);
+}
+static void fed_remove(void *opaque, void *session, void *buffer, double start, double end, os64_dom_fed_result_t *out)
+{
+    (void)opaque;
+    os64_media_fed_result_t r;
+    os64_media_fed_remove(yonder_media_fed(session), buffer, start, end, &r);
+    fed_result(&r, out);
+}
+static void fed_set(void *opaque, void *session, void *buffer, os64_dom_fed_mode_t mode, double offset,
+                    os64_dom_fed_group_t group, double window_start, double window_end)
+{
+    (void)opaque;
+    os64_media_fed_set(yonder_media_fed(session), buffer,
+                       mode == OS64_DOM_FED_SEQUENCE ? OS64_MEDIA_FED_SEQUENCE : OS64_MEDIA_FED_SEGMENTS, offset,
+                       group == OS64_DOM_FED_GROUP_AT_OFFSET ? OS64_MEDIA_FED_GROUP_AT_OFFSET
+                       : group == OS64_DOM_FED_GROUP_AT_END ? OS64_MEDIA_FED_GROUP_AT_END : OS64_MEDIA_FED_GROUP_KEEP,
+                       window_start, window_end);
+}
+static uint32_t fed_ranges(void *opaque, void *session, void *buffer, bool ended, os64_dom_fed_range_t *out,
+                           uint32_t cap, double *highest_end)
+{
+    (void)opaque;
+    _Static_assert(sizeof(os64_dom_fed_range_t) == sizeof(os64_media_fed_range_t), "a range is two seconds");
+    return os64_media_fed_ranges(yonder_media_fed(session), buffer, ended, (os64_media_fed_range_t *)out, cap,
+                                 highest_end);
+}
+static void fed_duration(void *opaque, void *session, double seconds)
+{
+    (void)opaque;
+    os64_media_fed_duration(yonder_media_fed(session), seconds);
+}
+static void fed_end(void *opaque, void *session)
+{
+    (void)opaque;
+    os64_media_fed_end(yonder_media_fed(session));
+}
+static bool fed_type_supported(void *opaque, const char *type)
+{
+    (void)opaque;
+    return os64_media_fed_type_supported(type);
+}
+
 static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state_t *state,
                                       const char *url, bool encrypted, uint64_t serial,
                                       yonder_diag_t *diag, bool modern)

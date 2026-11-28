@@ -20,6 +20,14 @@
 //             to resume, from the window's end, a fetch let go while
 //             nothing played or broken part way.
 //
+// A FED SESSION (a page's MediaSource) has no bytes of its own, no
+// loader and no `prepare`: its player decodes from the fed media
+// (os64/media_fed.h) the session makes at its open, and the page's appends
+// reach that fed media through yonder's fed provider on the window thread.
+// The session holds the page's hold of it and lets go at its close; the
+// player holds its own until it finishes. Its readiness is the player's,
+// passed on as it stands.
+//
 // THE SOUND is the player's voice on yonder's output (os64/media_output.h):
 // libmedia's one audio thread for the program owns the device and mixes
 // every session's voice. An <audio>'s voice WAITs while the device is
@@ -118,6 +126,9 @@ struct yonder_media {
     // a <video>. `seek_asked` is a seek waiting for the player (one asked
     // before player_tell gave it the asks).
     bool picture;
+    // A fed session's fed media (os64/media_fed.h), the page's hold of it,
+    // made at the open and let go at the close; NULL for any other.
+    os64_media_fed_t *fed;
     os64_media_player_t *player;    // set once, as the session opens, under `lock`; NULL if its create failed
     bool player_closed;             // os64_media_player_close has been called
     bool player_finished;           // its `finished`: it reads no byte again
@@ -1102,27 +1113,38 @@ static void session_facts(yonder_media_t *m, os64_dom_media_facts_t *out)
     }
     out->probed = probed;
     out->seekable = f.info.seekable;
-    // The readiness libdom's readyState is made from (VIDEO.md § 5's table):
-    // the queues' while paused; while the player PLAYS at least FUTURE
-    // (its queues drain and refill as it plays, which is no wait), and
-    // ENOUGH once reached until it buffers; a buffering player is
-    // CURRENT, which is libdom's `waiting`.
-    bool playing = f.state == OS64_MEDIA_PLAYER_PLAYING;
-    if (f.state == OS64_MEDIA_PLAYER_BUFFERING || !playing)
-        m->enough_held = false;     // the window's own; read and written here alone
-    m->enough_held |= playing && f.enough;
-    out->current = f.current || playing;
-    out->future = playing || (f.future && f.state != OS64_MEDIA_PLAYER_BUFFERING);
-    out->enough = m->enough_held || (f.enough && f.state != OS64_MEDIA_PLAYER_BUFFERING);
-    // A seek leaves readyState as it was until it lands (the table's "as
-    // is"); then the readiness is the new place's.
-    os64_lock_acquire(&m->lock);
-    bool landing = m->seek_landing;
-    os64_lock_release(&m->lock);
-    if (landing) {
-        out->current = (m->ready_held & 1u) != 0;
-        out->future = (m->ready_held & 2u) != 0;
-        out->enough = (m->ready_held & 4u) != 0;
+    // Every video's playback quality counters (getVideoPlaybackQuality).
+    out->frames_shown = f.pace.shown;
+    out->frames_dropped = f.pace.dropped + f.pace.skipped;
+    if (m->fed != NULL) {
+        // A fed media's readiness is libmedia's, computed where its ranges
+        // and the play position are, and is passed on as it stands.
+        out->current = f.current;
+        out->future = f.future;
+        out->enough = f.enough;
+    } else {
+        // The readiness libdom's readyState is made from (VIDEO.md § 5's table):
+        // the queues' while paused; while the player PLAYS at least FUTURE
+        // (its queues drain and refill as it plays, which is no wait), and
+        // ENOUGH once reached until it buffers; a buffering player is
+        // CURRENT, which is libdom's `waiting`.
+        bool playing = f.state == OS64_MEDIA_PLAYER_PLAYING;
+        if (f.state == OS64_MEDIA_PLAYER_BUFFERING || !playing)
+            m->enough_held = false;     // the window's own; read and written here alone
+        m->enough_held |= playing && f.enough;
+        out->current = f.current || playing;
+        out->future = playing || (f.future && f.state != OS64_MEDIA_PLAYER_BUFFERING);
+        out->enough = m->enough_held || (f.enough && f.state != OS64_MEDIA_PLAYER_BUFFERING);
+        // A seek leaves readyState as it was until it lands (the table's "as
+        // is"); then the readiness is the new place's.
+        os64_lock_acquire(&m->lock);
+        bool landing = m->seek_landing;
+        os64_lock_release(&m->lock);
+        if (landing) {
+            out->current = (m->ready_held & 1u) != 0;
+            out->future = (m->ready_held & 2u) != 0;
+            out->enough = (m->ready_held & 4u) != 0;
+        }
     }
     // The facts kept are what libdom was told (a seek's held readiness
     // is taken from them).
@@ -1213,7 +1235,8 @@ yonder_media_t *yonder_media_open(const yonder_media_request_t *r)
     m->picture = r->picture;
     os64_strcopy(m->element, sizeof(m->element), r->element != NULL ? r->element : (r->picture ? "video" : "audio"));
     m->named = copy_text(r->named != NULL ? r->named : r->url);
-    if (m->url == NULL || m->page_url == NULL || m->named == NULL || os64_bell_make(&m->bell) != 0) {
+    if (m->url == NULL || m->page_url == NULL || m->named == NULL || os64_bell_make(&m->bell) != 0 ||
+        (r->fed && os64_media_fed_create(&m->fed) != 0)) {
         session_free(m);
         return NULL;
     }
@@ -1227,7 +1250,8 @@ yonder_media_t *yonder_media_open(const yonder_media_request_t *r)
     // A <video> wants its picture and plays on unheard when the device is
     // refused; an <audio> wants its sound and waits (VIDEO.md § 5).
     os64_media_player_config_t cfg = {
-        .prepare = session_prepare,
+        .prepare = m->fed != NULL ? NULL : session_prepare,
+        .fed = m->fed,
         .want = OS64_MEDIA_WANT_SOUND | (m->picture ? OS64_MEDIA_WANT_PICTURE : 0u),
         .output = s_audio.output,
         .refused = m->picture ? OS64_MEDIA_VOICE_PLAY_ON : OS64_MEDIA_VOICE_WAIT,
@@ -1244,6 +1268,9 @@ yonder_media_t *yonder_media_open(const yonder_media_request_t *r)
         m->stop = true;
         m->closed = true;
         os64_lock_release(&m->lock);
+        if (m->fed != NULL)
+            os64_media_fed_close(m->fed);   // the page's hold; the player never took one
+        m->fed = NULL;
         return NULL;
     }
     os64_lock_acquire(&m->lock);
@@ -1282,6 +1309,24 @@ void yonder_media_close(yonder_media_t *m)
     ring_reader_locked(m);
     os64_lock_release(&m->lock);
     player_close(m);
+    // The page's hold of a fed media; the player's goes at its finish, and
+    // the last of the two frees it.
+    if (m->fed != NULL)
+        os64_media_fed_close(m->fed);
+    m->fed = NULL;
+}
+
+os64_media_fed_t *yonder_media_fed(yonder_media_t *m)
+{
+    return m != NULL ? m->fed : NULL;
+}
+
+double yonder_media_position(yonder_media_t *m)
+{
+    os64_media_player_facts_t f;
+    if (!yonder_media_player_facts(m, &f) || !f.probed)
+        return NAN;
+    return (double)f.position / RATE;
 }
 
 void yonder_media_play(yonder_media_t *m)

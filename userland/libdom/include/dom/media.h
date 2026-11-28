@@ -187,6 +187,11 @@ typedef struct {
     void (*duration)(void *opaque, void *session, double seconds);
     /* endOfStream() without an error: nothing more is coming. */
     void (*end)(void *opaque, void *session);
+    /* NULL, or whether the host can play a SourceBuffer of this type (the
+     * MIME type and its parameters as the page gave them): isTypeSupported
+     * and addSourceBuffer say yes only when libdom's own table and this
+     * both do. Called with no session, on the window thread. */
+    bool (*type_supported)(void *opaque, const char *type);
 } os64_dom_fed_provider_t;
 
 /* What a media element's controls show (AUDIO_YONDER.md § The controls),

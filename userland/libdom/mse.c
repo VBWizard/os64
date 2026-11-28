@@ -37,8 +37,9 @@
  * What it leaves out (DEBTS.md): a MediaSource in a worker and its
  * MediaSourceHandle, ManagedMediaSource, the AudioTrack and VideoTrack
  * lists (the element has neither), and changeType, which refuses every
- * type. isTypeSupported answers H.264 and AAC-LC in MP4 alone, and
- * nothing while no fed host is installed. */
+ * type. isTypeSupported answers H.264 and AAC-LC in MP4 alone, of those
+ * only what the host says it plays when it says, and nothing while no fed
+ * host is installed. */
 
 enum { MS_CLOSED, MS_OPEN, MS_ENDED };
 enum { END_NONE, END_NETWORK, END_DECODE };
@@ -229,6 +230,14 @@ static bool type_supported(const char *type)
 /* ── The host ───────────────────────────────────────────────────────── */
 
 static const os64_dom_fed_provider_t *host(os64_dom_t *dom) { return &dom->fed_provider; }
+
+/* A type both libdom's table (type_supported) and the host, when it says,
+ * take. */
+static bool type_playable(os64_dom_t *dom, const char *type)
+{
+    return type_supported(type) &&
+           (host(dom)->type_supported == NULL || host(dom)->type_supported(host(dom)->opaque, type));
+}
 
 static DMediaSource *parent_of(os64_dom_t *dom, DSourceBuffer *b)
 {
@@ -544,7 +553,7 @@ static JSValue source_add(os64_dom_t *dom, JSContext *ctx, DMediaSource *s, int 
     if (type == NULL) return JS_EXCEPTION;
     JSValue result;
     if (type[0] == '\0') result = JS_ThrowTypeError(ctx, "The type is empty");
-    else if (!type_supported(type)) result = d_error(ctx, "NotSupportedError", "That type is not supported");
+    else if (!type_playable(dom, type)) result = d_error(ctx, "NotSupportedError", "That type is not supported");
     else if (s->count >= MSE_BUFFERS_MAX) result = d_error(ctx, "QuotaExceededError", "This MediaSource holds no more SourceBuffers");
     else if (s->ready != MS_OPEN) result = d_error(ctx, "InvalidStateError", "The MediaSource is not open");
     else if (!d_provider_begin(dom, ctx)) result = JS_EXCEPTION;
@@ -637,7 +646,7 @@ static JSValue source_member(JSContext *ctx, JSValueConst self, int argc, JSValu
         if (type == NULL) return JS_EXCEPTION;
         /* With no fed host nothing can play, and a player told yes would
          * choose MSE over the plain file it falls back to. */
-        bool yes = host(dom)->open != NULL && type[0] != '\0' && type_supported(type);
+        bool yes = host(dom)->open != NULL && type[0] != '\0' && type_playable(dom, type);
         JS_FreeCString(ctx, type);
         return JS_NewBool(ctx, yes);
     }

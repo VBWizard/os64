@@ -285,6 +285,18 @@ static bool mse_entropy(void *opaque, uint8_t *out, size_t length)
 /* media_fixture's page with Media Source Extensions' switch on (dom.h's
  * media_source, which is what makes the interfaces), randomness for the
  * object URLs, and the fake fed host. */
+/* A host that plays no AAC (its type_supported): libdom's table says yes,
+ * this says no. */
+static bool fed_no_aac(void *opaque, const char *type)
+{
+    (void)opaque;
+    return strstr(type, "mp4a") == NULL;
+}
+static const os64_dom_fed_provider_t fed_provider_no_aac = {
+    NULL, fed_open, fed_close, fed_add, fed_remove_buffer, fed_evict, fed_take, fed_parse, fed_poll, fed_reset,
+    fed_remove, fed_set, fed_ranges, fed_duration, fed_end, fed_no_aac,
+};
+
 static DomFixture mse_fixture(DomFixture *slot)
 {
     memset(fed_sessions, 0, sizeof(fed_sessions));
@@ -370,6 +382,15 @@ static void dom_mse_interface_cases(void)
         "for(const t of yes)assert(MediaSource.isTypeSupported(t)===true,'yes: '+t);"
         "for(const t of no)assert(MediaSource.isTypeSupported(t)===false,'no: '+t);",
         "mse: isTypeSupported");
+    /* The host's own answer: both it and libdom's table must say yes. */
+    os64_dom_set_fed(f.binding, &fed_provider_no_aac);
+    mse_script(&f, "assert(MediaSource.isTypeSupported('video/mp4; codecs=\"avc1.64001f\"'),'the table and the host');"
+                   "assert(!MediaSource.isTypeSupported('audio/mp4; codecs=\"mp4a.40.2\"'),'the host refuses AAC');",
+               "mse: the host's type_supported");
+    mse_attach(&f, "mse: attach under the AAC-less host");
+    mse_script(&f, "throws('NotSupportedError',()=>ms.addSourceBuffer('audio/mp4; codecs=\"mp4a.40.2\"'));"
+                   "ms.addSourceBuffer('video/mp4; codecs=\"avc1.64001f\"');",
+               "mse: addSourceBuffer asks the host too");
     fixture_free(&f);
 }
 

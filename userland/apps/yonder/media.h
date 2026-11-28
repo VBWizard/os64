@@ -51,7 +51,10 @@ typedef struct {
 // <video>, whose player decodes the picture too. `element` ("video 2") and
 // `named` (the address as the page's record shows it) are what a failure
 // is recorded by (yonder_media_failure_take), copied; NULL takes the
-// element's kind and the address.
+// element's kind and the address. `fed`: the session plays a fed media
+// (os64/media_fed.h, a page's MediaSource) that it makes and holds the
+// page's hold of, so there is nothing to fetch, and `url` (the MediaSource's
+// object URL) only names it in the record.
 typedef struct {
     const char *url;
     const char *page_url;
@@ -63,6 +66,7 @@ typedef struct {
     bool picture;
     const char *element;
     const char *named;
+    bool fed;
 } yonder_media_request_t;
 
 // Once, before the first open; and once as yonder leaves, after the pages
@@ -82,8 +86,16 @@ const char *yonder_media_sounds(void);
 // as are all of these.
 yonder_media_t *yonder_media_open(const yonder_media_request_t *request);
 // The session ends: its threads are told to stop and the window frees it
-// once they have (yonder_media_reap). The pointer is dead on return.
+// once they have (yonder_media_reap). A fed session's fed media is let go
+// too (the page's hold; the player lets go of its own at its finish, and
+// neither waits on the other). The pointer is dead on return.
 void yonder_media_close(yonder_media_t *m);
+// A fed session's fed media, for the calls of os64/media_fed.h, until
+// yonder_media_close; NULL for any other session.
+os64_media_fed_t *yonder_media_fed(yonder_media_t *m);
+// Where its player's clock stands, seconds; NaN before the player has
+// probed its media, or with no player.
+double yonder_media_position(yonder_media_t *m);
 void yonder_media_play(yonder_media_t *m);
 void yonder_media_pause(yonder_media_t *m);
 void yonder_media_seek(yonder_media_t *m, double seconds, uint64_t generation);
