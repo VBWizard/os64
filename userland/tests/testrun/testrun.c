@@ -131,6 +131,7 @@ static const fixture_t kFixtures[] = {
     { "/tests/resampletest",    NULL, 0x5A3E0000,  0,          "libsound's resampler: a sine at 44.1 kHz comes out the same sine at 48, and back, and mono" },
     { "/tests/playtest",        NULL, 0x91A10000,  0x91A100FE,        "/bin/play end to end at the tap: a 44.1 kHz mono WAV is the same sine at 48, a 48 kHz one arrives sample for sample, bad files are refused, an MP3 is heard whole" },
     { "/tests/playertest",      NULL, 0x91A50000,  0x91A500FE,        "libmedia's player for a sound alone, at the tap: heard whole at a gain, three threads, a loop with no seam, a refused device waited out from the first frame, the source's idle hook, a picture's loop whose kinds end apart" },
+    { "/tests/msetest",         NULL, 0xF3D00000,  0xF3D000FE,        "libmedia's fed media through its player, as a MediaSource runs it: appended pieces play to their end, a quality switch reopens the decoder once and loses no picture, a seek into what is not yet buffered lands when it arrives" },
     // gplaytest reports 0x6F1A00FE on a boot with no desktop, or with a
     // sink that can be heard: the line it prints says which.
     { "/tests/gplaytest",       NULL, 0x6F1A0000,  0x6F1A00FE,        "/bin/gplay end to end: a video plays to its end with every frame of sound accounted for, covered for the whole clip too, a silent file, a soundless one refused, a script of keys (pause, seeks, mute, resizes, the readout, the sync dial)" },

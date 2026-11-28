@@ -7,6 +7,11 @@
 //     gplay --full-screen film.mp4   start full screen
 //     gplay --no-plane film.mp4      paint every picture in the window,
 //                                    asking the player for no plane
+//     gplay --fed /tests/pages/sync-fed
+//                                    feed it in fragments, as a page's
+//                                    MediaSource does (fed.h): w switches
+//                                    the picture's size, e removes what is
+//                                    behind
 //
 // For tests (/tests/gplaytest): --check plays to the end and judges the
 // counts (exit 3 when one is wrong), the plane among them (on to the end, or
@@ -15,7 +20,7 @@
 // the whole screen, so gplay's is answered no frames; --script "ms:action,..."
 // performs keys at times from the start (pause, back, forward, backfar,
 // forwardfar, mute, louder, softer, later, earlier, readout, fullscreen,
-// escape, quit, or resize=WxH).
+// escape, quit, switch, evict, or resize=WxH).
 //
 // Keys: space pauses and resumes; left and right seek five seconds, with
 // Shift a minute (presses while a seek is under way count from its target);
@@ -65,6 +70,7 @@
 #include "os64/mediakeys.h"
 #include "os64/thread.h"
 
+#include "fed.h"
 #include "view.h"
 
 #define RATE OS64_AUDIO_RATE
@@ -74,7 +80,7 @@
 #define MARGIN 48                         // the first window leaves this much of the screen
 #define ACTIONS 16
 #define DOUBLE_CLICK_US 400000            // two left presses this close are a double-click
-#define READOUT_LINES 9                   // what readout_lines writes at most
+#define READOUT_LINES 10                  // what readout_lines writes at most
 #define READOUT_CHARS 96                  // a line's buffer, its NUL included
 // Over a placed plane the readout is an overlay rectangle, and the kernel
 // refuses a publish whose overlays blend more than GUI_PLANE_OVERLAY_PIXELS
@@ -113,10 +119,12 @@ typedef struct {
     bool muted;
     int64_t sync;
     uint64_t display_missed, last_frame_number;
+    gplay_fed_t *fed;                     // --fed's feeder, or NULL
 } app_t;
 
 static bool s_exit_at_end, s_check, s_cover, s_maximized, s_full_screen, s_expect_refusal, s_no_plane;
 static const char *s_script;
+static bool s_fed;
 
 static int64_t now_us(void)
 {
@@ -178,6 +186,7 @@ static bool script_step(const char **cursor, int64_t *ms, action_t *a)
         {"louder", GPLAY_KEY_LOUDER}, {"softer", GPLAY_KEY_SOFTER}, {"later", GPLAY_KEY_SOUND_LATER},
         {"earlier", GPLAY_KEY_SOUND_EARLIER}, {"readout", GPLAY_KEY_READOUT}, {"quit", GPLAY_KEY_QUIT},
         {"fullscreen", GPLAY_KEY_FULL_SCREEN}, {"escape", GPLAY_KEY_ESCAPE},
+        {"switch", GPLAY_KEY_SWITCH}, {"evict", GPLAY_KEY_EVICT},
     };
     *a = (action_t){GPLAY_KEY_NONE, 0, 0};
     if (len > 7 && os64_memcmp(word, "resize=", 7) == 0) {
@@ -325,6 +334,8 @@ static void readout_lines(app_t *a, const os64_media_player_facts_t *f, bool pla
                       f->plane_cap_w, f->plane_cap_h, (unsigned long)f->plane_published,
                       (unsigned long)f->waits_patience, f->plane_stale ? "stale" : f->plane_ready ? "ready" : "not ready",
                       placed ? "placed" : "hidden");
+    if (a->fed != NULL)
+        gplay_fed_line(a->fed, lines[n++], READOUT_CHARS);
     *count = n;
 }
 
@@ -529,6 +540,14 @@ static void do_key(app_t *a, view_t *v, gplay_key_t key, bool to_start, int stat
     case GPLAY_KEY_QUIT:
         a->quit = true;
         break;
+    case GPLAY_KEY_SWITCH:
+        if (a->fed != NULL)
+            gplay_fed_switch(a->fed);
+        break;
+    case GPLAY_KEY_EVICT:
+        if (a->fed != NULL)
+            gplay_fed_evict(a->fed);
+        break;
     case GPLAY_KEY_FULL_SCREEN:
         full_screen_set(a, !full_screen_now(a));
         break;
@@ -593,6 +612,8 @@ static void run(app_t *a, view_t *v, const os64_media_info_t *info, const char *
     for (;;) {
         os64_media_player_facts_t f;
         os64_media_player_facts(a->player, &f);
+        if (a->fed != NULL)
+            gplay_fed_position(a->fed, f.position);   // what the feeder keeps ahead of
         os64_lock_acquire(&a->lock);
         a->playing = f.state == OS64_MEDIA_PLAYER_PLAYING || f.state == OS64_MEDIA_PLAYER_BUFFERING;
         os64_lock_release(&a->lock);
@@ -875,13 +896,16 @@ int main(int argc, char **argv)
             s_no_plane = true;
         else if (os64_strcmp(argv[first], "--script") == 0 && first + 1 < argc)
             s_script = argv[++first];
+        else if (os64_strcmp(argv[first], "--fed") == 0)
+            s_fed = true;
         else
             break;
         first++;
     }
     if (first != argc - 1) {
         os64_printf("usage: gplay [--exit-at-end] [--maximized] [--full-screen] [--no-plane] [--check [--expect-refusal]] "
-                    "[--cover] [--script steps] file\n");
+                    "[--cover] [--script steps] file\n"
+                    "       gplay [options] --fed prefix   (prefix-<size>.mp4 and prefix-a48.mp4, indexed)\n");
         return 1;
     }
     const char *path = argv[first];
@@ -890,12 +914,20 @@ int main(int argc, char **argv)
         if (*s == '/')
             name = s + 1;
 
-    int64_t file = os64_open(path, "r");
-    if (file < 0) {
+    // --fed: `path` names a prefix (fed.h), not a file.
+    int64_t file = s_fed ? -1 : os64_open(path, "r");
+    if (file < 0 && !s_fed) {
         os64_printf("gplay: %s: cannot open\n", path);
         return 2;
     }
     app_t *a = os64_calloc(1, sizeof(app_t));
+    if (s_fed) {
+        char why[160];
+        if ((a->fed = gplay_fed_open(path, why, sizeof(why))) == NULL) {
+            os64_printf("gplay: %s\n", why);
+            return 2;
+        }
+    }
     view_t v = {0};
     a->bell = (os64_bell_t)OS64_BELL_NONE;
     os64_bell_make(&a->bell);
@@ -906,9 +938,16 @@ int main(int argc, char **argv)
     os64_media_player_config_t cfg = {.want = OS64_MEDIA_WANT_SOUND | OS64_MEDIA_WANT_PICTURE,
                                       .output = a->output, .refused = OS64_MEDIA_VOICE_PLAY_ON, .loaded = true,
                                       .look = on_look, .finished = on_finished, .ctx = a};
-    os64_media_file_source((int32_t)file, &cfg.source);
+    if (a->fed != NULL)
+        cfg.fed = gplay_fed_media(a->fed);
+    else
+        os64_media_file_source((int32_t)file, &cfg.source);
     if (os64_media_player_create(&cfg, &a->player) != 0) {
         os64_printf("gplay: %s: the player would not start\n", path);
+        return 3;
+    }
+    if (a->fed != NULL && !gplay_fed_start(a->fed)) {
+        os64_printf("gplay: %s: the feeder would not start\n", path);
         return 3;
     }
     os64_media_player_play(a->player);
@@ -933,7 +972,8 @@ int main(int argc, char **argv)
         if (close_player(a)) {
             if (a->output != 0)
                 (void)os64_media_output_destroy(a->output);
-            os64_close((int32_t)file);
+            if (file >= 0)
+                os64_close((int32_t)file);
         }
         return 2;
     }
@@ -953,7 +993,8 @@ int main(int argc, char **argv)
         if (close_player(a)) {
             if (a->output != 0)
                 (void)os64_media_output_destroy(a->output);
-            os64_close((int32_t)file);
+            if (file >= 0)
+                os64_close((int32_t)file);
         }
         return 1;
     }
@@ -1005,6 +1046,11 @@ int main(int argc, char **argv)
     if (f.failure != 0)
         os64_printf("gplay: %s: %s\n", path, os64_media_strerror(f.failure));
     say_counts(a, &f, v.placed, name);
+    if (a->fed != NULL) {
+        char line[READOUT_CHARS];
+        gplay_fed_line(a->fed, line, sizeof(line));
+        os64_printf("  %s\n", line);
+    }
     bool checked = !s_check || counts_hold(&f, name);
     int code = f.failure != 0 || !checked ? 3 : 0;
 
@@ -1019,7 +1065,9 @@ int main(int argc, char **argv)
     if (closed) {
         if (a->output != 0 && os64_media_output_destroy(a->output) != 0)
             os64_printf("gplay: the sound device's thread did not let go\n");
-        os64_close((int32_t)file);
+        if (file >= 0)
+            os64_close((int32_t)file);
+        gplay_fed_close(a->fed);
         os64_bell_close(&a->bell);
         os64_free(a);
     } else {

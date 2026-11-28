@@ -47,6 +47,8 @@ typedef enum {
     GPLAY_KEY_FULL_SCREEN,   // f: full screen, or back
     GPLAY_KEY_ESCAPE,        // Escape: out of full screen, else quit (gplay decides)
     GPLAY_KEY_QUIT,          // q
+    GPLAY_KEY_SWITCH,        // w: --fed's other picture rendition
+    GPLAY_KEY_EVICT,         // e: --fed removes what is behind the position
 } gplay_key_t;
 
 // From a key-down's character, its key's code and Shift. An arrow arrives as
