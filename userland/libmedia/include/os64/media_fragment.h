@@ -17,8 +17,9 @@
 // THE SINK may hold and drop slabs, and may reset or destroy the parser:
 // that ends the append it was called from, the rest of the append's bytes
 // discarded as the spec's reset parser state discards the input buffer
-// (MSE § 5.5.2), and the frame or init in hand stays good. It may not
-// append.
+// (MSE § 5.5.2). A frame in hand outlives that only if its slab was held
+// first, and a destroy takes the init's configurations with it. It may
+// not append.
 //
 // PURE, AND NOT LOCKED: no os64 headers, no clock, no I/O; it allocates only
 // through the caller's memory functions, and calls nothing but those and its
