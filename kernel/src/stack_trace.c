@@ -23,6 +23,7 @@
 #include "stack_trace.h"
 #include "elf_loader.h"
 #include "paging.h"
+#include "allocator.h"     // allocator_copy_from_task_va — a dying task's stack, read safely
 #include "serial_logging.h"
 #include "logging/log.h"   // log_sink_is_userland — which sinks this line needs
 #include "sprintf.h"
@@ -66,9 +67,12 @@ static void trace_emit(const char *line, bool glass)
 /// @return true only if the address was mapped and the value was read.
 ///
 /// Resolves through the TASK's page tables (never the live CR3 — by the time a
-/// fault report runs we may be on kKernelPML4) and reads through the HHDM
-/// alias, which is valid under every CR3 for allocator-owned pages. The
-/// 0xbadbadba sentinel is paging_walk_paging_table's "not mapped" answer.
+/// fault report runs we may be on kKernelPML4) and reads through the HHDM,
+/// by allocator_copy_from_task_va: the walk and the read under the frame
+/// lock, each frame checked live first. A dying task's siblings still run,
+/// and one can unmap a page between a plain walk and its read; the read
+/// would then trip the HHDM's use-after-free tripwire inside a death report
+/// (USER_COPY.md § The other class). 8 aligned bytes never cross a page.
 static bool read_task_u64(task_t *task, uint64_t va, uint64_t *out)
 {
 	if (task == NULL || task->pml4v == 0 || out == NULL) {
@@ -80,13 +84,7 @@ static bool read_task_u64(task_t *task, uint64_t va, uint64_t *out)
 	if ((va & 7) != 0 || va >= USER_CANONICAL_MAX) {
 		return false;
 	}
-
-	uintptr_t phys = paging_walk_paging_table((pt_entry_t *)task->pml4v, va);
-	if (phys == 0 || phys == 0xbadbadba) {
-		return false;
-	}
-	*out = *(volatile uint64_t *)((phys & ~0xFFFULL) | (va & 0xFFF) | kHHDMOffset);
-	return true;
+	return allocator_copy_from_task_va((void *)task->pml4v, va, out, sizeof(*out));
 }
 
 /// @brief Name the function containing a runtime address, from the task's .symtab.

@@ -73,6 +73,8 @@
 //                                waited for it (thread_reap.h)
 //   /sys/memory/shootdown        the waited invalidation's rounds, the late
 //                                ones and the longest wait (smp_core.h)
+//   /sys/memory/usercopy         user copies that faulted after their check
+//                                and answered not copied (user_copy.h)
 //   /sys/random                  the entropy pool: which instructions the
 //                                CPU advertises and which passed the boot
 //                                variation check, what seeded the pool,
@@ -187,6 +189,7 @@
 #include "scheduler.h"              // mp_inScheduler, mp_lastIretqRIP
 #include "smp.h"                    // core_local_storage_t, kCPUCount
 #include "smp_core.h"               // get_core_local_storage_for_core, mpAcctSettleAll
+#include "user_copy.h"              // user_copy_counts_read — /sys/memory/usercopy
 #include "nmi_probe.h"              // the probe trigger behind cpu/<n>/probe
 #include "driver/block/block_cache.h"   // /sys/cache — the block cache's own numbers
 #include "conf.h"                       // /sys/conf — the config search path and its takers
@@ -434,6 +437,7 @@ typedef enum
 	SYS_NODE_MEMLEDGER,  // /memory/ledger — the small-object ledger and its lock
 	SYS_NODE_MEMREAP,    // /memory/reap — ended threads' stacks (thread_reap.h)
 	SYS_NODE_MEMSHOOTDOWN, // /memory/shootdown — the waited invalidation (smp_core.h)
+	SYS_NODE_MEMUSERCOPY,  // /memory/usercopy — user copies recovered (user_copy.h)
 } sys_node_type_t;
 
 #define SYS_NAME_MAX 32
@@ -672,6 +676,7 @@ static void sys_parse_path(const char *path, sys_path_t *out)
 		                     : strcmp(comp, "ledger") == 0    ? SYS_NODE_MEMLEDGER
 		                     : strcmp(comp, "reap") == 0      ? SYS_NODE_MEMREAP
 		                     : strcmp(comp, "shootdown") == 0 ? SYS_NODE_MEMSHOOTDOWN
+		                     : strcmp(comp, "usercopy") == 0  ? SYS_NODE_MEMUSERCOPY
 		                                                      : SYS_NODE_MEMDIR;
 		if (type == SYS_NODE_MEMDIR || synth_next_component(path, &pos, comp, sizeof(comp)))
 			return;
@@ -1246,6 +1251,20 @@ static void sys_gen_memory_reap(synth_text_t *t)
 	                THREAD_REAP_BACKLOG, c.creator_parks, c.creator_proceeded, THREAD_REAP_PARK_MOST_US / 1000,
 	                c.creator_park_most_us);
 	synth_text_addf(t, "refused: %lu (a node handed or claimed in the wrong state)\n", c.refused);
+}
+
+// /sys/memory/usercopy — user copies that faulted on a page the handler
+// could not give them (a sibling took it away between the check and the
+// copy, or it could not be read in), each answered "not copied" instead of
+// a panic (user_copy.h; USER_COPY.md). None is the expected number outside a
+// program racing its own memory, as /tests/copyrace does on purpose.
+static void sys_gen_memory_usercopy(synth_text_t *t)
+{
+	user_copy_counts_t c;
+	user_copy_counts_read(&c);
+	synth_text_addf(t, "recovered: %lu, %lu since last read\n", c.total, c.since_read);
+	if (c.total != 0)
+		synth_text_addf(t, "last: task %lu, at 0x%016lx\n", c.last_task, c.last_cr2);
 }
 
 // /sys/memory/shootdown — the waited invalidation's rounds (smp_core.h).
@@ -2890,7 +2909,8 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	         && sp.type != SYS_NODE_OPENFILESFILE && sp.type != SYS_NODE_RANDOMFILE
 	         && sp.type != SYS_NODE_ACPIFILE
 	         && sp.type != SYS_NODE_MEMFRAMES && sp.type != SYS_NODE_MEMLEDGER
-	         && sp.type != SYS_NODE_MEMREAP && sp.type != SYS_NODE_MEMSHOOTDOWN)
+	         && sp.type != SYS_NODE_MEMREAP && sp.type != SYS_NODE_MEMSHOOTDOWN
+	         && sp.type != SYS_NODE_MEMUSERCOPY)
 		return -1;   // directories go through dops; everything else is not a file
 
 	synth_text_t text;
@@ -2923,6 +2943,8 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 		sys_gen_memory_reap(&text);
 	else if (sp.type == SYS_NODE_MEMSHOOTDOWN)
 		sys_gen_memory_shootdown(&text);
+	else if (sp.type == SYS_NODE_MEMUSERCOPY)
+		sys_gen_memory_usercopy(&text);
 	else if (sp.type == SYS_NODE_CONFFILE)
 		sys_gen_conf(&text);
 	else if (sp.type == SYS_NODE_MOUNTSFILE)
@@ -3306,7 +3328,7 @@ static int sys_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 
 		case SYS_NODE_MEMDIR:
 		{
-			static const char *kSysMemoryFiles[] = { "frames", "ledger", "reap", "shootdown" };
+			static const char *kSysMemoryFiles[] = { "frames", "ledger", "reap", "shootdown", "usercopy" };
 			if (h->index >= (int)(sizeof(kSysMemoryFiles) / sizeof(kSysMemoryFiles[0])))
 				return 0;
 			strncpy(entry->name, kSysMemoryFiles[h->index], OS64_DIRENT_NAME_MAX);
@@ -3573,6 +3595,10 @@ static int sys_stat(const char *path, os64_dirent_t *entry, vfs_filesystem_t *vf
 
 		case SYS_NODE_MEMSHOOTDOWN:
 			strncpy(entry->name, "shootdown", OS64_DIRENT_NAME_MAX);
+			return 0;
+
+		case SYS_NODE_MEMUSERCOPY:
+			strncpy(entry->name, "usercopy", OS64_DIRENT_NAME_MAX);
 			return 0;
 
 		case SYS_NODE_NETIP:
