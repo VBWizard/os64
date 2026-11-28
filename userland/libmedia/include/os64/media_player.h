@@ -111,6 +111,11 @@ typedef struct os64_media_player os64_media_player_t;
 
 typedef struct {
     os64_media_source_t source;     // read on the decoding thread only; see os64_media_player_close
+    // NULL, or the source's first step, on the decoding thread before the
+    // open (a file to open, a fetch to begin and its head to wait for, all
+    // of which may block): it fills `source` in and answers true, or false
+    // to fail the open (OS64_MEDIA_IO). With it `source` may start empty.
+    bool (*prepare)(void *ctx, os64_media_source_t *source);
     uint32_t want;                  // OS64_MEDIA_WANT_SOUND and/or _PICTURE
     os64_media_output_t *output;    // NULL: the sound is not opened (the clock monotonic)
     int refused;                    // OS64_MEDIA_VOICE_WAIT or _PLAY_ON (os64/media_output.h); PLAY_ON is
@@ -130,8 +135,9 @@ typedef struct {
                                     // dozens
 } os64_media_player_config_t;
 
-// Starts the decoding thread, which opens the source (a probe may read the
-// network, so it is never done on the caller's thread). The player is
+// Starts the decoding thread, which prepares the source if asked and opens
+// it (either may read the network, so neither is done on the caller's
+// thread). The player is
 // OPENING, then PAUSED at frame 0 (BUFFERING if play was asked meanwhile),
 // or FAILED with facts.failure saying why; failed or not, it is the
 // caller's until os64_media_player_close. Returns 0, or
@@ -219,7 +225,11 @@ typedef struct {
     os64_media_info_t info;
     bool has_sound;                 // a sound this player decodes (playable and wanted)
     bool muted;
-    int64_t length;                 // output frames, -1 when not known (known at the end if not before)
+    int64_t length;                 // output frames, -1 when not known; the end sets it if it was not
+                                    // known, and for a sound alone played from its start corrects it
+                                    // when more than a tenth of a second away (with a picture, or after
+                                    // a seek, the end is no evidence: see the decoding thread)
+    int64_t length_us, looked_us;   // micros() when `length` was last set, and `look` last rung
     int64_t position;               // the clock's reading now; the length once ENDED, when known
     // Readiness at the position, each implying the one before.
     bool current;                   // a picture for now is converted (with no picture: sound queued)

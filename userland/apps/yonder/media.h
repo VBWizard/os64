@@ -107,13 +107,22 @@ void yonder_media_size(yonder_media_t *m, uint32_t width, uint32_t height);
 // A session's player's own facts (its pace, clock and counts), for the
 // record's reading; false for one with no player yet.
 bool yonder_media_player_facts(yonder_media_t *m, os64_media_player_facts_t *out);
+// The `i`th open session's line for the record's reading, on how its length
+// travelled: its source (file, network or blob, the size, whether ranges
+// were answered, the fetches begun), the player's length and when it was set, whether a
+// `look` followed, the duration told to libdom and when, and when libdom
+// last read it. False past the last session. Window.
+bool yonder_media_report(uint32_t i, char *out, size_t cap);
+// A time for the record: seconds to the millisecond, "unknown" for NaN,
+// "no end" for infinity (libos64's printf has no floating point).
+size_t yonder_media_seconds(double s, char *out, size_t cap);
 // A <video>'s player given a plane of `win` (os64/media_player.h § A
 // plane), from a thread of its own: the ask waits for the plane to be made,
 // the window does not. Asked once, or again once the last ask's thread is
 // done (for a plane that ended; the player refuses any other). The verdict
 // is the player's facts' `plane_state`, read at the window's next turn.
 // False when not asked (an <audio>, no player yet, an ask still running,
-// closed) or when its thread may not have started.
+// closed) or when its thread could not be started.
 bool yonder_media_plane_ask(yonder_media_t *m, int64_t win);
 // os64_media_player_plane_want, for a <video> with a player.
 void yonder_media_plane_want(yonder_media_t *m, bool want);

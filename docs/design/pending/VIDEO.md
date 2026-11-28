@@ -336,6 +336,27 @@ what yonder's own decoder loop did moved into it or beside it:
   of 0, a silent voice still mixed, because with no ear its queue would
   never drain (a muted `<video>`'s voice goes, its clock monotonic).
 
+**The thread starts, against a close (V.6.1).** Every thread the player,
+the output and yonder's media host start, what it reads first, and what
+keeps that alive:
+
+| Thread | Started by | Reads first | Freed by, and when | Why its reads come first |
+|---|---|---|---|---|
+| decoding | `os64_media_player_create`, the player built | its config; calls `prepare` (yonder's `session_prepare`) | the player by itself (`finish`); yonder's session only after `finished`, the thread's last act | a close only sets `quit` and rings |
+| picture | the decoding thread, once open | the player's lock and `quit` | `finish`, after joining it | the join |
+| show (the player's plane) | `os64_media_player_plane` | the player's lock and its plane | the decoding thread joins it before `finished` | the join |
+| audio (the output) | `os64_media_output_create`, the output built | the output's buffers, its lock, the voices | `destroy`, after joining it; a voice by its owner only once `gone` | the join; `gone` |
+| loader (yonder) | `loader_start`, the job and pipe set | the session's job | the job after `loader_done`; the pipe has two holders | `loader_done` |
+| plane helper (yonder) | `yonder_media_plane_ask`, the window and its ask set | the session's player, under its lock | the session after `plane_helper_done`; a close while it asks is the helper's to make as the ask returns (`plane_close_owed`) | `plane_helper_done`; the close owed |
+
+A start that fails made no thread: the kernel reserves a thread's handle
+before it makes the thread, so a refusal makes none (`/tests/handletest`).
+Each start's failure is undone at once by the one who asked: no picture
+means no player, a refused decoding thread frees the player, and yonder's
+loader and plane helper give back what they were handed
+(`tools/test_yonder_media_threads_host.sh`). None of this is the address-0
+crash (DEBTS, Video).
+
 gplay is the window, the letterbox, the keys, the title and the readout.
 
 ## 4. The clock
@@ -461,12 +482,15 @@ clip or a filter is drawn by the existing picture path from the same
 frame (per-pixel, slower, correct). Same for the moment between a resize
 and the first frame at the new size.
 
-**As built (V.5.3, V.5.4).** Every media element's session is libmedia's
-player (`apps/yonder/media.c`): an opener thread makes the bytes ready
-(the file opened, or the fetch begun and its head waited for), then the
-player, whose decoding thread reads them through `store_read` and
-`store_seek` and lets an idle fetch go through `store_idle`; the window
-drives the player. A `<video>`'s asks for the picture too.
+**As built (V.5.3 to V.6.1).** Every media element's session is
+libmedia's player (`apps/yonder/media.c`), made by the window as the
+session opens and driven by it. Its decoding thread makes the bytes ready
+first, as the player's `prepare` (`session_prepare`: the file opened, or
+the fetch begun and its head waited for), then reads them through
+`store_read` and `store_seek` and lets an idle fetch go through
+`store_idle`. A `<video>`'s asks for the picture too. (Until V.6.1 an
+opener thread did the first step and made the player, and each one's
+ended stack stayed with yonder until it exited.)
 `apps/yonder/yonder.c`'s videos section is the rest:
 
 1. `videos_turn` reads each shown video's facts after the media turn: the
@@ -829,18 +853,79 @@ interrupts off is heard.
 
 - `videoWidth`, `videoHeight` once metadata is known; the box takes the
   picture's ratio then (one layout), unless the page fixed it.
-- `poster`: fetched as an image, shown until the first frame is.
+- `poster`: fetched as an image, shown until the first frame is. **As
+  built (V.6.2):** HTML's show poster flag is libdom's (`show_poster` in
+  the element's view), set at the element's birth and at each load,
+  cleared by a play, autoplay's start or a seek, and never brought back by
+  a pause. While it is set and the poster has arrived, the box shows the
+  poster, even with a first picture ready; after it the picture, and the
+  poster still until there is one, so an autoplay shows no gap. `ended`
+  holds the last picture. The poster is drawn as a picture is
+  (`glass_picture`, the element's object-fit and object-position, the
+  general path). The box's natural size is the video's once known, else
+  the poster's once it has arrived, else 300x150; a poster's arrival lays
+  the page out once, unless the page fixed the box's size. yonder keeps a
+  poster slot per element (`poster_seen`, read by layout and paint, which
+  never touch the picture table) and asks for a new address's picture in
+  the media turn (`posters_turn`), so a poster set or changed by script is
+  fetched as any picture: it is one of the page's pictures in the record
+  and in its picture memory. A replaced poster's old picture stays in the
+  page's picture table, as an `<img>`'s replaced source does (DEBTS).
+  `/tests/pages/video-poster.html`; the flag's cases are
+  `tools/test_dom_media.inc`'s poster cases.
 - Readiness counts pictures as well as sound: `loadeddata` means a first
   frame exists.
 - `canPlayType`: `video/mp4` and `avc1` codecs answer for what is built.
 - `<video controls>`: the existing player, along the bottom, over the
-  picture. **GAP:** hide when idle, as other browsers do.
+  picture. **As built (V.6.3):** its strip is a dark translucent band with
+  light ink (the time on a small dark pill, since a text run paints its
+  own paper), and no bar for a length not known or with no end. Whether
+  it is drawn is `apps/yonder/strip.c` (pure, `tools/test_strip_host.sh`
+  beside a model, `tools/test_strip_mutants.py`): PINNED while the element
+  is paused or ended (an autoplay, asked to play, is not pinned before it
+  begins; a new `src` starts that over), the pointer is over the strip,
+  the strip has the keyboard's focus (one that arrived without a press,
+  by Tab; a press focuses it too, and does not pin it) or a drag is under
+  way; TIMED for 3 s after the last move over the box, the deadline held
+  while the player buffers; HIDDEN when the deadline passes or the pointer
+  leaves the box, drawn not at all and taking no clicks, only its
+  rectangle repainted. A real pointer move, a click on the picture and a
+  key the strip handles are moves; a scroll's re-hit is not, and the
+  pointer leaving the window is leaving the box. A strip its rules hide
+  stays in the keyboard's order, seen nowhere (an empty clip: it paints
+  nothing and takes no pointer), so Tab reaches it and the keyboard's
+  focus pins it shown, and one that hides while focused keeps the focus,
+  a key it handles bringing it back. A click on the picture plays or pauses after the
+  page's listeners, unless one prevented it (both pointer paths:
+  `inputs_run`'s and `pointer_default`'s); one on a drawn strip is the
+  strip's own. The buffering mark, a dark square with three
+  dots in the box's middle, shows after half a second of the view's
+  `waiting` (DEBTS: a video stalled on its bytes did not raise it in
+  QEMU). One deadline for the loop, armed only while a strip is TIMED with
+  the pointer in its box or a mark is pending. `/tests/pages/video-strip.html`.
 - A link straight to a video file opens a page showing it
   (`WAY_BODY_MEDIA`'s video twin).
 - **A file whose index is at the END** (common for MP4s not prepared for
-  the web): today's loader refuses the seek FFmpeg makes while opening.
-  With ranges, the open fetches the tail; without, the file must arrive
-  whole. Needs a fixture; nothing in the tree exercises it.
+  the web). **As built (V.6.1):** the window refuses a far seek while a
+  media opens (the MP3 reader probes the end for tags and carries on),
+  except for an ISO BMFF file (`ftyp` at byte 4), whose reader seeks to
+  its `moov`. With ranges the open costs three requests: the file from 0,
+  a `Range` for the tail, and the front again (`tools/pages/tail-index.mp4`,
+  555 KB: 9,391 bytes of tail). Without ranges the file arrives whole
+  before it opens, the element waiting at `loadstart` and `progress`. A
+  file whose index lies past the bytes yonder keeps (`KEPT_MAX`, DEBTS)
+  fails to open, and the record's `media` line says the seek back it was
+  refused. `video-tail.html` and `video-tail-whole.html` are the pages
+  (`tools/pages_serve.py`, with and without `--no-ranges`).
+- **The length reaches the element when it is learned (V.6.1).** yonder
+  passes on any change of the player's length after the probe, and libdom
+  fires `durationchange` for it either way. The player's end fills in a
+  length the probe could not say, and corrects a stated one for a sound
+  alone (`/tests/playertest` steps 6 and 8). The record's reading (`d`)
+  prints, per media session, the source, the length and when it was set,
+  whether a `look` followed, the duration told and when libdom read it,
+  and each video's line the element's own duration: the trail for a
+  length that goes missing on its way to the page.
 
 **As built (V.5.3).** The element's table is VIDEO_V5_DESIGN.md § 3,
 with Fable's answers, in libdom (`media.c`, `video.c`) over the host's

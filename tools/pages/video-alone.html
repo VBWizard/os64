@@ -1,0 +1,26 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>A video with controls</title>
+<!--
+  A <video controls> and nothing else of the page's own over it, for the
+  strip (VIDEO.md § 8) on a video on its plane (VIDEO_PLANE.md § 5): paused,
+  the strip shows over the picture's foot; playing, it hides three seconds
+  after the last move over the box and comes back on a move; a click on the
+  picture plays or pauses it. The button under it puts the video in full
+  screen (the Fullscreen API), where the strip behaves the same and Escape
+  comes back.
+-->
+<style>
+  body { margin: 16px; background: #ffffff; font: 16px sans-serif; }
+  video { width: 640px; height: 360px; background: #000; display: block; }
+  button { margin-top: 8px; }
+</style>
+<video id="v" controls loop src="bbb-480p-3s-av.mp4"></video>
+<button id="full">Full screen</button>
+<script>
+  document.getElementById('full').addEventListener('click', () => {
+    document.getElementById('v').requestFullscreen().catch(e => console.log('video-alone: ' + e));
+  });
+  document.addEventListener('fullscreenchange', () =>
+    console.log('video-alone: full screen ' + (document.fullscreenElement ? 'on' : 'off')));
+</script>

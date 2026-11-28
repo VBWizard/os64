@@ -202,7 +202,7 @@ for, and a monitor row that names it is the first place to look.
 told apart on the P5 by the order they were created in, and only
 tentatively. `os64_media_player` and `os64_media_output` name theirs
 (decoding, the conversion to the window's pixels, the show thread, the
-audio output); yonder names its media opener and loader, its media keys
+audio output); yonder names its media loader and plane helper, its media keys
 reader and its ticker; libfetch names a connection's reader; gplay its
 key reader. A library's thread is named for its job, with no program
 prefix: the row already sits under its task.
@@ -259,8 +259,7 @@ syscall calls and assembly included.
     `audio-out`;
   - libfetch: `h2-reader`;
   - libos64's browser pool and yonder's pool: `worker-01` on;
-  - yonder: `ticker`, `keys`, and per media element `opener`, `loader`,
-    `plane`;
+  - yonder: `ticker`, `keys`, and per media element `loader` and `plane`;
   - gplay: `keys`.
 - yonder has no settings relay thread any more, so there is nothing to name.
 - Threads left unnamed for now, each a one-line change when wanted:

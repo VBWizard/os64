@@ -25,7 +25,7 @@ yonder_host_build() {
     fi
     host_flags=(-O1 -g -std=gnu11 -Wall -Wextra -Werror -ffreestanding -fno-builtin
         -ffunction-sections -fdata-sections -fno-tree-loop-distribute-patterns
-        -fno-stack-protector -DOS64_JS_TARGET '-DLIBDOM_STREAMS_JS="userland/libdom/streams.js"' '-DLIBJS_INTL_DIR="userland/libjs/intl/"'
+        -fno-stack-protector -DOS64_HOST_SYSCALL_HOOK -DOS64_JS_TARGET '-DLIBDOM_STREAMS_JS="userland/libdom/streams.js"' '-DLIBJS_INTL_DIR="userland/libjs/intl/"'
         -Iuserland/libpng/include -Iuserland/libcanvas/include -Iuserland/libdraw2d/include -Iuserland/libxml/include -Iuserland/libsvg/include -Iuserland/libmath/include -Iuserland/libjs/port -Iuserland/libjs/include
         -Iuserland/libdom/include -Iuserland/libhtml/include -Iuserland/libpage/include
         -Iuserland/libflow/include -Iuserland/libgarb/include -Iuserland/libway/include
@@ -56,7 +56,7 @@ for name in text.split("LIBSVG_SRCS := ", 1)[1].splitlines()[0].split():
         userland/libjs/runtime/runtime.c userland/libjs/runtime/ledger.c userland/libjs/runtime/owner_incarnation.c userland/libjs/runtime/owner_tickets.c userland/libjs/intl/intl.c userland/libdom/{core,node,collection,content,inner_text,event,timer,window,geometry,classic,style,mixin,modern,view}.c \
         userland/libdom/{storage,performance,url,encoding,screen,base64,implementation,attr}.c \
         userland/libdom/{exception,abort,blob,blob_url,file_reader,fetch,xhr,browsing,crypto,subtle,subtle_core,report,document,frames,clone,message,idle,animation,webanimation,pointer,options,selection,importmap,controls,elements,tables,forms,validity,compare,sheets,point,rect,intersection,resize,kept,css,svg_geometry,image_data,canvas,canvas_path,canvas_path2d,canvas_text,canvas_image,mutation,custom,observer,streams,walker,shadow,adopted,range,data_nodes,hit,media,video,media_session,fullscreen}.c \
-        userland/apps/yonder/{scripts,census,modules,bytecode,importmap,script_decode,geometry,paint,paint_cache,keep,canvas_keep,scratch,scale,warp,filter,agent,bar,diag,svg,svg_document,picture,sheet,download,download_job,player,frame_plan,plane_place,plane_blend,task_order,load_timeline,thread_reading}.c \
+        userland/apps/yonder/{scripts,census,modules,bytecode,importmap,script_decode,geometry,paint,paint_cache,keep,canvas_keep,scratch,scale,warp,filter,agent,bar,diag,svg,svg_document,picture,sheet,download,download_job,player,strip,frame_plan,plane_place,plane_blend,task_order,load_timeline,thread_reading}.c \
         "${svg_sources[@]}" userland/libdraw2d/gradient.c userland/libdraw2d/paint.c userland/libdraw2d/stroke.c userland/libdraw2d/blur.c userland/libpng/encode.c userland/libpng/png.c userland/libgzip/inflate.c userland/libgzip/zlib.c userland/libos64/crc32.c userland/libcanvas/gradient.c userland/libcanvas/core.c userland/libcanvas/path.c userland/libcanvas/shadow.c \
         userland/apps/yonder/storage.c userland/apps/yonder/cookies.c \
         userland/libhtml/{core,encoding,tokenizer,tree,dom,fragment,serialize,serialize_xml,xml,shadow,range}.c userland/libxml/xml.c \

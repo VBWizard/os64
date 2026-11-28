@@ -565,3 +565,18 @@ Not for now, on Chris's word; for the list.
   the caption itself). The row: the widget wraps a `<button>`'s caption to
   the box it is given, and its height (button_size) follows the lines the
   given width makes; an input button stays as it is.
+
+## Added 2026-11-28, from the V.6.3 strip in QEMU
+
+- **Tab goes through a page's form controls first, then its media
+  players, whatever order the page has them in.** yonder's Tab order is
+  libui's widget tree, and the page's widgets are chained into it by kind
+  (`page_widgets_chain`: every form control, then every player), so on a
+  page with a `<video controls>` above a button, Tab reaches the button
+  before the video's strip. Other browsers walk the document: an element
+  with a positive `tabindex` first, in ascending order (ties in document
+  order), then every other focusable element (a control, a link, a media
+  element's controls, one with `tabindex="0"`) in document order; Shift+Tab
+  the same backwards. The row: the page's widgets join the tree in
+  document order, and a positive `tabindex` orders before the rest. Seen on `tools/pages/video-alone.html`,
+  whose Full screen button comes after its video but is reached first.

@@ -18,6 +18,35 @@
 #include <stdint.h>
 #include "os64/syscall_numbers.h"
 
+#ifdef OS64_HOST_SYSCALL_HOOK
+// A HOST BUILD (os64 code run on Linux by a test harness) answers every os64
+// syscall in os64_host_syscall, which the harness defines. The `syscall`
+// instruction would run whichever Linux call shares the number: 58, a
+// window's doorbell here, is Linux's vfork, whose child ran the rest of the
+// harness on the parent's stack and left it to crash at exit.
+uint64_t os64_host_syscall(uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2,
+                           uint64_t a3, uint64_t a4, uint64_t a5);
+static inline uint64_t os64_syscall0(uint64_t nr) { return os64_host_syscall(nr, 0, 0, 0, 0, 0, 0); }
+static inline uint64_t os64_syscall1(uint64_t nr, uint64_t a0) { return os64_host_syscall(nr, a0, 0, 0, 0, 0, 0); }
+static inline uint64_t os64_syscall2(uint64_t nr, uint64_t a0, uint64_t a1)
+{
+    return os64_host_syscall(nr, a0, a1, 0, 0, 0, 0);
+}
+static inline uint64_t os64_syscall3(uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2)
+{
+    return os64_host_syscall(nr, a0, a1, a2, 0, 0, 0);
+}
+static inline uint64_t os64_syscall4(uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3)
+{
+    return os64_host_syscall(nr, a0, a1, a2, a3, 0, 0);
+}
+static inline uint64_t os64_syscall6(uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
+                                     uint64_t a4, uint64_t a5)
+{
+    return os64_host_syscall(nr, a0, a1, a2, a3, a4, a5);
+}
+#else
+
 // EVERY CALLER-SAVED REGISTER COMES BACK CHANGED. The hardware clobbers
 // RCX and R11; the os64 kernel additionally ZEROES RDI, RSI, RDX, R8, R9
 // and R10 on the way back to ring 3 so nothing of its own leaks out
@@ -98,6 +127,7 @@ static inline uint64_t os64_syscall6(uint64_t nr, uint64_t a0, uint64_t a1,
                      : "rcx", "r11", "memory");
     return ret;
 }
+#endif // OS64_HOST_SYSCALL_HOOK
 
 #endif // __ASSEMBLER__
 #endif // OS64_ABI_SYSCALL_H
