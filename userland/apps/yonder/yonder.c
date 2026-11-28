@@ -22272,7 +22272,7 @@ static void pane_video(GlassPane *gp, const flow_box_t *b, os64_gui_rect_t c, os
     if (showing_poster) {
         for (int32_t k = 0; k < gp->n; ++k) {
             Glass *gl = gp->now[k];
-            os64_gui_rect_t cut = on_glass(gl, clip);
+            os64_gui_rect_t cut = glass_cut(gl, clip);  // glass_picture notes what it draws
             if (cut.w > 0 && cut.h > 0)
                 (void)glass_picture(gl, &g.page, poster->pic, b, c, cut);
         }
