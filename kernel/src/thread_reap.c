@@ -117,6 +117,15 @@ uint32_t thread_reap_drain(void)
 	// A sibling on another CPU may still hold a translation of a stack
 	// just unmapped; a frame freed before it flushes could be written
 	// through it after the frame is someone else's.
+	// The same wait is why a signal frame needs no signalLock here, though
+	// syscall_unmap takes it: delivery writes a frame at a ring-3-chosen RSP
+	// (which may point into a stack this frees) through the HHDM, resolving
+	// and storing inside one interrupts-off section (§5 at a syscall's exit,
+	// §10 in a scheduler pass, §9 in a fault). A CPU in such a section
+	// cannot answer this round's IPI until the section ends, so no stack
+	// frame is freed between a delivery's resolve and its store; one that
+	// resolves after the clear finds nothing and gives the delivery up.
+	// syscall_unmap frees with no waited round after it, hence its lock.
 	tlb_shootdown_wait();
 	for (reap_node_t *node = chain; node != NULL; node = node->next)
 		free_stacks(thread_of(node), true);

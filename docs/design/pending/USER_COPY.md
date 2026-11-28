@@ -1,0 +1,122 @@
+# User copies: a copy that outlives its check costs the program, not the machine
+
+The design behind `kernel/src/user_copy.S`, `copy_fault.c`, `user_copy.c` and the page-fault handler's two recovery points (2026-11-27; Fable's brief `BRIEF_USER_COPY_FIXUP.md` and the design state approved the same day). It retires the DEBTS row "A copy can outlive the check that allowed it".
+
+**The check stays the gate; the recovery is the net under it.** `user_range_accessible` (syscall.c) refuses any pointer aimed at the kernel's memory, at a supervisor page or at page zero, and it is why a copy is only ever given a user address. It is the only thing that refuses a supervisor page in the user range (a kernel stack): ring 0 reads and writes such a page without a fault. What this adds catches only the race the check cannot see: a page that was there at the check and is gone at the copy. The copy then answers "not copied" instead of panicking. A copy that faults on the kernel's half, on page zero, or on its kernel operand (a copy that ran off its kernel buffer) stays a panic, because each is a kernel bug. The recovery does not re-run the check: a kernel bug that handed a copy a supervisor page as its user pointer, skipping the check, would be answered -2 if that page faulted. That is why every helper checks before it copies.
+
+## The race
+
+A syscall checks a user range, then copies through it. Between the two, a sibling thread of the same program can take the memory away. There are two doors:
+
+1. A sibling's `unmap` of a region just handed to a syscall.
+2. A thread ending while a sibling's syscall copies into a buffer on its stack, so the reap (THREAD_STACKS.md) unmaps the stack under the copy.
+
+Either is the program's own bug. Before this, the copy faulted in ring 0 on an address nothing mapped, and the machine panicked. A program could take the machine down by racing its own address space.
+
+## Where user memory is touched
+
+Ring 0 touches user memory by its user address only in the copy routines, `user_copy_in` and `user_copy_out` (user_copy.S).
+- Everything else goes through syscall.c's helpers, which call them: `validate_and_copy_user_data` (behind `copy_user_buffer` and `copy_user_string`), `copy_to_user_buffer`, and `user_string_length`'s scan.
+- The subsystems below a syscall (VFS, pipes, ttys, pty, the network, klog, GUI, audio, media keys) see only kernel buffers.
+- A GUI canvas or plane is touched through the HHDM.
+
+A new way into user memory goes through these routines, or it is a site to convert, never a second table entry.
+
+The inventory behind this (the 2026-11-27 design state): three instructions, all inside the helpers, reached from 76 call sites. No spinlock was held at any copy, interrupts were off at every one (a syscall runs with IF clear), and every copy checked immediately before copying, after any park.
+
+## The copy routines
+
+A copy over 64 bytes moves the way the kernel's own `memcpy` moves one of 512 bytes or more (shared/copy_fill.c, `copy_rep`): `rep movsb` up to the destination's first 8-byte boundary, `rep movsq`, then `rep movsb` for the tail. (`memcpy` moves 65 to 511 bytes in 16-byte passes; here that band takes the string moves too, so the table stays four instructions a routine.) QEMU without KVM emulates a string instruction one step at a time, so eight bytes a step keeps a large read as fast there as it was through `memcpy`. A copy of 64 bytes or fewer (most out-structs) is one `rep movsb` of its own, as `memcpy`'s own short path ends at 64: three string instructions' start-up would cost more than the copy. Those four moves are the only instructions in each routine that touch user memory. A string move that faults leaves RCX holding the steps it had not done, and its failure exit adds the moves still to come and returns the bytes not copied, so 0 means copied. A fault inside an 8-byte step counts that whole step as not copied, which only matters to a caller that wants the count; every caller today asks only whether it is 0. The direction must be upward. A syscall arrives with DF clear (SFMASK clears bit 10, smp_core.c), the kernel's calling convention keeps it clear across calls and parks, and each routine starts with `cld` anyway.
+
+**The resume table** (user_copy.S) lists each of those moves beside its failure exit. `memcpy` is never in it: a kernel bug inside `memcpy` is never mistaken for a user copy.
+
+**The helpers' existing `false` is the failure answer**, the same one a refused check gives. Every caller therefore already had the error path. The call sites were re-read against "acts on nothing after false" (§ What the program sees has what that found).
+
+## Which faults recover
+
+A page fault resumes at a copy's failure exit when ALL of these hold (`copy_fault_resume`, pure; `tools/test_copy_fault_host.sh` runs it beside a model, and `tools/test_copy_fault_mutants.py` breaks each condition):
+
+1. **Ring 0:** the error code's U/S bit is clear.
+2. **No reserved-bit fault.**
+3. **The faulting address is in the user range:** `PAGE_SIZE <= cr2 < USER_CANONICAL_MAX`.
+4. **The faulting RIP is a resume-table instruction.**
+5. **The fault is on the move's user operand:** `cr2` lies within one step of the register that holds the user pointer (RSI for a copy in, RDI for a copy out; the table names it and the step, 1 or 8 bytes). The architecture reports a string move's fault at the element that faulted, with RSI and RDI pointing at it. This test is what keeps a kernel bug a panic: a kernel buffer is often a local on a kernel stack, and kernel stacks live in the user range too. A copy that ran off one into its guard page faults on the kernel operand, beside RDI or RSI but far from the user pointer.
+6. **The handler would otherwise panic** (asked only on those exits).
+7. **The handler was given the fault's own frame**, which the unified exception path always does. The old path (`EXCOLD`) gives none, and every fatal fault there panics as before.
+
+**Condition 6's exits:**
+- the no-mapping exit, which is door 1's unmapped region and door 2's stack (no mapping covers a stack);
+- inside a mapping: a protection violation on a present page, a shared-object page or backing page that cannot be resolved (no memory, a failed read), and the two CoW failures. `page_fault_in_mapping` returns those as reasons for a ring-0 fault, as it always did for ring 3, and the caller releases the mapping's hold before it recovers or panics.
+
+**A shared-object mapping covering an address outside its image stays a panic** where it is found: that is the loader's invariant broken, not a fault.
+
+**A fault the handler resolves** (a page the mapping covers but has not populated, which a copy may meet) resolves exactly as before, and the copy carries on.
+
+**The fault's own frame.** The handler edits the frame the fault pushed, passed down from `exception_dispatch`, and a fatal fault's report (`page_fault_panic`, `user_fault_kill`) reads it. A resolve that reads a file page can park and resume on another CPU, and a per-CPU slot would name whatever that CPU was last doing. The frame lives on the faulting thread's kernel stack and moves with it. A caught SIGSEGV's delivery takes the same frame for the same reason. The per-CPU slot (`kCurrentCtx`) is left for the debugger, and the dispatcher restores it on the way out only if it still names this fault, so a fault that moved does not overwrite the slot of the CPU it left.
+
+No ring-3 call can make a file-backed mapping (an ELF segment or a shared object) go away while a fault parks on it, because `unmap` takes only `map`'s anonymous regions. So no fixture can make a parked resolve fail under a copy, and passing the frame makes it right by construction.
+
+**Nothing new is locked.** The decision is made after the mapping's hold is released. It edits one field of the frame and updates the recovery counts with relaxed atomics.
+
+## What the program sees
+
+The call answers what it answers for a buffer the check refused: `BAD_USER_DATA` (-2) for most calls, `GUI_ERR_BAD_ARGS` for the GUI's, `OS64_MOUNT_BAD_ARGS` for mount's.
+- A chunked write answers the bytes it wrote before the failing chunk, if any.
+- A copy out stops where the page went: what had been copied stays where it landed.
+- A copy in leaves a kernel buffer partly written, which the call does not use.
+
+**A program that takes away its own buffer during a call loses what the call was handing it:**
+- the bytes a read took from a pipe, a socket or the keyboard;
+- the connection an accept took (the new handle is closed);
+- a new pipe (both ends are closed);
+- the status a wait reaped;
+- the event a GUI wait took;
+- the log entries a log read took.
+
+Three calls give it back instead, because each already had a door for an undelivered answer: the audio tap's records, a media key, and a bell's ring.
+
+The hand re-read of every call site (2026-11-27, against "acts on nothing after false") found none that acts on what it failed to copy. sigreturn's two reads each return before any state is touched, the second before the FPU image is taken. spawn's measure pass and its marshal both fail before a task exists, and the marshal's failure frees the one block it allocated.
+
+## Measured strings
+
+`user_string_length` (spawn's argv, a thread's name) measures a string without copying it. It reads it in pieces of at most 256 bytes through `user_copy_in`, so the copy routines stay the only instructions that touch user memory. A piece never crosses the end of the page the check has just passed, so a string ending near the end of the last mapped page still measures.
+
+The measurement is a first look and the copy a second. The string can change between them, so no caller trusts the second look to agree with the first:
+- spawn's marshal copies each argument's measured length plus one, into room the measure paid for, and refuses the argument if the byte at the measured end is not a terminator;
+- the thread name is copied byte by byte up to its bound, refused if no terminator arrives, and checked as it arrived.
+
+## Counts
+
+- **Per task:** `copy_recoveries` in `/proc/<id>/status`.
+- **Machine-wide:** `/sys/memory/usercopy` gives the recoveries since boot and since the last read, and the last one's task and faulting address.
+
+Outside a program racing its own memory, as `/tests/copyrace` does on purpose, none is the expected number.
+
+## The proof
+
+- **`/tests/copyrace`** races both doors for thousands of rounds and passes when every call answered a count or -2 and the machine lived. It prints each door's recoveries (the kernel's count read before, between and after); a door's count above zero is what shows that door reached the net. A -2 alone does not: the check also refuses memory already gone, with no fault.
+- **A kernel with the recovery off panics on it in QEMU.**
+- **The pure rule** has its host test and mutants.
+- **The whole ring-3 suite (`testrun`)** passes, since every syscall's copy changed.
+- **`/tests/copybench`** prices the copies with nothing else under them, so the same binary run under the kernel before and after answers whether the copies got slower. It compares a syscall that copies a 16-byte struct out with one that copies nothing. It times one thread's write into an empty pipe and read back, at sizes up to the pipe's 64 KiB, which never parks. And it repeats the 64 KiB round trip at every page offset of the user buffer, which crosses every (dst - src) & 0xFFF in both directions: the relationship some cores' string moves are slow under.
+- **A pipeline that reads a file (`cat file | wc -D`) is not a measure of the copies.** Its time is mostly the pipe's hand-offs: a writer that finds the reader still on its way to sleep leaves it to the next sweep, which runs on the BSP's scheduler passes, up to a tick later (pipe.c `pipe_claim_parked_waiter`). How often that happens depends on timing, which is why one line on one boot read 740 ms and then 2,500 ms.
+
+## The other class: task memory through the HHDM
+
+Writes and reads through the HHDM after a walk of a task's tables do not fault on a user address. Their race is a frame freed between the walk and the access, which trips the HHDM's use-after-free tripwire.
+
+| Site | What keeps the frame |
+|---|---|
+| a new thread's or task's stack (createThread, `task_setup_ring3_exit_path`, thread_join_create) | not published yet |
+| a signal frame (signals.c, the three delivery paths) | `syscall_unmap` clears each page under `signalLock`, which delivery holds across its resolve and its write. The thread-stack reap frees only after a waited invalidation, which no CPU can answer inside a delivery's interrupts-off section (thread_reap.c) |
+| `/proc/<id>/mem`, the heap report, and the death reports' stack and code reads | `allocator_copy_from_task_va`: the walk and the read under the frame lock, each frame checked live |
+| the CoW copy in the fault handler | the old frame is a shared object's cached page (CoW mappings are a library's writable segments, task.c), kept by the task's reference on the object; ring 3 cannot unmap a library's mapping |
+
+The death reports (stack_trace.c `read_task_u64`, `user_fault_kill`'s bytes at RIP) used a plain walk and read. A dying task's siblings still run and can unmap between the two, so they moved onto `allocator_copy_from_task_va` with this design.
+
+## What it does not cover
+
+- **SMAP** is not enabled. Its DEBTS row is gated on the copy routines being the only user-access path, which they now are; it is ready to take.
+- **A user pointer kept across a park and used from another context:** none exists. Every copy runs on the calling thread and checks after its park. The rule is that a user address is checked at its copy.
+- **The old exception path (`EXCOLD`)** has no frame to resume, so it panics as before. It is a diagnostic path that retires with the unified one.
+- **The other cure in the old DEBTS row**, a copy holding the mapping it checked, is not taken. No mapping covers a thread's stack, so it cannot close door 2.
