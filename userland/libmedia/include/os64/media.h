@@ -134,7 +134,8 @@ int os64_media_open(const os64_media_source_t *src, os64_media_t **out, os64_med
 // samples). Returns how many, which may be fewer than asked before the end;
 // 0 at the end of the media; a negative result above on an error. Only for
 // a media opened for its sound alone (BAD_ARGS otherwise: pulling sound
-// alone would throw the pictures away unseen).
+// alone would throw the pictures away unseen), over a byte source (a fed
+// media is pulled with os64_media_next, which can answer that it waits).
 int64_t os64_media_decode(os64_media_t *m, int16_t *out, uint32_t frames);
 
 // The next sound os64_media_decode or os64_media_next gives starts at
@@ -245,6 +246,8 @@ typedef struct os64_media_picture {
 #define OS64_MEDIA_GOT_SOUND    1
 #define OS64_MEDIA_GOT_PICTURE  2
 #define OS64_MEDIA_GOT_FULL     3   // a kind not accepted must be taken first (`full`)
+#define OS64_MEDIA_GOT_WAIT     4   // a fed media (os64/media_fed.h) has nothing to read yet: ask
+                                    // again once an append, a removal or the end has come
 
 typedef struct {
     int kind;                         // OS64_MEDIA_GOT_*

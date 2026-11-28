@@ -5,7 +5,9 @@
 // is good only while the fed lock is held: a buffer may be removed, and its
 // track buffer freed, as soon as the lock is let go.
 #include "os64/bell.h"
+#include "os64/media.h"
 #include "os64/media_fed.h"
+#include "os64/media_fragment.h"
 #include "os64/media_track.h"
 
 // Bytes of zeros after every block the fed media's memory functions give:
@@ -43,5 +45,15 @@ double media_fed_duration(const os64_media_fed_t *fed);
 void media_fed_count_resync(os64_media_fed_t *fed);
 void media_fed_count_sound(os64_media_fed_t *fed, uint64_t silence_frames, uint64_t cut_frames);
 void media_fed_count_reopen(os64_media_fed_t *fed);
+
+// NOT under the lock (it takes it): a hold on a slab of this fed media's
+// dropped, from FFmpeg's free of the last reference to it, on any thread.
+void media_fed_slab_drop(os64_media_fragment_slab_t *slab);
+
+// media.c's: a media over a fed media whose tracks are picked
+// (media_fed_picked), opened for `want`, as os64_media_open_for opens one
+// over a byte source. Its decoders are opened from the configuration of
+// each track's first frame, and reopened at every change of it.
+int media_open_fed(os64_media_fed_t *fed, uint32_t want, os64_media_t **out, os64_media_info_t *info);
 
 #endif

@@ -608,3 +608,12 @@ void media_fed_count_reopen(os64_media_fed_t *fed)
 {
     fed->counts.reopens++;
 }
+
+void media_fed_slab_drop(os64_media_fragment_slab_t *slab)
+{
+    memory_t *m = slab->context;        // the slab memory's: its fed media
+    os64_media_fed_t *fed = m->fed;
+    media_fed_lock(fed);
+    os64_media_fragment_slab_drop(slab);
+    media_fed_unlock(fed);
+}
