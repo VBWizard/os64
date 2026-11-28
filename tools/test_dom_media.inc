@@ -986,9 +986,70 @@ static void dom_media_clocked_cases(void)
     fixture_free(&f);
 }
 
+/* The show poster flag (HTML § 4.8.11.5; V.6.2): set at the element's
+ * birth and at each load, cleared by a play or a seek, never brought back
+ * by a pause; the view carries it for the host's box. */
+static bool poster_flag(DomFixture *f, const char *id)
+{
+    os64_dom_media_view_t view;
+    const os64_html_node_t *node = media_by_id(f->document->document, id);
+    return node != NULL && os64_dom_media_view(f->binding, node, &view) && view.show_poster;
+}
+
+static void dom_media_poster_cases(void)
+{
+    DomFixture f;
+    media_fixture(&f);
+    if (!fixture_ready(&f)) return;
+    media_script(&f, "globalThis.v=document.createElement('video');v.id='pv';v.poster='p.png';v.src='a.mp4';"
+                     "document.body.appendChild(v);",
+                 "poster: a video");
+    check(poster_flag(&f, "pv"), "poster: set at the element's birth");
+    media_turn(&f, "poster: the turn opens it");
+    MediaSession *s = &media_sessions[0];
+    media_ready(s, 4);
+    media_turn(&f, "poster: the probe");
+    check(poster_flag(&f, "pv"), "poster: still set with the first picture ready, before any play");
+    media_activated = true;
+    media_script(&f, "v.play();", "poster: play");
+    media_turn(&f, "poster: play's events");
+    check(!poster_flag(&f, "pv"), "poster: a play clears it");
+    media_script(&f, "v.pause();", "poster: pause");
+    media_turn(&f, "poster: pause's events");
+    check(!poster_flag(&f, "pv"), "poster: a pause after a play does not bring it back");
+    media_script(&f, "v.src='b.mp4';", "poster: a new source");
+    media_turn(&f, "poster: the new load");
+    check(poster_flag(&f, "pv"), "poster: a new load sets it again");
+    media_ready(&media_sessions[1], 4);
+    media_turn(&f, "poster: the new probe");
+    media_script(&f, "v.currentTime=1;", "poster: a seek before any play");
+    media_turn(&f, "poster: the seek's events");
+    check(!poster_flag(&f, "pv"), "poster: a seek clears it");
+
+    /* Autoplay: cleared as it starts by itself. */
+    media_script(&f, "globalThis.w=document.createElement('video');w.id='pw';w.autoplay=true;w.muted=true;"
+                     "w.poster='q.png';w.src='c.mp4';document.body.appendChild(w);",
+                 "poster: an autoplay video");
+    media_turn(&f, "poster: open the autoplay one");
+    check(poster_flag(&f, "pw"), "poster: set before autoplay starts");
+    media_ready(&media_sessions[2], 2);
+    media_turn(&f, "poster: it can play through");
+    check(!poster_flag(&f, "pw"), "poster: autoplay's start clears it");
+
+    /* A play before the source: the load that follows leaves it playing,
+     * and the poster does not come back. */
+    media_script(&f, "globalThis.x=document.createElement('video');x.id='px';x.poster='r.png';"
+                     "document.body.appendChild(x);x.play();x.src='d.mp4';",
+                 "poster: play before the source");
+    media_turn(&f, "poster: its load");
+    check(!poster_flag(&f, "px"), "poster: a load under a play leaves the flag cleared");
+    fixture_free(&f);
+}
+
 static void dom_media_cases(void)
 {
     dom_media_clocked_cases();
+    dom_media_poster_cases();
     dom_media_session_cases();
     dom_media_video_cases();
     dom_media_picture_cases();

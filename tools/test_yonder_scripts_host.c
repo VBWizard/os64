@@ -126,6 +126,8 @@ bool yonder_media_failure_take(yonder_media_t *m, int code, char *out, size_t ca
              "4096 bytes received, the first request)", kClass[code >= 1 && code <= 4 ? code : 3]);
     return true;
 }
+bool yonder_media_report(uint32_t i, char *out, size_t cap) { (void)i; (void)out; (void)cap; return false; }
+size_t yonder_media_seconds(double s, char *out, size_t cap) { (void)s; if (cap > 0) out[0] = '\0'; return 0; }
 int yonder_media_can_play(const char *type) { (void)type; return 0; }
 void yonder_media_reap(void) {}
 #ifdef OS64_JS_BYTECODE_ROUND_TRIP
@@ -3542,6 +3544,19 @@ static void input_button_width(void) {
  * listbox. A click opens the list with the options' labels and the
  * disabled one refused; a pick of another option sets the model and fires
  * input and change once; a pick of the option it has fires nothing. */
+/* A video's poster on the host: laying the page out makes its slot, which
+ * rings the window's doorbell for the media turn. That is an os64 syscall
+ * (58), refused by the host's hook (syscall.h); run as a raw instruction it
+ * was Linux's vfork, whose child ran the rest of the suite on this stack and
+ * crashed it at exit. */
+static void poster_slot_bell(void) {
+    uint64_t before=yonder_host_syscalls;
+    probe_page("<video id=v poster='p.png' width=320 height=180></video>",false);
+    PosterSlot *slot=poster_seen(&g.page,probe_id("v"));
+    check(slot!=NULL && slot->url!=NULL && yonder_host_syscalls>before,
+          "poster: the layout makes the slot, and its bell is a syscall the host refuses");
+    probe_drop();
+}
 static void input_select_dropdown(void) {
     probe_page("<select id=sort><option value=az>Name (A to Z)<option value=za>Name (Z to A)"
         "<option disabled>Retired<option value=lohi>Price (low to high)</select>"
@@ -3659,6 +3674,7 @@ static void input_cases(void) {
     input_script_buttons();
     input_validation();
     input_button_width();
+    poster_slot_bell();
     input_select_dropdown();
 }
 
@@ -4216,8 +4232,7 @@ static void stream_captures_mode(void) {
      * stop is resumed at once: with scripting on, noscript is text and the
      * fallback control does not exist; off, it does. The script is a module
      * because the parser stops at any script's end tag while yonder queues
-     * only classic ones: a queued script rings the window's doorbell, which
-     * on the host is a raw syscall instruction nobody can answer. */
+     * only classic ones. */
     /* The parser reads its first 1024 bytes for an encoding before it parses
      * any of them, so a stop inside that window would wait for finish, which
      * runs straight through; a comment carries the script past it so the

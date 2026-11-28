@@ -3,9 +3,23 @@
 #include "yonder_host_console.h"
 #include "os64/fmt.h"
 #include "os64/io.h"
+#include "os64/syscall.h"
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+
+/* Every os64 syscall a yonder host's code makes (syscall.h's host hook):
+ * nobody answers, so it is refused, as the kernel refuses a handle it does
+ * not know; the count says how many were made. */
+uint64_t yonder_host_syscalls;
+
+uint64_t os64_host_syscall(uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2,
+                           uint64_t a3, uint64_t a4, uint64_t a5)
+{
+    (void)nr; (void)a0; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5;
+    yonder_host_syscalls++;
+    return (uint64_t)-1;
+}
 
 char yonder_host_console[16384];
 size_t yonder_host_console_lines;

@@ -74,49 +74,120 @@ mutants, like the picture queue, the clock and the pace before them.
 
 ## 3. The fragment parser (pure)
 
+Built in MS.1.1: `os64/media_fragment.h` and `userland/libmedia/media_fragment.c`; the header states every rule below in the code's own terms.
+
 **In:** bytes, in whatever pieces they arrive. **Out,** in arrival order:
-an init segment (its tracks, each track's kind, codec configuration and
-timescale, and a GENERATION that rises with every init segment), coded
-frames, "more bytes needed", or an error naming the rule broken.
+an init segment (its tracks, each track's kind, its sample entries with
+their codec configurations, its timescale and edit offset, and a
+GENERATION that rises with every init segment), coded frames, "more bytes
+needed", or an error naming the rule broken. An error stays until a reset
+(the spec's reset parser state), which keeps the init segment, so the
+media segments after an `abort()` still parse.
 
 **A coded frame carries:** its track and kind; the init generation that
-decodes it; decode time and presentation time in the track's timescale,
+decodes it, and which of its track's sample entries (a track may carry
+several); decode time and presentation time in the track's timescale,
 WITH THE EDIT LIST APPLIED (so they may be negative: an encoder's
 B-frame delay and AAC's priming frame are both written as an edit, and
 without it picture and sound sit a frame or two apart); its duration;
-whether it is a random access point; and where its bytes are.
+whether it is a random access point (neither `sample_is_non_sync_sample`
+nor depends-on-others in its flags); and where its bytes are.
+
+**The edit list.** The first edit with a media time places the media: its
+media time is subtracted from every time, and any empty edits before it
+(in the movie's timescale, from `mvhd`) are added back. Later edits and a
+rate other than one are ignored; the byte stream format asks only for a
+single edit at rate one. The decode check proves the result equals FFmpeg's
+presentation times, frame for frame.
 
 **Boxes read:** `ftyp`, `moov` (`mvhd`, `trak`/`tkhd`/`edts`/`elst`,
-`mdia`/`mdhd`/`hdlr`, `minf`/`stbl`/`stsd` with `avc1`/`avcC` and
-`mp4a`/`esds`, `mvex`/`trex`), `moof` (`mfhd`, `traf`/`tfhd`/`tfdt`/
-`trun`), `mdat`, and `styp`/`sidx`/`free`/`emsg` skipped by length. A box
-it does not know inside one it does is skipped by length; a top-level box
-it does not know is skipped by length too.
+`mdia`/`mdhd`/`hdlr`, `minf`/`stbl`/`stsd` with `avc1` or `avc3`/`avcC`
+and `mp4a`/`esds`, `mvex`/`trex`), `moof` (`traf`/`tfhd`/`tfdt`/`trun`),
+`mdat`, and everything else (`styp`, `sidx`, `free`, `emsg`, `mfhd`,
+`sdtp` ...) skipped by length, at the top level and inside a box it reads.
+A track of another kind (text, metadata) is read for its id and its trex
+default size, and its trafs for their length (a chained traf after one
+begins where its data ends); its frames are not handed out.
 
 **Rules it enforces** (the byte stream format's; each has a host case and
-a mutant): a partial box waits; a media segment before any init segment
-is an error; an init segment has `mvex` and no samples of its own; a later
-init segment keeps the number of tracks of each kind, and its codecs are
-ones v1 decodes; every `traf` has a `tfdt`; `mdat` holds every byte a
-`trun` names; a length that runs past what a box can hold, a length of
-zero where the format forbids it, a count that would overflow, are errors
-and never a read past the bytes given. These are hostile bytes off the
-network: the core is fuzzed on the host under ASan, and no field is
-trusted before it is checked against the box it sits in.
+a mutant): a partial box waits; a top-level box whose size is zero or
+smaller than its header is an error (there a size of zero means "to the
+end of the file", which a byte stream has not got; inside a box it means
+to the end of the container, as ISO defines); a media segment before any init
+segment is an error; an init segment has `mvex` and no samples of its own
+(`stts`, `stsc`, `stco`, `co64`, `stsz` all empty); a later init segment
+keeps the number of picture and sound tracks (MSE counts text tracks too,
+which v1 does not hand out); at most one track of each kind
+(v1), with ids unique across every track; sample entries v1 decodes
+(`avc1`, `avc3`; `mp4a` carrying AAC Main, LC, LTP, HE-AAC or HE-AAC v2,
+by the AudioSpecificConfig's object type, since MPEG-4 Audio's object type
+indication also covers MP3, ALS and the rest), so an encrypted entry is
+refused; every `traf` has a `tfdt`, names no base data offset, and its
+first `trun` has a data offset (movie fragment relative addressing); a
+sample description index names an entry; a fragment marked
+duration-is-empty names no frames; a `moof` has a `traf`; every byte a
+`trun` names lies inside one `mdat` after its `moof` (checked as soon as
+it can be: a frame placed before its `moof` when the `moof` is read, one
+before its `mdat` when that `mdat` begins, one running past its `mdat`
+when the `mdat` ends, one in no `mdat` when the next `moof` or `moov`
+begins; a zero-size frame at an `mdat`'s very end is inside it); a time that does not fit
+in 63 bits is an error. Lengths and counts are read through a bounded
+reader that answers zero and marks itself bad rather than read past a box,
+so no field is used before it is checked against the box it sits in. The
+held boxes and the mdats holding frames have caps (4 MB and 128 MB to
+begin with, set by the caller), and a moof may name at most 65,536 frames.
 
-**What a real stream needs that the spike lacked**, to be built in M1 and
-named in its tracker row: several `mdat`s after one `moof`; `stsd` with
-more than one entry; `avc3` (parameter sets in the stream, not in the
-init); `tfhd`'s duration-is-empty; a `traf` without default-base-is-moof
-following another; `trex` defaults (the spike's files carried none, real
-ones do).
+**The sink may reset or destroy the parser** from inside a callback (a
+track buffer that fails mid-append runs the append error algorithm, which
+resets the parser): the append in progress ends there, the rest of its
+bytes discarded as reset parser state discards the input buffer.
 
-**Memory.** Appended bytes are copied once, into the parser's input. A
-media segment's `mdat` is read in place and becomes a SLAB that its
-frames point into; the slab is handed to the track buffer when the `mdat`
-completes and is freed when its last frame is evicted. One allocation a
-media segment, none a frame, and no memmove of the input as boxes are
-consumed (the parser reads through an offset).
+A base data offset is refused as the format requires. ffmpeg's plain
+fragmented output (`frag_keyframe+empty_moov` without
+`default_base_moof`) writes one, so it is refused; DASH, CMAF and the
+streaming players' own output use default-base-is-moof.
+
+**A v0 `trun`'s composition offset is read signed.** ISO 14496-12 § 8.8.8
+makes it unsigned in v0 and signed only in v1, but encoders write negative
+offsets into v0 boxes, FFmpeg and other browsers read them signed, and an
+offset past 2^31 ticks means nothing as a real one. yonder plays what they
+play.
+
+**What a real stream needs that the spike lacked**, built in MS.1.1:
+several `mdat`s after one `moof`; `stsd` with more than one entry, the
+frame naming which; `avc3` (parameter sets in the frames: the parser does
+not look inside frames, so whether they are there is the decoder's to
+find); `tfhd`'s duration-is-empty; `trex` defaults under `tfhd`'s and the
+`trun`'s own; and a `traf` without default-base-is-moof following another,
+whose data begins where the previous `traf`'s ended (ISO 14496-12
+§ 8.8.7). **That last is a choice, not the format's rule:** the byte stream
+format counts as relative addressing only every `traf` with
+default-base-is-moof or a single `traf` without it, so a strict reading
+refuses a second chained `traf`. The parser accepts it (ruled): real
+packagers write it, other browsers play it, and the addressing is
+unambiguous because ISO defines it.
+
+**Memory.** Appended bytes are copied once, and nothing is moved as boxes
+are consumed:
+- a `moov` or `moof` into the parser's box buffer, reused (grown only when
+  a box is larger than it); an accepted `moov`'s buffer becomes the init segment's by
+  exchanging the two buffers, so its configurations stay good until the
+  next init segment, without a copy;
+- a box the parser does not read, and an `mdat` holding none of the
+  `moof`'s frames, is counted past and never held;
+- an `mdat` holding frames is read in place into a SLAB its frames point
+  into, one allocation an `mdat`, none a frame (a `moof` whose trafs' data
+  lies out of order borrows one scratch array to sort, once a segment).
+
+**A slab's life is counted in holds.** The parser holds a slab while its
+`mdat` fills and lets go when it ends, at a reset and at destroy; the track
+buffer takes a hold for each frame it keeps and lets go when the frame is
+evicted, and the last drop frees the slab. This is "handed over when the
+mdat completes" made safe against a reset mid-`mdat`: a frame already
+handed out keeps its slab, and a slab no frame was kept from is freed as
+soon as its `mdat` ends (one whose `mdat` ends in an error, at the reset
+or destroy that follows). The holds are not atomic; the fed media's one
+lock covers them.
 
 ## 4. The track buffer (pure)
 
@@ -126,7 +197,7 @@ rules over the frames the parser gives:
 | Rule | What it does |
 |---|---|
 | `timestampOffset` | added to every frame's times as it arrives |
-| the append window | a frame outside `appendWindowStart`..`End` is dropped, and the next frames wait for a random access point |
+| the append window | a frame outside `appendWindowStart`..`End` is dropped, and the next frames wait for a random access point. A sound frame before the window is still DECODED, its output discarded (preroll): AAC overlaps each frame's transform with the one before, and dropping the priming frame unread changed 291 of the next 563 frames in MS.1.1's decode check |
 | need a random access point | after an init segment, a discontinuity or a dropped frame, frames are dropped until one |
 | a discontinuity | a decode time that steps back, or forward by more than twice the last duration, starts a new coded frame group |
 | overlap | a new frame removes the frames it overlaps in presentation time, and, when it is a random access point, the old frames that depended on what it replaced |

@@ -1,0 +1,43 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>An index at the end, no ranges</title>
+<!--
+  VIDEO.md § 5 (V.6.1): an MP4 whose index (`moov`) is after its data,
+  from a server that answers no ranges. The open cannot ask for the end, so
+  the file arrives whole before it opens: the element waits (loadstart,
+  progress, and no loadedmetadata until then), then plays with its bar.
+
+    tools/pages_serve.py --no-ranges --rate 100000
+
+  The server's log says one request, sent whole. A file longer than the
+  bytes yonder keeps (the window's ceiling) fails as a source that cannot
+  be played; this one is well inside it. video-tail.html is the same clip
+  from a server with ranges.
+
+  The window's title is the readyState, the duration and the time, then
+  "ended" or "error"; the log lists the events with their times.
+-->
+<style>
+  body { font: 16px sans-serif; margin: 16px; }
+  video { background: #888; display: block; }
+  #log { font: 13px monospace; background: #f4f4f4; padding: 8px; white-space: pre-wrap; }
+</style>
+<h1>An index at the end, from a server with no ranges</h1>
+<video id="v" src="tail-index.mp4" controls autoplay muted width="640" height="360"></video>
+<pre id="log"></pre>
+<script>
+  const v = document.getElementById('v'), log = document.getElementById('log');
+  const t0 = performance.now();
+  let last = '';
+  for (const t of ['loadstart', 'progress', 'durationchange', 'loadedmetadata', 'canplay', 'playing',
+                   'waiting', 'ended', 'error'])
+    v.addEventListener(t, () => {
+      if (t === 'progress' && last === 'progress') return;
+      last = t;
+      log.textContent += (performance.now() - t0).toFixed(0) + ' ms  ' + t + '  duration ' + v.duration + '\n';
+    });
+  setInterval(() => {
+    document.title = 'r' + v.readyState + ' d' + v.duration + ' t' + v.currentTime.toFixed(1) +
+      (v.ended ? ' ended' : '') + (v.error ? ' error ' + v.error.code : '');
+  }, 500);
+</script>
