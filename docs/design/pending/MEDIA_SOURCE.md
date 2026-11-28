@@ -138,8 +138,10 @@ held boxes and the mdats holding frames have caps (4 MB and 128 MB to
 begin with, set by the caller), and a moof may name at most 65,536 frames.
 
 **The init segment's duration** is mvex's `mehd` fragment duration when
-it gives one, else mvhd's, in the movie's timescale; 0 (or ISO's all ones)
-is unknown, which MSE takes as +Infinity, as Chromium does.
+it gives one (a `mehd` of 0 gives none, and mvhd's stands), else mvhd's,
+in the movie's timescale. ISO's all ones, in either box and either
+version, is unknown, as is 0 left at the end; MSE takes unknown as
++Infinity, as Chromium does.
 
 **The parsing-media-segment flag** (`os64_media_fragment_parsing_media`)
 is true from a moof's header until its last frame is handed out, and false
@@ -230,7 +232,11 @@ starting at a random access point, made of coded frame groups or what a
 cut left of them. A group goes on the end of the range it continues
 within the JOIN, in decode time and on the screen; otherwise it starts a
 range: it continues one when its first frame is within the join of the
-range's decode end and of its presentation end, before or after. The join
+range's decode end and of its presentation end, before or after, and is
+presented no earlier than the range's last random access point (a group
+whose times moved back after a parser reset would otherwise put the
+range's random access points out of presentation order, which the seek's
+search and eviction rely on). The join
 is twice the longest frame duration or decode step the track has seen: Chromium's fudge room (`SourceBufferRange::GetFudgeRoom`).
 Firefox fuzzes only its report, by half the longest frame each side, and
 WebKit snaps gaps under a fixed 2002/24000 s as frames go in. **Ranges

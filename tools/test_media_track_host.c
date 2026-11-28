@@ -1305,6 +1305,31 @@ static void scripted(void)
     }
     END();
 
+    // Codex #769 rd2: a group whose presentation moves back within the join
+    // (dts on, pts back, after a parser reset) starts a range of its own,
+    // so the range's random access points stay in presentation order and a
+    // seek into the old last frame finds it. Ten one-second RAPs at 0-9 s,
+    // then a RAP at dts 10 s, pts 8 s (the 8-9 s frame cut by it).
+    START("a group presented before the range's last random access point", 1, 1, 0);
+    n = make_group(f, 0, 0, 10, 1, 1, 0, 100);               // gop 1: every frame a RAP
+    pair_frames(&p, 0, f, n);
+    os64_media_buffer_reset_parser(&p.b);
+    m_unset(&p.m.t[0]);
+    {
+        tf_t back = { 10, 8, 1, true, 100 };
+        pair_frames(&p, 0, &back, 1);
+    }
+    {
+        os64_media_track_cursor_t c;
+        const os64_media_track_t *v = &p.b.track[0];
+        check(os64_media_track_seek(v, 9500000000ll, &c) == OS64_MEDIA_TRACK_FRAME, "a seek to 9.5 s lands");
+        os64_media_track_frame_t got;
+        int r = os64_media_track_next(v, &c, &got);
+        check(r == OS64_MEDIA_TRACK_FRAME && got.pts == 9000000000ll, "and returns the frame at 9 s first");
+        if (r == OS64_MEDIA_TRACK_FRAME) os64_media_track_frame_done(&got);
+    }
+    END();
+
     // A picture gets no preload, even where one would fit: pictures every
     // one a random access point, starting a frame before the window.
     START("no preload for a picture", 1, 90000, 0);

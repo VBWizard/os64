@@ -227,9 +227,9 @@ typedef struct {
 typedef struct {
     uint32_t generation;        // 1 for the first init segment, rising with each
     // The presentation's duration, in the movie's timescale: mvex's mehd
-    // fragment duration when it gives one, else mvhd's; 0 (or all ones,
-    // ISO's "unknown") is UNKNOWN, which MSE takes as +Infinity, as
-    // Chromium does.
+    // fragment duration when it gives one (a mehd of 0 gives none), else
+    // mvhd's. 0 is UNKNOWN, which MSE takes as +Infinity, as Chromium does:
+    // what neither box gives, or all ones (ISO's "unknown") in either.
     uint64_t duration;
     uint32_t movie_timescale;
     uint32_t track_count;

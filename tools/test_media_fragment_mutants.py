@@ -155,6 +155,7 @@ mutants = [
     # The presentation's duration.
     ('mvhd-duration-not-read', F, '        duration = rd_n(&b.body, version == 1 ? 8 : 4);', '        rd_skip(&b.body, version == 1 ? 8 : 4);'),
     ('mvhd-v0-all-ones-is-a-duration', F, '        if (version != 1 && duration == UINT32_MAX)\n            duration = UINT64_MAX;', ''),
+    ('mehd-v0-all-ones-is-a-duration', F, '        if (version != 1 && fragment_duration == UINT32_MAX)\n            fragment_duration = UINT64_MAX;     // all ones: unknown, below\n', ''),
     ('mehd-ignored', F, '        if (fragment_duration != 0)\n            duration = fragment_duration;', '        (void)fragment_duration;'),
     ('mehd-zero-overrides-mvhd', F, '        if (fragment_duration != 0)\n            duration = fragment_duration;', '        duration = fragment_duration;'),
     ('mehd-v1-read-as-v0', F, 'uint64_t fragment_duration = rd_n(&mehd.body, version == 1 ? 8 : 4);', 'uint64_t fragment_duration = rd_n(&mehd.body, version * 0 + 4);'),

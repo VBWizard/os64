@@ -466,6 +466,8 @@ static os64_media_fragment_rule_t parse_moov(os64_media_fragment_t *p, rd_t moov
         uint64_t fragment_duration = rd_n(&mehd.body, version == 1 ? 8 : 4);
         if (mehd.body.bad)
             return OS64_MEDIA_FRAGMENT_MALFORMED;
+        if (version != 1 && fragment_duration == UINT32_MAX)
+            fragment_duration = UINT64_MAX;     // all ones: unknown, below
         if (fragment_duration != 0)
             duration = fragment_duration;
     }

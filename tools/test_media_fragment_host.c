@@ -382,6 +382,8 @@ static void write_init(model_t *m, const dinit_t *d)
     if (!d->mvhd_v1 && want_duration == UINT32_MAX) want_duration = 0;
     if (d->mvhd_v1 && want_duration == UINT64_MAX) want_duration = 0;
     if (d->mehd && d->mehd_duration != 0) want_duration = d->mehd_duration;
+    if (d->mehd == 1 && d->mehd_duration == UINT32_MAX) want_duration = 0;
+    if (d->mehd == 2 && d->mehd_duration == UINT64_MAX) want_duration = 0;
     event_t e = { .kind = 1, .generation = ++m->generation, .duration64 = want_duration,
                   .movie_timescale = d->movie_timescale };
     for (int i = 0; i < d->n; i++) {
@@ -1043,11 +1045,13 @@ static void streams(void)
         }
 
     // The presentation's duration: mvhd's (v0, v1), unknown (0, all ones),
-    // and mehd's over mvhd's (v0, v1, and a mehd of 0 that defers to mvhd).
+    // and mehd's over mvhd's (v0, v1, a mehd of 0 that defers to mvhd, and a
+    // mehd of all ones, v0 and v1, that says unknown over mvhd's).
     {
         static const struct { int v1; uint64_t mvhd; int mehd; uint64_t mehd_d; } cases[] = {
             { 0, 90000, 0, 0 }, { 1, 1ull << 40, 0, 0 }, { 0, 0, 0, 0 }, { 0, UINT32_MAX, 0, 0 },
             { 1, UINT64_MAX, 0, 0 }, { 0, 0, 1, 123456 }, { 0, 5000, 2, 1ull << 36 }, { 0, 7000, 1, 0 },
+            { 0, 7000, 1, UINT32_MAX }, { 0, 7000, 2, UINT64_MAX },
         };
         for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
             dinit_t d = av_init();

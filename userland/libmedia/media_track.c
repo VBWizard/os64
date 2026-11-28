@@ -175,6 +175,8 @@ static uint32_t unit_of(const os64_media_track_range_t *r, uint32_t i)
     return i;
 }
 
+static int64_t unit_pts(const os64_media_track_range_t *r, uint32_t u);
+
 // A range's presentation extent: its earliest presentation to its latest
 // end, its preload frames left out. A hole a cut leaves inside (frames
 // decoded before the cut but presented after it) counts as held, as
@@ -422,10 +424,13 @@ static int64_t join_of(const os64_media_track_t *t)
 
 // Where a coded frame group's first frame goes: the range it continues
 // within the join in decode order AND on the screen, before or after the
-// range's end (B-frames put decode times ahead of presentation, so a
-// decode gap within the join can be a wider hole on the screen; a group
-// presented earlier would break the order of random access points that
-// `unit_for` and eviction rely on), or a new one in its sorted place.
+// range's end, and presented no earlier than the range's last random
+// access point; or a new one in its sorted place. B-frames put decode
+// times ahead of presentation, so a decode gap within the join can be a
+// wider hole on the screen; and `unit_for` and eviction rely on a range's
+// random access points being presented in decode order, which a group
+// presented before the range's last one (its times moved back after a
+// parser reset) would break even within the join.
 static os64_media_track_range_t *range_for_group(os64_media_track_t *t, int64_t dts, int64_t pts, uint32_t *index)
 {
     uint32_t at = 0;
@@ -435,7 +440,8 @@ static os64_media_track_range_t *range_for_group(os64_media_track_t *t, int64_t 
         os64_media_track_range_t *p = &t->range[at - 1];
         const os64_media_track_frame_t *last = &p->frame[p->count - 1];
         if (last->dts <= dts && dts <= sat_add(sat_add(last->dts, last->duration), join_of(t)) &&
-            pts >= sat_sub(p->end, join_of(t)) && pts <= sat_add(p->end, join_of(t))) {
+            pts >= sat_sub(p->end, join_of(t)) && pts <= sat_add(p->end, join_of(t)) &&
+            pts >= unit_pts(p, unit_of(p, p->count - 1))) {
             *index = at - 1;
             return p;
         }
@@ -873,7 +879,6 @@ void os64_media_buffer_remove(os64_media_buffer_t *b, int64_t start, int64_t end
 
 static const os64_media_track_range_t *range_holding(const os64_media_track_t *t, int64_t time, uint32_t *index);
 static uint32_t unit_for(const os64_media_track_range_t *r, int64_t time);
-static int64_t unit_pts(const os64_media_track_range_t *r, uint32_t u);
 
 // Free at least `need` bytes of `t`: whole units from the front of the
 // earliest range first, never into the unit holding the play position;
