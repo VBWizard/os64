@@ -1,0 +1,15 @@
+id,task,depends_on,status,done_in,notes
+MS.1,"The two pure cores: the fragment parser and the track buffer, with models, mutants and a fuzzer",,design,,"MEDIA_SOURCE.md sections 3 and 4. Likely two PRs: split this row into MS.1.1 (parser) and MS.1.2 (track buffer) when the builder says so"
+
+MS.2,"libmedia's fed media, /tests/msetest, gplay --fed, and a P5 run",MS.1,todo,,"Section 5 and 6. 1080p60 fed in pieces with a quality switch, a seek and eviction, before any browser code"
+
+MS.3,"libdom's MediaSource and SourceBuffer, yonder's provider, test pages",MS.2,todo,,"Section 7. State machine tables in a design state before code"
+
+MS.4,"Real players: honest isTypeSupported, playback quality, replies that stream as they arrive",MS.3,todo,,"The first P5 run on a real page"
+
+MS.5,"The quota and eviction under a long watch, changeType, the live range",MS.4,todo,,"What an evening of watching costs; quota sizes tuned from the P5"
+
+Q1,"Which containers and codecs does v1 answer yes to?",,ruled,,"Chris 2026-11-26: H.264 and AAC in fragmented MP4 only; 1080p is enough for now"
+Q2,"Encrypted media in v1?",,ruled,,"Chris 2026-11-26: no; a later conversation"
+Q3,"A fixture and a P5 run before the browser work?",,ruled,,"Chris 2026-11-26: yes, as long as it is fed chunks the way a streaming player feeds them"
+Q4,"Who parses appended bytes: FFmpeg's demuxer or our own parser?",,ruled,,"Fable 2026-11-27 from the M0 host spike: our own; FFmpeg's does not resume on a growing input"
