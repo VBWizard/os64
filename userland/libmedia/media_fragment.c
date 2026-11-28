@@ -21,6 +21,7 @@ enum { WAIT_HEADER, IN_BOX, IN_SKIP, IN_MDAT };
 #define BOX_MDAT FOURCC('m', 'd', 'a', 't')
 #define BOX_MVHD FOURCC('m', 'v', 'h', 'd')
 #define BOX_MVEX FOURCC('m', 'v', 'e', 'x')
+#define BOX_MEHD FOURCC('m', 'e', 'h', 'd')
 #define BOX_TREX FOURCC('t', 'r', 'e', 'x')
 #define BOX_TRAK FOURCC('t', 'r', 'a', 'k')
 #define BOX_TKHD FOURCC('t', 'k', 'h', 'd')
@@ -434,6 +435,7 @@ static os64_media_fragment_rule_t parse_moov(os64_media_fragment_t *p, rd_t moov
 {
     box_t b, mvex;
     uint32_t movie_scale = 0;
+    uint64_t duration = 0;
     int found = find_box(moov, BOX_MVHD, &b);
     if (found < 0)
         return OS64_MEDIA_FRAGMENT_MALFORMED;
@@ -441,6 +443,9 @@ static os64_media_fragment_rule_t parse_moov(os64_media_fragment_t *p, rd_t moov
         uint8_t version = (uint8_t)rd_n(&b.body, 1);
         rd_skip(&b.body, 3 + (version == 1 ? 16 : 8));
         movie_scale = (uint32_t)rd_n(&b.body, 4);
+        duration = rd_n(&b.body, version == 1 ? 8 : 4);
+        if (version != 1 && duration == UINT32_MAX)
+            duration = UINT64_MAX;      // all ones: unknown, below
         if (b.body.bad)
             return OS64_MEDIA_FRAGMENT_MALFORMED;
     }
@@ -449,8 +454,23 @@ static os64_media_fragment_rule_t parse_moov(os64_media_fragment_t *p, rd_t moov
         return OS64_MEDIA_FRAGMENT_MALFORMED;
     if (found == 0)
         return OS64_MEDIA_FRAGMENT_NO_MVEX;
+    // mehd's fragment duration, when it gives one, is the whole
+    // presentation's (mvhd's covers only the moov's own samples, none).
+    box_t mehd;
+    found = find_box(mvex.body, BOX_MEHD, &mehd);
+    if (found < 0)
+        return OS64_MEDIA_FRAGMENT_MALFORMED;
+    if (found > 0) {
+        uint8_t version = (uint8_t)rd_n(&mehd.body, 1);
+        rd_skip(&mehd.body, 3);
+        uint64_t fragment_duration = rd_n(&mehd.body, version == 1 ? 8 : 4);
+        if (mehd.body.bad)
+            return OS64_MEDIA_FRAGMENT_MALFORMED;
+        if (fragment_duration != 0)
+            duration = fragment_duration;
+    }
 
-    os64_media_fragment_init_t next = { 0 };
+    os64_media_fragment_init_t next = { .duration = duration == UINT64_MAX ? 0 : duration, .movie_timescale = movie_scale };
     uint32_t ignored[OS64_MEDIA_FRAGMENT_MAX_IGNORED];
     uint32_t ignored_size[OS64_MEDIA_FRAGMENT_MAX_IGNORED] = { 0 };
     uint32_t ignored_count = 0;

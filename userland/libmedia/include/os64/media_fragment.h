@@ -226,6 +226,12 @@ typedef struct {
 // copy of the moov and are good until the next init segment or destroy.
 typedef struct {
     uint32_t generation;        // 1 for the first init segment, rising with each
+    // The presentation's duration, in the movie's timescale: mvex's mehd
+    // fragment duration when it gives one, else mvhd's; 0 (or all ones,
+    // ISO's "unknown") is UNKNOWN, which MSE takes as +Infinity, as
+    // Chromium does.
+    uint64_t duration;
+    uint32_t movie_timescale;
     uint32_t track_count;
     os64_media_fragment_track_t track[OS64_MEDIA_FRAGMENT_MAX_TRACKS];
 } os64_media_fragment_init_t;

@@ -137,6 +137,10 @@ so no field is used before it is checked against the box it sits in. The
 held boxes and the mdats holding frames have caps (4 MB and 128 MB to
 begin with, set by the caller), and a moof may name at most 65,536 frames.
 
+**The init segment's duration** is mvex's `mehd` fragment duration when
+it gives one, else mvhd's, in the movie's timescale; 0 (or ISO's all ones)
+is unknown, which MSE takes as +Infinity, as Chromium does.
+
 **The parsing-media-segment flag** (`os64_media_fragment_parsing_media`)
 is true from a moof's header until its last frame is handed out, and false
 after a reset or in an error: the page may not change `timestampOffset` or
@@ -217,7 +221,8 @@ processing, list item n of step 1.
 | kept; last decode time, last duration, highest end, group end | CFP 1.16–1.20 | `os64_media_buffer_frame` | every case |
 | `remove(start, end)`: frames presented in it and what depended on them | range removal | `os64_media_buffer_remove` | remove |
 | eviction and QuotaExceededError | eviction; prepare append 6–7 | `os64_media_buffer_make_room` | eviction around the play position; with none; muxed shares |
-| `buffered`: the intersection of the tracks' ranges | track buffer ranges | `os64_media_buffer_buffered` | every case, beside the model |
+| `buffered`: the intersection of the tracks' ranges; once the MediaSource has ended, each track's last range first reaches the highest end across tracks | track buffer ranges; `buffered` | `os64_media_buffer_buffered` | every case, both ways, beside the model |
+| an assignment to `timestampOffset` in sequence mode starts the next coded frame group at it, the value unchanged or not | `timestampOffset` setter | `os64_media_buffer_set_offset` | sequence: the offset assigned again |
 | `mode`: setting `sequence` sets the group start to the group end; a parser reset in sequence mode does too | `mode` setter; reset parser state | `os64_media_buffer_set_mode`, `_reset_parser` | sequence mode |
 
 **Ranges.** A track keeps RANGES: runs of frames in decode order, each

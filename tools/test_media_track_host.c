@@ -655,11 +655,15 @@ static void compare(os64_media_buffer_t *b, model_t *m)
               (long long)os64_media_buffer_highest_end(b), (long long)want);
         check(b->group_end == m->ge && b->offset == m->offset, "%s: group end or offset differs from the model", s_case);
     }
-    // The SourceBuffer's intersection, of the tracks' reported ranges.
-    if (m->nt == 2) {
+    // The SourceBuffer's intersection, of the tracks' reported ranges; and,
+    // ended, with each track's last range reaching the highest end first.
+    for (int ended = 0; m->nt == 2 && ended < 2; ended++) {
         os64_media_time_range_t x[256], p[256], q[256], w[512];
-        uint32_t nx = os64_media_buffer_buffered(b, x, 256);
+        uint32_t nx = os64_media_buffer_buffered(b, x, 256, ended);
         uint32_t np = os64_media_track_ranges(&b->track[0], p, 256), nq = os64_media_track_ranges(&b->track[1], q, 256);
+        int64_t high = os64_media_buffer_highest_end(b);
+        if (ended && np && np <= 256 && p[np - 1].end < high) p[np - 1].end = high;
+        if (ended && nq && nq <= 256 && q[nq - 1].end < high) q[nq - 1].end = high;
         int nw = 0;
         for (uint32_t i = 0; i < np && i < 256; i++)
             for (uint32_t j = 0; j < nq && j < 256; j++) {
@@ -673,7 +677,7 @@ static void compare(os64_media_buffer_t *b, model_t *m)
             }
         bool same = (int)nx == nw;
         for (int i = 0; same && i < nw && i < 256; i++) same = x[i].start == w[i].start && x[i].end == w[i].end;
-        check(same, "%s: buffered differs (%u ranges, the intersection %d)", s_case, nx, nw);
+        check(same, "%s: buffered%s differs (%u ranges, the intersection %d)", s_case, ended ? " (ended)" : "", nx, nw);
     }
 }
 
@@ -1206,6 +1210,65 @@ static void scripted(void)
     pair_frames(&p, 1, f, n);
     END();
 
+    // In sequence mode an assigned offset, even the same value, starts the
+    // next coded frame group at it; without the assignment the group goes
+    // on after the last.
+    for (int assign = 0; assign < 2; assign++) {
+        START(assign ? "sequence: the offset assigned again" : "sequence: the offset left alone", 1, 90000, 0);
+        os64_media_buffer_set_mode(&p.b, OS64_MEDIA_SEQUENCE); p.m.mode = OS64_MEDIA_SEQUENCE; p.m.gs = p.m.ge;
+        n = make_group(f, 0, 0, 30, 3000, 10, 0, 100);
+        pair_frames(&p, 0, f, n);
+        os64_media_buffer_reset_parser(&p.b);
+        p.m.gs = p.m.ge;
+        m_unset(&p.m.t[0]);
+        if (assign) { os64_media_buffer_set_offset(&p.b, 0); p.m.offset = 0; p.m.gs = 0; }
+        n = make_group(f, 0, 0, 30, 3000, 10, 0, 100);
+        pair_frames(&p, 0, f, n);
+        os64_media_time_range_t r[4];
+        uint32_t nr = os64_media_track_ranges(&p.b.track[0], r, 4);
+        check(nr == 1 && r[0].end == (assign ? MS(1000) : MS(2000)), "%s: buffered to %lld",
+              assign ? "assigned again, the group replaces 0-1 s" : "left alone, the group follows to 2 s",
+              nr ? (long long)r[0].end : 0);
+        END();
+    }
+
+    // Codex #769 rd1: ahead and seek in gaps, with frames a second long (a
+    // join of 2 s). Ranges at 2-3 s and 4-5 s are joined (a 1 s gap): ahead
+    // at 3.5 s is held to 5 s, a seek there lands. Ranges at 0-1 s and 4-5 s
+    // are not (a 3 s gap): a seek at 2.5 s waits.
+    for (int wide = 0; wide < 2; wide++) {
+        START(wide ? "a gap past the join" : "a gap the join closes, one-second frames", 1, 1, 0);
+        tf_t one = { 4, 4, 1, true, 10 };
+        pair_frames(&p, 0, &one, 1);
+        os64_media_buffer_reset_parser(&p.b);
+        m_unset(&p.m.t[0]);
+        one = (tf_t){ wide ? 0 : 2, wide ? 0 : 2, 1, true, 10 };
+        pair_frames(&p, 0, &one, 1);
+        os64_media_track_t *v = &p.b.track[0];
+        os64_media_track_cursor_t c;
+        int64_t end = 0;
+        if (!wide) {
+            check(v->range_count == 2, "two ranges (%u)", v->range_count);
+            check(os64_media_track_ahead(v, 3500000000ll, &end) && end == 5000000000ll,
+                  "ahead in a joined gap is held to the next range's end (%lld)", (long long)end);
+            check(os64_media_track_seek(v, 3500000000ll, &c) == OS64_MEDIA_TRACK_FRAME, "a seek into a joined gap lands");
+        } else {
+            check(!os64_media_track_ahead(v, 2500000000ll, &end), "ahead in a gap past the join is not held");
+            check(os64_media_track_seek(v, 2500000000ll, &c) == OS64_MEDIA_TRACK_WAIT, "a seek into a gap past the join waits");
+        }
+        END();
+    }
+
+    // Codex #769 rd1: removing the whole range a group is arriving into
+    // leaves its next frame nothing to decode from: dropped until a random
+    // access point.
+    START("the group's range removed whole", 1, 90000, 0);
+    n = make_group(f, 0, 0, 12, 3000, 10, 0, 100);           // I at 0 and 10
+    pair_frames(&p, 0, f, 2);
+    os64_media_buffer_remove(&p.b, 0, MS(1000)); m_cut(&p.m.t[0], 0, MS(1000));
+    pair_frames(&p, 0, f + 2, 10);                            // 2..9 dropped, 10 an I frame
+    END();
+
     // A muxed append's bytes shared by the tracks' quotas.
     START("muxed quota shares", 2, 90000, 48000);
     p.b.track[0].quota = p.m.t[0].quota = 30000;
@@ -1406,7 +1469,7 @@ static void out_of_memory(void)
 {
     tf_t f[256];
     long live0 = s_live;
-    for (long k = 1; k <= 12; k++) {
+    for (long k = 1; k <= 40; k++) {
         os64_media_buffer_t b;
         os64_media_buffer_init(&b, &kMemory);
         os64_media_fragment_init_t init = { .generation = 1, .track_count = 1 };
@@ -1435,6 +1498,16 @@ static void out_of_memory(void)
                           "out of memory at %ld, frame %d: a range begins at no random access point", k, i);
         }
         os64_media_buffer_remove(&b, MS(300), MS(600));
+        // Whatever the cut could not allocate went whole: inside a range a
+        // frame that is no unit start follows the frame it came after.
+        for (uint32_t t = 0; t < b.track_count; t++)
+            for (uint32_t ri = 0; ri < b.track[t].range_count; ri++) {
+                const os64_media_track_range_t *r = &b.track[t].range[ri];
+                for (uint32_t i = 1; i < r->count; i++)
+                    check((r->frame[i].flags & OS64_MEDIA_FRAME_RAP) || r->frame[i].serial == r->frame[i - 1].serial + 1,
+                          "out of memory at %ld: a cut kept a frame without the one it decodes after (serial %llu after %llu)",
+                          k, (unsigned long long)r->frame[i].serial, (unsigned long long)r->frame[i - 1].serial);
+            }
         s_fail_countdown = 0;
         slab_end(slab);
         os64_media_buffer_destroy(&b);
@@ -1538,7 +1611,12 @@ static void random_script(void)
             oplog("window %lld %lld\n", (long long)p.b.window_start, (long long)p.b.window_end);
             break;
         case 7:                                       // the offset
-            p.b.offset = p.m.offset = rnd() % 3 ? 0 : ((int64_t)(rnd() % 4000) - 2000) * 1000000ll;
+            {
+                int64_t o = rnd() % 3 ? 0 : ((int64_t)(rnd() % 4000) - 2000) * 1000000ll;
+                os64_media_buffer_set_offset(&p.b, o);
+                p.m.offset = o;
+                if (p.m.mode == OS64_MEDIA_SEQUENCE) p.m.gs = o;    // MSE: the next group starts at it
+            }
             oplog("offset %lld\n", (long long)p.b.offset);
             break;
         case 8:                                       // a parser reset (abort)

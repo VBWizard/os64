@@ -250,8 +250,12 @@ static os64_media_track_range_t *range_insert(os64_media_track_t *t, uint32_t at
 static void range_delete(os64_media_track_t *t, uint32_t index)
 {
     mem_release(t, t->range[index].frame);
-    if (t->append_range == t->range[index].id)
+    if (t->append_range == t->range[index].id) {
+        // The group arriving into it lost what its next frames depend on.
         t->append_range = 0;
+        t->last_kept = 0;
+        t->need_rap = true;
+    }
     for (uint32_t i = index + 1; i < t->range_count; i++)
         t->range[i - 1] = t->range[i];
     t->range_count--;
@@ -365,10 +369,16 @@ static void cut_presented(os64_media_track_t *t, int64_t lo, int64_t hi)
             if (seen_cut) {                     // a stretch after a removed one: a new range
                 seen_cut = false;
                 in_first = false;
+                // Its whole length reserved at once, so it is kept whole or
+                // goes whole (a frame dropped from its middle would leave the
+                // ones after it with nothing to decode from).
+                uint32_t len = 0;
+                while (i + len < n && !(src[i + len].flags & FRAME_CUT))
+                    len++;
                 dest = range_insert(t, t->range_count);
                 r = range_by_id(t, id, 0);      // the array may have moved
                 src = r->frame;
-                if (dest != 0 && !range_reserve(t, dest, 16)) {
+                if (dest != 0 && !range_reserve(t, dest, len)) {
                     range_delete(t, t->range_count - 1);
                     r = range_by_id(t, id, 0);
                     src = r->frame;
@@ -377,12 +387,12 @@ static void cut_presented(os64_media_track_t *t, int64_t lo, int64_t hi)
             }
             if (in_first) {
                 r->frame[w++] = f;
-            } else if (dest != 0 && range_reserve(t, dest, dest->count + 1)) {
-                dest->frame[dest->count++] = f;
+            } else if (dest != 0) {
+                dest->frame[dest->count++] = f;   // reserved above
                 if (t->append_range == id && f.serial == t->last_kept)
                     t->append_range = dest->id;
             } else {
-                frame_forget(t, &f);            // no memory for its range: it goes
+                frame_forget(t, &f);            // no memory for its range: the stretch goes
             }
         }
         r = range_by_id(t, id, 0);
@@ -820,6 +830,13 @@ void os64_media_buffer_set_mode(os64_media_buffer_t *b, int mode)
         b->group_start = b->group_end;
 }
 
+void os64_media_buffer_set_offset(os64_media_buffer_t *b, int64_t offset)
+{
+    b->offset = offset;
+    if (b->mode == OS64_MEDIA_SEQUENCE)
+        b->group_start = offset;
+}
+
 void os64_media_buffer_remove(os64_media_buffer_t *b, int64_t start, int64_t end)
 {
     for (uint32_t k = 0; k < b->track_count; k++)
@@ -963,17 +980,34 @@ uint32_t os64_media_track_ranges(const os64_media_track_t *t, os64_media_time_ra
     return n;
 }
 
-uint32_t os64_media_buffer_buffered(const os64_media_buffer_t *b, os64_media_time_range_t *out, uint32_t cap)
+// next_union, with the track's last interval reaching `extend_to` when that
+// is later (OS64_MEDIA_NO_TIME: no extension).
+static bool next_union_to(const os64_media_track_t *t, int64_t from, os64_media_time_range_t *out, int64_t extend_to)
+{
+    if (!next_union(t, from, out))
+        return false;
+    int64_t last = OS64_MEDIA_NO_TIME;
+    for (uint32_t i = 0; i < t->range_count; i++)
+        if (t->range[i].start < t->range[i].end && t->range[i].end > last)
+            last = t->range[i].end;
+    if (out->end == last && extend_to > out->end)
+        out->end = extend_to;
+    return true;
+}
+
+uint32_t os64_media_buffer_buffered(const os64_media_buffer_t *b, os64_media_time_range_t *out, uint32_t cap,
+                                    bool ended)
 {
     if (b->track_count == 0)
         return 0;
     if (b->track_count == 1)
         return os64_media_track_ranges(&b->track[0], out, cap);
     // The intersection of two tracks' unions, walked together.
+    int64_t to = ended ? os64_media_buffer_highest_end(b) : OS64_MEDIA_NO_TIME;
     const os64_media_track_t *x = &b->track[0], *y = &b->track[1];
     os64_media_time_range_t a, c;
     uint32_t n = 0;
-    bool ha = next_union(x, OS64_MEDIA_NO_TIME, &a), hc = next_union(y, OS64_MEDIA_NO_TIME, &c);
+    bool ha = next_union_to(x, OS64_MEDIA_NO_TIME, &a, to), hc = next_union_to(y, OS64_MEDIA_NO_TIME, &c, to);
     while (ha && hc) {
         int64_t s = a.start > c.start ? a.start : c.start, e = a.end < c.end ? a.end : c.end;
         if (s < e) {
@@ -982,9 +1016,9 @@ uint32_t os64_media_buffer_buffered(const os64_media_buffer_t *b, os64_media_tim
             n++;
         }
         if (a.end < c.end)
-            ha = next_union(x, a.end, &a);
+            ha = next_union_to(x, a.end, &a, to);
         else
-            hc = next_union(y, c.end, &c);
+            hc = next_union_to(y, c.end, &c, to);
     }
     return n;
 }
@@ -1006,7 +1040,7 @@ static const os64_media_track_range_t *range_holding(const os64_media_track_t *t
                 *index = i;
             return r;
         }
-        if (r->start > time && sat_sub(r->start, time) <= join_of(t) && (next == 0 || r->start < next->start)) {
+        if (r->start > time && (next == 0 || r->start < next->start)) {
             next = r;
             if (index)
                 *index = i;
@@ -1014,10 +1048,14 @@ static const os64_media_track_range_t *range_holding(const os64_media_track_t *t
     }
     if (next == 0)
         return 0;
-    // Only a gap `buffered` joins: some range must end within the join before it.
+    // Only a gap `buffered` joins: the whole of it, from the latest end
+    // before `time` to `next`, within the join.
+    int64_t before = OS64_MEDIA_NO_TIME;
     for (uint32_t i = 0; i < t->range_count; i++)
-        if (t->range[i].end <= time && sat_sub(time, t->range[i].end) <= join_of(t) && t->range[i].start < t->range[i].end)
-            return next;
+        if (t->range[i].start < t->range[i].end && t->range[i].end <= time && t->range[i].end > before)
+            before = t->range[i].end;
+    if (before != OS64_MEDIA_NO_TIME && sat_sub(next->start, before) <= join_of(t))
+        return next;
     return 0;
 }
 
@@ -1042,12 +1080,19 @@ static const os64_media_track_range_t *range_after(const os64_media_track_t *t, 
 
 bool os64_media_track_ahead(const os64_media_track_t *t, int64_t time, int64_t *range_end)
 {
+    // The joined intervals from the start: one beginning before `time` may
+    // be what joins a gap `time` is in.
     os64_media_time_range_t r;
-    if (!next_union(t, time, &r) || r.start > time)
-        return false;
-    if (range_end)
-        *range_end = r.end;
-    return true;
+    for (int64_t from = OS64_MEDIA_NO_TIME; next_union(t, from, &r); from = r.end) {
+        if (time < r.start)
+            return false;
+        if (time < r.end) {
+            if (range_end)
+                *range_end = r.end;
+            return true;
+        }
+    }
+    return false;
 }
 
 // The pts of a unit's random access point (past its preload frames).

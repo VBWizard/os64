@@ -212,14 +212,23 @@ os64_media_track_rule_t os64_media_buffer_frame(os64_media_buffer_t *b, const os
 // last duration and highest end are unset, and it needs a random access point.
 void os64_media_buffer_reset_parser(os64_media_buffer_t *b);
 void os64_media_buffer_set_mode(os64_media_buffer_t *b, int mode);
+// An assignment to timestampOffset (MSE § 3.1): in sequence mode the next
+// coded frame group starts at it, even when the value is unchanged (the
+// window and a mode's value are plain fields: their setters do nothing more).
+void os64_media_buffer_set_offset(os64_media_buffer_t *b, int64_t offset);
 // Range removal (MSE § 3.5.9): every track's frames presented in [start, end), and what depended on them.
 void os64_media_buffer_remove(os64_media_buffer_t *b, int64_t start, int64_t end);
 // The coded frame eviction and prepare-append's check (MSE § 3.5.13, § 3.5.12 steps 6-7) before an
 // append of `incoming` bytes, with the play position (OS64_MEDIA_NO_TIME for none): QUOTA when it
 // still does not fit, and then the append is refused whole.
 os64_media_track_rule_t os64_media_buffer_make_room(os64_media_buffer_t *b, uint64_t incoming, int64_t play);
-// `buffered`: the intersection of the tracks' ranges. Answers how many there are; fills at most `cap`.
-uint32_t os64_media_buffer_buffered(const os64_media_buffer_t *b, os64_media_time_range_t *out, uint32_t cap);
+// `buffered`: the intersection of the tracks' ranges. Once the MediaSource
+// has ended (`ended`), each track's last range is first extended to the
+// highest end across the tracks (MSE § 3.1, buffered: sound to 4 s beside a
+// picture to 3 s and from 5 s to 10 s holds 0-3 and 5-10, not 3-5). Answers
+// how many there are; fills at most `cap`.
+uint32_t os64_media_buffer_buffered(const os64_media_buffer_t *b, os64_media_time_range_t *out, uint32_t cap,
+                                    bool ended);
 os64_media_track_t *os64_media_buffer_track(os64_media_buffer_t *b, int kind);
 // The latest presentation end any track holds (ns; OS64_MEDIA_NO_TIME when
 // none): what `endOfStream` makes the duration. The offset as an append left

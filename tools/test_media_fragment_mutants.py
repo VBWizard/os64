@@ -152,6 +152,13 @@ mutants = [
     ('samples-are-not-sorted', F,
      '    if (sorted)\n        return OS64_MEDIA_FRAGMENT_OK;  // the usual case', '    if (1)\n        return OS64_MEDIA_FRAGMENT_OK;  // the usual case'),
     ('a-moof-with-no-traf-is-taken', F, '    if (walk.bad || first)              // a moof with no traf', '    if (walk.bad)              // a moof with no traf'),
+    # The presentation's duration.
+    ('mvhd-duration-not-read', F, '        duration = rd_n(&b.body, version == 1 ? 8 : 4);', '        rd_skip(&b.body, version == 1 ? 8 : 4);'),
+    ('mvhd-v0-all-ones-is-a-duration', F, '        if (version != 1 && duration == UINT32_MAX)\n            duration = UINT64_MAX;', ''),
+    ('mehd-ignored', F, '        if (fragment_duration != 0)\n            duration = fragment_duration;', '        (void)fragment_duration;'),
+    ('mehd-zero-overrides-mvhd', F, '        if (fragment_duration != 0)\n            duration = fragment_duration;', '        duration = fragment_duration;'),
+    ('mehd-v1-read-as-v0', F, 'uint64_t fragment_duration = rd_n(&mehd.body, version == 1 ? 8 : 4);', 'uint64_t fragment_duration = rd_n(&mehd.body, version * 0 + 4);'),
+    ('all-ones-is-a-duration', F, '.duration = duration == UINT64_MAX ? 0 : duration,', '.duration = duration,'),
     # The parsing-media-segment flag.
     ('parsing-media-ignores-owed-frames', F, '    if (samples_pending(p))\n        return true;', '    if (0)\n        return true;'),
     ('parsing-media-ignores-a-moof-arriving', F, '    return p->state == IN_BOX && p->box_have >= 8 &&', '    return 0 && p->box_have >= 8 &&'),

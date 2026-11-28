@@ -204,7 +204,7 @@ static void run(const uint8_t *data, size_t size)
         }
         case 5: { int64_t a = take_time(&in), z = take_time(&in); os64_media_buffer_remove(&b, a, z); break; }
         case 6: b.window_start = take_time(&in); b.window_end = (op & 0x80) ? OS64_MEDIA_TIME_MAX : take_time(&in); break;
-        case 7: b.offset = take_time(&in); break;
+        case 7: os64_media_buffer_set_offset(&b, take_time(&in)); break;
         case 8: os64_media_buffer_set_mode(&b, (int)(op >> 7)); break;
         case 9: os64_media_buffer_reset_parser(&b); break;
         case 10: {                                  // room for an append
@@ -213,7 +213,7 @@ static void run(const uint8_t *data, size_t size)
             int64_t play = (op & 0x80) ? OS64_MEDIA_NO_TIME : take_time(&in);
             os64_media_buffer_make_room(&b, incoming, play);
             os64_media_time_range_t r[8];
-            os64_media_buffer_buffered(&b, r, 8);
+            os64_media_buffer_buffered(&b, r, 8, op & 0x40);
             break;
         }
         default: {                                  // the player

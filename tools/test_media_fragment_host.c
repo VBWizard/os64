@@ -126,6 +126,10 @@ typedef struct {
     uint32_t movie_timescale;
     int no_mvex;
     int largesize;                  // the moov's header with a 64-bit size
+    int mvhd_v1;                    // a version 1 mvhd (64-bit times)
+    uint64_t mvhd_duration;         // 0 (unknown), or a duration in the movie timescale
+    int mehd;                       // 0 none, 1 a v0 mehd, 2 a v1 mehd
+    uint64_t mehd_duration;
 } dinit_t;
 
 typedef struct { uint32_t size, dur, flags; int32_t cto; } dsample_t;
@@ -170,6 +174,8 @@ typedef struct {
     uint32_t ids[2], kinds[2], timescales[2], entry_counts[2];
     int64_t edits[2];
     uint32_t fourcc[2];
+    uint64_t duration64;            // the presentation's (0: unknown)
+    uint32_t movie_timescale;
     // frame
     uint32_t track, entry, size, duration;
     int64_t dts, pts;
@@ -272,8 +278,9 @@ static void write_init(model_t *m, const dinit_t *d)
     close_box(b, f);
     size_t moov_at = b->n;
     if (d->largesize) { u32(b, 1); cc4(b, "moov"); u64(b, 0); } else box(b, "moov");
-    size_t mv = fullbox(b, "mvhd", 0, 0);
-    u32(b, 0); u32(b, 0); u32(b, d->movie_timescale); u32(b, 0);
+    size_t mv = fullbox(b, "mvhd", d->mvhd_v1 ? 1 : 0, 0);
+    if (d->mvhd_v1) { u64(b, 0); u64(b, 0); u32(b, d->movie_timescale); u64(b, d->mvhd_duration); }
+    else { u32(b, 0); u32(b, 0); u32(b, d->movie_timescale); u32(b, d->mvhd_duration); }
     zeros(b, 80);
     close_box(b, mv);
     for (int i = 0; i < d->n; i++) {
@@ -349,6 +356,11 @@ static void write_init(model_t *m, const dinit_t *d)
     }
     if (!d->no_mvex) {
         size_t mx = box(b, "mvex");
+        if (d->mehd) {
+            size_t mh = fullbox(b, "mehd", d->mehd == 2 ? 1 : 0, 0);
+            if (d->mehd == 2) u64(b, d->mehd_duration); else u32(b, d->mehd_duration);
+            close_box(b, mh);
+        }
         for (int i = 0; i < d->n; i++) {
             const dtrack_t *t = &d->t[i];
             size_t tx = fullbox(b, "trex", 0, 0);
@@ -366,7 +378,12 @@ static void write_init(model_t *m, const dinit_t *d)
     }
     // What the parser must say about it.
     m->init = *d;
-    event_t e = { .kind = 1, .generation = ++m->generation };
+    uint64_t want_duration = d->mvhd_duration;
+    if (!d->mvhd_v1 && want_duration == UINT32_MAX) want_duration = 0;
+    if (d->mvhd_v1 && want_duration == UINT64_MAX) want_duration = 0;
+    if (d->mehd && d->mehd_duration != 0) want_duration = d->mehd_duration;
+    event_t e = { .kind = 1, .generation = ++m->generation, .duration64 = want_duration,
+                  .movie_timescale = d->movie_timescale };
     for (int i = 0; i < d->n; i++) {
         const dtrack_t *t = &d->t[i];
         if (t->kind == K_TEXT)
@@ -673,7 +690,8 @@ static void maybe_reenter(sink_ctx_t *c)
 static void on_init(void *context, const os64_media_fragment_init_t *init)
 {
     sink_ctx_t *c = context;
-    event_t e = { .kind = 1, .generation = init->generation, .track_count = init->track_count };
+    event_t e = { .kind = 1, .generation = init->generation, .track_count = init->track_count,
+                  .duration64 = init->duration, .movie_timescale = init->movie_timescale };
     for (uint32_t i = 0; i < init->track_count && i < 2; i++) {
         e.ids[i] = init->track[i].id;
         e.kinds[i] = (uint32_t)init->track[i].kind;
@@ -779,7 +797,8 @@ static bool same_event(const event_t *a, const event_t *b)
     if (a->kind != b->kind || a->generation != b->generation)
         return false;
     if (a->kind == 1) {
-        if (a->track_count != b->track_count) return false;
+        if (a->track_count != b->track_count || a->duration64 != b->duration64 ||
+            a->movie_timescale != b->movie_timescale) return false;
         for (uint32_t i = 0; i < a->track_count; i++)
             if (a->ids[i] != b->ids[i] || a->kinds[i] != b->kinds[i] || a->timescales[i] != b->timescales[i] ||
                 a->entry_counts[i] != b->entry_counts[i] || a->edits[i] != b->edits[i] || a->fourcc[i] != b->fourcc[i])
@@ -1022,6 +1041,25 @@ static void streams(void)
             expect_stream(name, &m);
             model_free(&m);
         }
+
+    // The presentation's duration: mvhd's (v0, v1), unknown (0, all ones),
+    // and mehd's over mvhd's (v0, v1, and a mehd of 0 that defers to mvhd).
+    {
+        static const struct { int v1; uint64_t mvhd; int mehd; uint64_t mehd_d; } cases[] = {
+            { 0, 90000, 0, 0 }, { 1, 1ull << 40, 0, 0 }, { 0, 0, 0, 0 }, { 0, UINT32_MAX, 0, 0 },
+            { 1, UINT64_MAX, 0, 0 }, { 0, 0, 1, 123456 }, { 0, 5000, 2, 1ull << 36 }, { 0, 7000, 1, 0 },
+        };
+        for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+            dinit_t d = av_init();
+            d.mvhd_v1 = cases[i].v1; d.mvhd_duration = cases[i].mvhd;
+            d.mehd = cases[i].mehd; d.mehd_duration = cases[i].mehd_d;
+            write_init(&m, &d);
+            char name[48];
+            snprintf(name, sizeof(name), "the duration, case %zu", i);
+            expect_stream(name, &m);
+            model_free(&m);
+        }
+    }
 
     // trex's sample entry, with tfhd naming none.
     {
