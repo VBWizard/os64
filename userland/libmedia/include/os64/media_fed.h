@@ -60,7 +60,8 @@ typedef enum {
 typedef struct {
     os64_media_fed_status_t status;
     uint32_t inits;             // initialization segments completed
-    double init_duration;       // the last one's duration; NaN when unknown (0 or all ones in the file)
+    double init_duration;       // the FIRST one's duration (the spec takes one only while the duration is
+                                // unknown); NaN when it gives none (0 or all ones in the file)
     bool audio, video;          // the tracks the buffer's first initialization segment holds
     bool frames;                // coded frames were added
     bool parsing_media;         // the parser stopped inside a media segment

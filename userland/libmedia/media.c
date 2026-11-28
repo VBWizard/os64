@@ -1127,8 +1127,19 @@ static int fed_pull_locked(os64_media_t *m, int k)
         return 0;
     }
     if (!f->seeked) {
-        if (os64_media_track_seek(t, f->seek_ns, &f->cursor) != OS64_MEDIA_TRACK_FRAME)
-            return 0;                   // not buffered there yet
+        if (os64_media_track_seek(t, f->seek_ns, &f->cursor) != OS64_MEDIA_TRACK_FRAME) {
+            // A range that starts within the join after the time is where
+            // the seek lands (a picture with B-frames starts a frame or two
+            // after 0 when its file has no edit list), as `buffered` joins
+            // a gap that narrow and other browsers seek across it.
+            os64_media_time_range_t r[8];
+            uint32_t n = os64_media_track_ranges(t, r, 8);
+            int64_t at = OS64_MEDIA_NO_TIME;
+            for (uint32_t i = 0; i < n && i < 8 && at == OS64_MEDIA_NO_TIME; i++)
+                if (r[i].start > f->seek_ns && r[i].start - f->seek_ns <= 2 * t->interbuffer) at = r[i].start;
+            if (at == OS64_MEDIA_NO_TIME || os64_media_track_seek(t, at, &f->cursor) != OS64_MEDIA_TRACK_FRAME)
+                return 0;               // not buffered there yet
+        }
         f->seeked = true;
     }
     int r = os64_media_track_next(t, &f->cursor, &f->frame);
@@ -1180,6 +1191,7 @@ static int fed_packet(os64_media_t *m, int k)
 {
     fed_kind_t *f = &m->fk[k];
     os64_media_track_frame_t fr = f->frame;
+    uint8_t *data = fr.slab->data + fr.offset;             // frame_done below clears fr.slab
     AVBufferRef *old = NULL;
     if (fr.slab != f->base_slab) {
         // The frame's slab hold becomes the new base reference's.
@@ -1203,7 +1215,7 @@ static int fed_packet(os64_media_t *m, int k)
         av_packet_free(&p);
         return OS64_MEDIA_NO_MEMORY;
     }
-    p->data = fr.slab->data + fr.offset;
+    p->data = data;
     p->size = (int)fr.size;
     p->pts = fr.pts;
     p->dts = fr.dts;
@@ -1244,10 +1256,11 @@ static int fed_read_packet(os64_media_t *m)
         if (f->position_ns == OS64_MEDIA_NO_TIME || m->fk[chosen].frame.dts > f->position_ns + FED_LEAD_NS)
             chosen = -1;
     }
-    bool live = false, resync = false;
+    bool live = false, resync = false, reopen = false;
     for (int k = 0; k < 2; k++) {
         live |= fed_in_use(m, k) && !m->fk[k].done;
         resync |= m->fk[k].resync;
+        reopen |= m->fk[k].reopen;
     }
     media_fed_unlock(m->fed);
     if (r < 0) return r;
@@ -1256,7 +1269,9 @@ static int fed_read_packet(os64_media_t *m)
             if (m->fk[k].resync) fed_resync(m, k);
         return 0;
     }
-    if (chosen < 0) return live ? FED_WAIT : 0;            // all ended: the decoders are told
+    // Nothing to read: a wait, unless a decoder is to be drained for its
+    // reopen or every kind has ended, which the decoders are told now.
+    if (chosen < 0) return live && !reopen ? FED_WAIT : 0;
     return fed_packet(m, chosen);
 }
 
