@@ -106,7 +106,9 @@ typedef struct {
  * order, and the element's states; the host keeps the FED SESSION it
  * opens for the element, which is also a session of the media provider
  * above (play, pause, seek, settings and facts take it; `close` here, not
- * the media provider's, ends it), and per SourceBuffer a BUFFER: its
+ * the media provider's, ends it; its facts' `probed`, `duration` and
+ * `seekable` are not read, since the MediaSource is what answers those),
+ * and per SourceBuffer a BUFFER: its
  * parser's input, its track buffers and its quota. Every call is made on
  * the window thread, returns at once and enters no script; every time is
  * in seconds, converted to and from the stream's own ticks by the host. */
