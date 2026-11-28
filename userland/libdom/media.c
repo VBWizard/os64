@@ -47,16 +47,26 @@ typedef struct { JSValue promise, resolve, reject; } DMediaPromise;
 
 typedef struct DMediaElement DMediaElement;
 
-typedef struct DMediaTask {
+/* A task on the media elements' one queue: an element's event (`media`),
+ * or one of Media Source Extensions' (mse.c, through d_media_queue_plain
+ * and d_media_queue_work): an event at a plain target, or an append's or
+ * removal's work, which a SourceBuffer may cancel before it runs. */
+struct DMediaTask {
     struct DMediaTask *next;
-    DMediaElement *media;
+    DMediaElement *media;           /* the element's task; NULL for MSE's */
     JSValue wrapper;                /* the element's, while queued (HOLDERS) */
     const char *type;               /* the event, NULL to only settle */
     uint8_t settle;
     uint8_t clocked;                /* its CLOCKED_* bit, 0 for an event of a change */
     DMediaPromise *promises;        /* the task's own */
     uint32_t promise_count;
-} DMediaTask;
+    JSValue object;                 /* MSE's: the target's object, held while queued; JS_UNDEFINED else */
+    DValue *plain;                  /* MSE's event: the plain target's entry in `object` */
+    void (*run)(os64_dom_t *dom, void *work);       /* MSE's work, instead of an event */
+    void (*left)(void *work, DMediaTask *task);     /* hears the work task leave the queue */
+    void *work;
+    bool cancelled;                 /* leaves the queue without running */
+};
 
 /* The events the element fires on a clock while it plays or loads, not at
  * a change of state: `timeupdate` every 250 ms of play and `progress` every
@@ -108,6 +118,7 @@ struct DMediaElement {
     char message[96];
     JSValue error_object;           /* the MediaError, held once made */
     JSValue text_tracks;            /* the TextTrackList, made once, kept for the page */
+    JSValue fed;                    /* the MediaSource attached (held while it is), JS_UNDEFINED with none */
     DMediaPromise *pending;
     uint32_t pending_count, pending_cap;
 };
@@ -153,6 +164,12 @@ void os64_dom_set_media(os64_dom_t *dom, const os64_dom_media_provider_t *provid
         dom->media_provider = provider ? *provider : (os64_dom_media_provider_t){0};
 }
 
+void os64_dom_set_fed(os64_dom_t *dom, const os64_dom_fed_provider_t *provider)
+{
+    if (dom && !dom->closed && !dom->departure_finishing && !dom->departure_finished)
+        dom->fed_provider = provider ? *provider : (os64_dom_fed_provider_t){0};
+}
+
 static double gain_of(const DMediaElement *m) { return m->muted ? 0 : m->volume; }
 
 static bool loops(const DMediaElement *m) { return os64_html_attr(m->node, "loop") != NULL; }
@@ -175,8 +192,19 @@ static void tell_settings(os64_dom_t *dom, DMediaElement *m)
                                      m->all_seen);
 }
 
+/* The session given back. An attached MediaSource's is the fed
+ * source's to end: the detach (mse.c), which closes it, runs whenever the
+ * element lets its resource go (a load, a failure, the page leaving). */
 static void session_close(os64_dom_t *dom, DMediaElement *m)
 {
+    if (!JS_IsUndefined(m->fed)) {
+        JSValue source = m->fed;
+        m->fed = JS_UNDEFINED;
+        m->session = NULL;
+        d_mse_detach(dom, source);
+        JS_FreeValueRT(dom->engine, source);
+        return;
+    }
     if (m->session != NULL && dom->media_provider.close != NULL)
         dom->media_provider.close(dom->media_provider.opaque, m->session);
     m->session = NULL;
@@ -206,9 +234,20 @@ static DMediaElement *record_of(os64_dom_t *dom, const os64_html_node_t *node, b
     m->duration = NAN;
     m->error_object = JS_UNDEFINED;
     m->text_tracks = JS_UNDEFINED;
+    m->fed = JS_UNDEFINED;
     m->next = s->records;
     s->records = m;
     return m;
+}
+
+static void promises_release(os64_dom_t *dom, DMediaPromise *p, uint32_t count);
+
+static void append_task(os64_dom_t *dom, DMediaTask *t)
+{
+    struct DMediaElements *s = dom->media_elements;
+    if (s->tail != NULL) s->tail->next = t;
+    else s->head = t;
+    s->tail = t;
 }
 
 /* A media task for `m`: its event, and with `settle` the promises pending
@@ -216,11 +255,11 @@ static DMediaElement *record_of(os64_dom_t *dom, const os64_html_node_t *node, b
  * is lost and the promises are left pending for the next settling step. */
 static void queue(os64_dom_t *dom, DMediaElement *m, const char *type, uint8_t settle)
 {
-    struct DMediaElements *s = dom->media_elements;
     DMediaTask *t = d_alloc(dom, sizeof(*t));
     if (t == NULL) return;
     t->media = m;
     t->wrapper = d_holder_take(dom, m->node);
+    t->object = JS_UNDEFINED;
     t->type = type;
     t->settle = settle;
     if (settle != SETTLE_NONE) {
@@ -229,9 +268,7 @@ static void queue(os64_dom_t *dom, DMediaElement *m, const char *type, uint8_t s
         m->pending = NULL;
         m->pending_count = m->pending_cap = 0;
     }
-    if (s->tail != NULL) s->tail->next = t;
-    else s->head = t;
-    s->tail = t;
+    append_task(dom, t);
 }
 
 /* A clocked event (CLOCKED_*) for `m`, unless one of that kind is queued
@@ -247,11 +284,56 @@ static void queue_clocked(os64_dom_t *dom, DMediaElement *m, const char *type, u
     }
 }
 
+
+DMediaTask *d_media_queue_plain(os64_dom_t *dom, JSValueConst object, DValue *target, const char *type)
+{
+    if (dom->media_elements == NULL) return NULL;
+    DMediaTask *t = d_alloc(dom, sizeof(*t));
+    if (t == NULL) return NULL;
+    t->wrapper = JS_UNDEFINED;
+    t->object = JS_DupValueRT(dom->engine, object);
+    t->plain = target;
+    t->type = type;
+    append_task(dom, t);
+    return t;
+}
+
+DMediaTask *d_media_queue_work(os64_dom_t *dom, JSValueConst object, void (*run)(os64_dom_t *dom, void *work),
+                               void (*left)(void *work, DMediaTask *task), void *work)
+{
+    if (dom->media_elements == NULL) return NULL;
+    DMediaTask *t = d_alloc(dom, sizeof(*t));
+    if (t == NULL) return NULL;
+    t->wrapper = JS_UNDEFINED;
+    t->object = JS_DupValueRT(dom->engine, object);
+    t->run = run;
+    t->left = left;
+    t->work = work;
+    append_task(dom, t);
+    return t;
+}
+
+void d_media_task_cancel(DMediaTask *task)
+{
+    if (task != NULL) task->cancelled = true;
+}
+
 /* A task leaves the queue, delivered or dropped: its element may queue
- * another of its clocked kind. */
+ * another of its clocked kind, and a work task's owner forgets it. */
 static void task_leaves(DMediaTask *t)
 {
     if (t->clocked != 0 && t->media != NULL) t->media->clocked_queued &= (uint8_t)~t->clocked;
+    if (t->left != NULL) t->left(t->work, t);
+    t->left = NULL;
+}
+
+/* A task's own values let go, the task freed. */
+static void task_free(os64_dom_t *dom, DMediaTask *t)
+{
+    promises_release(dom, t->promises, t->promise_count);
+    JS_FreeValueRT(dom->engine, t->wrapper);
+    JS_FreeValueRT(dom->engine, t->object);
+    d_free(dom, t);
 }
 
 static void promises_release(os64_dom_t *dom, DMediaPromise *p, uint32_t count)
@@ -542,6 +624,28 @@ static void select_resource(os64_dom_t *dom, DMediaElement *m)
         source_failed(dom, m, "The address does not resolve");
         return;
     }
+    /* A MediaSource's object URL: the resource fetch's local mode, the
+     * source attached (MSE § 3.15.1). One that will not attach (not
+     * closed, attached elsewhere, or no host) cannot be fetched at all. */
+    JSValue source = d_mse_lookup(dom, m->current_src);
+    if (!JS_IsUndefined(source)) {
+        void *session = NULL;
+        if (!d_mse_attach(dom, source, m, m->node, &session)) {
+            if (dom->media_provider.failed != NULL)
+                dom->media_provider.failed(dom->media_provider.opaque, m->node, NULL, m->current_src,
+                                           OS64_DOM_MEDIA_ERR_SRC_NOT_SUPPORTED, "The MediaSource cannot be attached");
+            source_failed(dom, m, "The MediaSource cannot be attached");
+            return;
+        }
+        m->fed = JS_DupValueRT(dom->engine, source);
+        m->session = session;
+        m->network = N_LOADING;
+        tell_settings(dom, m);
+        m->settings_applied = true;
+        if (!m->paused && dom->media_provider.play != NULL)
+            dom->media_provider.play(dom->media_provider.opaque, m->session);
+        return;
+    }
     const os64_html_attr_t *preload = os64_html_attr(m->node, "preload");
     bool none = preload != NULL && os64_streq_nocase(preload->value, "none");
     if (none && !m->wanted && m->paused && os64_html_attr(m->node, "autoplay") == NULL) {
@@ -611,7 +715,20 @@ static void fold_facts(os64_dom_t *dom, DMediaElement *m)
     dom->media_provider.facts(dom->media_provider.opaque, m->session, &f);
     if (m->session == NULL) return;
     uint64_t now = d_host_now_ms(dom);
+    /* A fed element (an attached MediaSource): its metadata is every
+     * SourceBuffer's first initialization segment, which libdom saw
+     * (MSE § 5.5.7 step 10), and its duration is the MediaSource's, set by
+     * the duration change (d_media_fed_duration). */
+    bool fed = !JS_IsUndefined(m->fed);
+    if (fed) {
+        f.probed = d_mse_probed(dom, m->fed);
+        f.duration = m->duration;
+    }
     if (f.error != 0 && !m->error_seen) {
+        /* A decode error in play ends a fed element's source with a decode
+         * error (the end of stream algorithm's MSE half); the element's
+         * half is the code below, as for any session. */
+        if (fed && f.error == OS64_DOM_MEDIA_ERR_DECODE) d_mse_decode_error(dom, m->fed);
         m->error_seen = true;
         f.message[sizeof(f.message) - 1] = '\0';
         if (dom->media_provider.failed != NULL)
@@ -628,8 +745,10 @@ static void fold_facts(os64_dom_t *dom, DMediaElement *m)
         queue(dom, m, "error", SETTLE_NONE);
     }
     if (f.probed && m->ready == R_NOTHING) {
-        m->duration = f.duration;
-        queue(dom, m, "durationchange", SETTLE_NONE);
+        if (!fed) {
+            m->duration = f.duration;
+            queue(dom, m, "durationchange", SETTLE_NONE);
+        }
         /* A video's size is set and resize queued before HAVE_METADATA's
          * loadedmetadata (HTML § 4.8.9); again at each later change. */
         if (f.picture && f.width > 0 && f.height > 0) {
@@ -640,7 +759,7 @@ static void fold_facts(os64_dom_t *dom, DMediaElement *m)
         m->ready = R_METADATA;
         queue(dom, m, "loadedmetadata", SETTLE_NONE);
         if (m->default_start > 0) seek(dom, m, m->default_start);
-    } else if (f.probed && !isnan(f.duration) && !(f.duration == m->duration)) {
+    } else if (!fed && f.probed && !isnan(f.duration) && !(f.duration == m->duration)) {
         m->duration = f.duration;
         queue(dom, m, "durationchange", SETTLE_NONE);
     }
@@ -788,6 +907,7 @@ bool os64_dom_media_turn(os64_dom_t *dom)
         s->walked = true;
     }
     for (DMediaElement *m = s->records; m != NULL; m = m->next) step(dom, m);
+    d_mse_turn(dom);
     d_provider_leave(dom);
     return s->head != NULL;
 }
@@ -846,6 +966,19 @@ bool os64_dom_media_fire(os64_dom_t *dom, os64_js_outcome_t *outcome)
     DMediaTask *t = s->head;
     s->head = t->next;
     if (s->head == NULL) s->tail = NULL;
+    /* MSE's work runs as the task (a provider call and what it queues),
+     * with no script of its own; a cancelled one leaves without running. */
+    if (t->run != NULL || t->cancelled) {
+        void (*run)(os64_dom_t *, void *) = t->cancelled ? NULL : t->run;
+        void *work = t->work;
+        task_leaves(t);
+        if (run != NULL && d_provider_enter(dom)) {
+            run(dom, work);
+            d_provider_leave(dom);
+        }
+        task_free(dom, t);
+        return true;
+    }
     task_leaves(t);
     char name[OS64_JS_SOURCE_NAME_CAP];
     os64_snprintf(name, sizeof(name), "%.*s#media-%s", (int)(sizeof(name) - 40),
@@ -860,7 +993,8 @@ bool os64_dom_media_fire(os64_dom_t *dom, os64_js_outcome_t *outcome)
                 JSValue error = JS_GetException(ctx);
                 JS_FreeValue(ctx, error);
             } else {
-                d_dispatch_node_task(dom, ctx, event, t->media->node, outcome);
+                if (t->plain != NULL) d_dispatch_plain_task(dom, ctx, event, t->plain, outcome);
+                else d_dispatch_node_task(dom, ctx, event, t->media->node, outcome);
                 JS_FreeValue(ctx, event);
             }
         }
@@ -868,9 +1002,7 @@ bool os64_dom_media_fire(os64_dom_t *dom, os64_js_outcome_t *outcome)
         d_task_finish(dom, outcome);
     }
     d_task_close(dom, name, outcome);
-    promises_release(dom, t->promises, t->promise_count);
-    JS_FreeValueRT(dom->engine, t->wrapper);
-    d_free(dom, t);
+    task_free(dom, t);
     return true;
 }
 
@@ -883,9 +1015,7 @@ static void tasks_drop(os64_dom_t *dom)
         DMediaTask *t = s->head;
         s->head = t->next;
         task_leaves(t);
-        promises_release(dom, t->promises, t->promise_count);
-        JS_FreeValueRT(dom->engine, t->wrapper);
-        d_free(dom, t);
+        task_free(dom, t);
     }
     s->tail = NULL;
 }
@@ -910,6 +1040,7 @@ void d_media_elements_drain(os64_dom_t *dom)
         JS_FreeValueRT(dom->engine, m->text_tracks);
         m->text_tracks = JS_UNDEFINED;
     }
+    d_mse_drain(dom);
 }
 
 void d_media_elements_free(os64_dom_t *dom)
@@ -933,12 +1064,15 @@ void d_media_elements_free(os64_dom_t *dom)
     }
     d_free(dom, s);
     dom->media_elements = NULL;
+    d_mse_free(dom);
 }
 
 /* ── MediaError and TimeRanges ──────────────────────────────────────── */
 
 typedef struct { int code; char message[96]; } DMediaError;
-typedef struct { uint32_t count; double start, end; } DTimeRanges;
+/* A TimeRanges: normalized ranges (sorted, disjoint), a static copy of
+ * what the member answered when it was read. */
+typedef struct { uint32_t count; os64_dom_fed_range_t range[]; } DTimeRanges;
 
 static void opaque_free(JSRuntime *rt, JSValue value)
 {
@@ -962,17 +1096,27 @@ static JSValue error_object(os64_dom_t *dom, JSContext *ctx, DMediaElement *m)
     return JS_DupValue(ctx, m->error_object);
 }
 
-static JSValue ranges_object(os64_dom_t *dom, JSContext *ctx, uint32_t count, double start, double end)
+static JSValue ranges_of(os64_dom_t *dom, JSContext *ctx, const os64_dom_fed_range_t *ranges, uint32_t count)
 {
     JSValue o = JS_NewObjectClass(ctx, (int)dom->media_elements->ranges_class);
     if (JS_IsException(o)) return o;
-    DTimeRanges *r = js_mallocz(ctx, sizeof(*r));
+    DTimeRanges *r = js_mallocz(ctx, sizeof(*r) + sizeof(r->range[0]) * count);
     if (r == NULL) { JS_FreeValue(ctx, o); return JS_EXCEPTION; }
     r->count = count;
-    r->start = start;
-    r->end = end;
+    if (count != 0) os64_memcpy(r->range, ranges, sizeof(r->range[0]) * count);
     JS_SetOpaque(o, r);
     return o;
+}
+
+JSValue d_media_ranges(os64_dom_t *dom, JSContext *ctx, const os64_dom_fed_range_t *ranges, uint32_t count)
+{
+    return ranges_of(dom, ctx, ranges, count);
+}
+
+static JSValue ranges_object(os64_dom_t *dom, JSContext *ctx, uint32_t count, double start, double end)
+{
+    os64_dom_fed_range_t one = {start, end};
+    return ranges_of(dom, ctx, &one, count != 0 ? 1 : 0);
 }
 
 /* A media element's TextTrackList (HTML § 4.8.11.11.1), always empty:
@@ -1043,7 +1187,7 @@ static JSValue small_member(JSContext *ctx, JSValueConst self, int argc, JSValue
     uint32_t index;
     if (JS_ToUint32(ctx, &index, argc > 0 ? argv[0] : JS_UNDEFINED) < 0) return JS_EXCEPTION;
     if (index >= r->count) return d_error(ctx, "IndexSizeError", "There is no range at that index");
-    return JS_NewFloat64(ctx, magic == T_START ? r->start : r->end);
+    return JS_NewFloat64(ctx, magic == T_START ? r->range[index].start : r->range[index].end);
 }
 
 /* ── HTMLMediaElement's members ─────────────────────────────────────── */
@@ -1283,6 +1427,11 @@ static JSValue media_member(JSContext *ctx, JSValueConst self, int argc, JSValue
         return JS_NewString(ctx, answer);
     }
     case M_BUFFERED: {
+        if (!JS_IsUndefined(m->fed)) {
+            os64_dom_fed_range_t ranges[D_RANGES_MAX];
+            uint32_t n = d_mse_buffered(dom, m->fed, ranges, D_RANGES_MAX);
+            return ranges_of(dom, ctx, ranges, n);
+        }
         os64_dom_media_facts_t f = {0};
         if (m->session != NULL && dom->media_provider.facts != NULL)
             dom->media_provider.facts(dom->media_provider.opaque, m->session, &f);
@@ -1348,6 +1497,11 @@ static JSValue media_member(JSContext *ctx, JSValueConst self, int argc, JSValue
     }
     case M_PLAYED: return ranges_object(dom, ctx, m->played_end > 0 ? 1 : 0, 0, m->played_end);
     case M_SEEKABLE: {
+        if (!JS_IsUndefined(m->fed)) {
+            os64_dom_fed_range_t range;
+            uint32_t n = d_mse_seekable(dom, m->fed, &range);
+            return ranges_of(dom, ctx, &range, n);
+        }
         os64_dom_media_facts_t f = {0};
         if (m->session != NULL && dom->media_provider.facts != NULL)
             dom->media_provider.facts(dom->media_provider.opaque, m->session, &f);
@@ -1492,6 +1646,77 @@ void d_media_video_size(os64_dom_t *dom, const os64_html_node_t *node, uint32_t 
     DMediaElement *m = record_of(dom, node, false);
     *width = m != NULL && m->ready >= R_METADATA ? m->video_width : 0;
     *height = m != NULL && m->ready >= R_METADATA ? m->video_height : 0;
+}
+
+void d_media_quality(os64_dom_t *dom, const os64_html_node_t *node, uint64_t *shown, uint64_t *dropped)
+{
+    *shown = *dropped = 0;
+    DMediaElement *m = record_of(dom, node, false);
+    if (m == NULL || m->session == NULL || dom->media_provider.facts == NULL || !d_provider_enter(dom)) return;
+    os64_dom_media_facts_t f = {0};
+    dom->media_provider.facts(dom->media_provider.opaque, m->session, &f);
+    d_provider_leave(dom);
+    /* The total counts the dropped too (media-playback-quality § 2). */
+    *shown = f.frames_shown + f.frames_dropped;
+    *dropped = f.frames_dropped;
+}
+
+/* ── For Media Source Extensions (mse.c) ────────────────────────────── */
+
+void d_media_fed_duration(os64_dom_t *dom, void *media, double duration)
+{
+    DMediaElement *m = media;
+    if (m == NULL || duration == m->duration || (isnan(duration) && isnan(m->duration))) return;
+    m->duration = duration;
+    queue(dom, m, "durationchange", SETTLE_NONE);
+}
+
+/* The end of stream algorithm's element steps (MSE § 3.15.7): with
+ * nothing yet (HAVE_NOTHING) the dedicated media source failure steps,
+ * which a network error ("cannot be fetched at all") and a decode error
+ * ("unsupported format") both are; after that, a network error is the
+ * connection interrupted and a decode error the media data corrupted.
+ * The session stays: the source is detached when the element lets its
+ * resource go. */
+void d_media_fed_failed(os64_dom_t *dom, void *media, bool decode)
+{
+    DMediaElement *m = media;
+    if (m == NULL || m->error != 0) return;
+    m->error_seen = true;
+    if (m->ready == R_NOTHING) {
+        m->error = OS64_DOM_MEDIA_ERR_SRC_NOT_SUPPORTED;
+        set_message(m, decode ? "The media data is not in a supported format" : "The media data could not be fetched");
+        m->network = N_NO_SOURCE;
+        queue(dom, m, "error", SETTLE_NOT_SUPPORTED);
+    } else {
+        m->error = decode ? OS64_DOM_MEDIA_ERR_DECODE : OS64_DOM_MEDIA_ERR_NETWORK;
+        set_message(m, decode ? "The media data is corrupted" : "The connection was interrupted");
+        m->network = N_IDLE;
+        queue(dom, m, "error", SETTLE_NONE);
+    }
+    if (dom->media_provider.failed != NULL)
+        dom->media_provider.failed(dom->media_provider.opaque, m->node, m->session, m->current_src, m->error,
+                                   m->message);
+}
+
+void d_media_fed_reinit(os64_dom_t *dom, void *media)
+{
+    DMediaElement *m = media;
+    if (m != NULL && m->ready > R_CURRENT) ready_to(dom, m, R_METADATA);
+}
+
+void d_media_fed_removed(os64_dom_t *dom, void *media, double start, double end)
+{
+    DMediaElement *m = media;
+    if (m == NULL || m->ready <= R_METADATA) return;
+    double at = m->seeking ? m->seek_to : m->position;
+    if (at >= start && at < end) ready_to(dom, m, R_METADATA);
+}
+
+bool d_media_fed_has_error(const void *media)
+{
+    const DMediaElement *m = media;
+    return m != NULL && m->error != 0;
 }
 
 void d_media_session_facts(os64_dom_t *dom, bool *playing, bool *paused_after_play, bool *played)
@@ -1701,5 +1926,6 @@ int d_media_elements_install(os64_dom_t *dom, JSContext *ctx, JSValueConst globa
             if (d_event_handler(dom, ctx, holders[i], kind) < 0) return -1;
     if (d_event_handler(dom, ctx, media, D_EVENT_ERROR) < 0) return -1;
     d_mutation_register(dom, &s->mutations, src_changed);
+    if (d_mse_install(dom, ctx, global) < 0) return -1;
     return d_video_install(dom, ctx, global);
 }

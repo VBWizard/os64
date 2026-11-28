@@ -32,7 +32,7 @@ LIBDOM_BEARSSL := $(patsubst %,$(OBJ)/pic/libtls/upstream/src/%.c.o,hash/sha1 ha
 LIBDOM_SRCS += libdom/frames.c
 # The media row (AUDIO_YONDER.md): HTMLMediaElement, HTMLAudioElement, Audio,
 # and HTMLVideoElement playing sound alone (§ Y.4).
-LIBDOM_SRCS += libdom/media.c libdom/video.c
+LIBDOM_SRCS += libdom/media.c libdom/mse.c libdom/video.c
 # AUDIO_YONDER.md § Y.6: navigator.mediaSession, the media keys' door.
 LIBDOM_SRCS += libdom/media_session.c
 # VIDEO.md § 9: the Fullscreen API.

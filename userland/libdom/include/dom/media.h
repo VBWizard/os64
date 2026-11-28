@@ -34,8 +34,11 @@ typedef struct {
     bool ended;             /* it played to its end (with loop off) and all of it was heard */
     double position;        /* where in the media the ear is, seconds */
     uint64_t seeked;        /* the last seek's generation the host has landed */
-    int error;              /* 0, or a MediaError code below */
+    int error;              /* 0, or a MediaError code below; for a fed session (below) a
+                             * MEDIA_ERR_DECODE here ends its MediaSource with a decode error */
     char message[96];       /* MediaError.message: why, or "" */
+    uint64_t frames_shown;  /* pictures shown since the session opened (getVideoPlaybackQuality) */
+    uint64_t frames_dropped; /* pictures dropped since then, before or after their decode */
 } os64_dom_media_facts_t;
 
 /* MediaError's codes (HTML § 4.8.11.1). */
@@ -97,6 +100,80 @@ typedef struct {
                    const char *why);
 } os64_dom_media_provider_t;
 
+/* THE FED SOURCE (MEDIA_SOURCE.md § 7, Media Source Extensions): a
+ * MediaSource attached to a media element feeds it the bytes a page
+ * appends. libdom keeps the objects, their states, their events and their
+ * order, and the element's states; the host keeps the FED SESSION it
+ * opens for the element, which is also a session of the media provider
+ * above (play, pause, seek, settings and facts take it; `close` here, not
+ * the media provider's, ends it), and per SourceBuffer a BUFFER: its
+ * parser's input, its track buffers and its quota. Every call is made on
+ * the window thread, returns at once and enters no script; every time is
+ * in seconds, converted to and from the stream's own ticks by the host. */
+typedef enum {
+    OS64_DOM_FED_DONE,      /* every byte taken was parsed */
+    OS64_DOM_FED_PENDING,   /* the parse runs elsewhere: `poll` again from the media turn */
+    OS64_DOM_FED_ERROR,     /* the byte stream broke a rule: the append error (the parser reset) */
+} os64_dom_fed_status_t;
+
+typedef enum { OS64_DOM_FED_SEGMENTS, OS64_DOM_FED_SEQUENCE } os64_dom_fed_mode_t;
+
+/* What a parse (or a reset, or a removal) did to a buffer. */
+typedef struct {
+    os64_dom_fed_status_t status;
+    uint32_t inits;         /* initialization segments completed by this parse */
+    double init_duration;   /* the last one's duration; NaN when it gives none */
+    bool audio, video;      /* the tracks the buffer's first initialization segment holds */
+    bool frames;            /* coded frames were added */
+    bool parsing_media;     /* the parser stopped inside a media segment (PARSING_MEDIA_SEGMENT) */
+    double group_end;       /* the coded frame group's end, NaN when unset */
+    double highest_pts;     /* the highest presentation time of any frame the buffer holds; NaN none */
+    double timestamp_offset; /* the buffer's timestampOffset as it stands now (sequence mode moves it) */
+    char message[96];       /* why, with OS64_DOM_FED_ERROR */
+} os64_dom_fed_result_t;
+
+typedef struct { double start, end; } os64_dom_fed_range_t;
+
+typedef struct {
+    void *opaque;
+    /* A fed session for `node`, attaching; NULL refuses (the element's
+     * "cannot be fetched at all"). */
+    void *(*open)(void *opaque, const os64_html_node_t *node);
+    /* The detach: the session and every buffer it holds are gone. */
+    void (*close)(void *opaque, void *session);
+    /* A buffer for a type isTypeSupported answered yes to; NULL refuses
+     * (QuotaExceededError). */
+    void *(*add)(void *opaque, void *session, const char *type);
+    void (*remove_buffer)(void *opaque, void *session, void *buffer);
+    /* Coded frame eviction before an append of `incoming` bytes; false
+     * when the buffer would still not hold them (QuotaExceededError). */
+    bool (*evict)(void *opaque, void *session, void *buffer, size_t incoming);
+    /* The append's bytes copied into the parser's input, the one copy;
+     * false for no memory. */
+    bool (*take)(void *opaque, void *session, void *buffer, const uint8_t *bytes, size_t length);
+    /* The segment parser loop over what was taken, frames into the track
+     * buffers; and the same answer again while a parse is PENDING. */
+    void (*parse)(void *opaque, void *session, void *buffer, os64_dom_fed_result_t *out);
+    void (*poll)(void *opaque, void *session, void *buffer, os64_dom_fed_result_t *out);
+    /* The reset parser state algorithm (complete coded frames of a media
+     * segment processed, the rest of the input dropped). */
+    void (*reset)(void *opaque, void *session, void *buffer, os64_dom_fed_result_t *out);
+    /* Coded frame removal of [start, end). */
+    void (*remove)(void *opaque, void *session, void *buffer, double start, double end, os64_dom_fed_result_t *out);
+    /* The buffer's mode, timestampOffset and append window, for the frames
+     * that follow. */
+    void (*set)(void *opaque, void *session, void *buffer, os64_dom_fed_mode_t mode, double timestamp_offset,
+                double window_start, double window_end);
+    /* The buffer's ranges (its tracks' intersected), up to `cap`; their
+     * count; and in *highest_end the largest end of any of its tracks. */
+    uint32_t (*ranges)(void *opaque, void *session, void *buffer, os64_dom_fed_range_t *out, uint32_t cap,
+                       double *highest_end);
+    /* The MediaSource's duration, after each change. */
+    void (*duration)(void *opaque, void *session, double seconds);
+    /* endOfStream() without an error: nothing more is coming. */
+    void (*end)(void *opaque, void *session);
+} os64_dom_fed_provider_t;
+
 /* What a media element's controls show (AUDIO_YONDER.md § The controls),
  * as its members would answer now. */
 typedef struct {
@@ -155,6 +232,10 @@ typedef enum {
  * element on a page with none plays nothing: canPlayType answers "", and a
  * load fails as a network error does. */
 void os64_dom_set_media(os64_dom_t *dom, const os64_dom_media_provider_t *provider);
+/* Install or replace (NULL removes) the fed source's host, outside
+ * callbacks. With none, a MediaSource never opens: its element fails as a
+ * source that cannot be fetched. */
+void os64_dom_set_fed(os64_dom_t *dom, const os64_dom_fed_provider_t *provider);
 /* The media turn, owner thread, between tasks, no script: each media
  * element brought up to date with its tree (inserted, removed, src
  * changed) and with its session's facts, its events queued. True when a
