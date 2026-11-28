@@ -808,6 +808,14 @@ static os64_media_track_rule_t buffer_frame(os64_media_buffer_t *b, const os64_m
                             t->preload.pts + t->preload.duration > sat_add(pts, ONE_MICROSECOND) ||
                             t->preload.dts > dts || decoded_between(t, t->preload.dts, dts)))
         preload_clear(t);
+    // Room for the preload and its frame together, so neither is kept
+    // without the other: a preload with no frame after it would be taken
+    // as the preroll of whatever frame came next.
+    if (!range_reserve(t, r, r->count + (t->have_preload ? 2u : 1u))) {
+        if (r->count == 0)
+            range_delete(t, ri);
+        return OS64_MEDIA_TRACK_NO_MEMORY;
+    }
     if (t->have_preload) {
         t->preload.serial = ++t->next_serial;
         if (!range_push(t, r, &t->preload)) {
@@ -880,8 +888,21 @@ void os64_media_buffer_remove(os64_media_buffer_t *b, int64_t start, int64_t end
 static const os64_media_track_range_t *range_holding(const os64_media_track_t *t, int64_t time, uint32_t *index);
 static uint32_t unit_for(const os64_media_track_range_t *r, int64_t time);
 
+// Whether frames [from, to) of `r` are all presented before `play` ends
+// nothing of theirs: each one's end at or before it.
+static bool unit_behind(const os64_media_track_range_t *r, uint32_t from, uint32_t to, int64_t play)
+{
+    for (uint32_t i = from; i < to; i++)
+        if (!(r->frame[i].flags & OS64_MEDIA_FRAME_PRELOAD) &&
+            sat_add(r->frame[i].pts, r->frame[i].duration) > play)
+            return false;
+    return true;
+}
+
 // Free at least `need` bytes of `t`: whole units from the front of the
-// earliest range first, never into the unit holding the play position;
+// earliest range first, while each is presented wholly before the play
+// position (a range earlier in decode order can be presented later, after
+// a parser reset moved the times back) and never into the unit holding it;
 // then whole units from the back of the latest ranges, never into the
 // protected stretch (the play position's unit to 10 s past it). With no
 // play position, or one in no range, nothing is protected by position and
@@ -906,6 +927,8 @@ static void evict(os64_media_track_t *t, uint64_t need, int64_t play)
         uint64_t freed = 0;
         while (cut < limit && start_bytes - t->bytes + freed < need) {
             uint32_t n = next_unit(r, cut);
+            if (pr && !unit_behind(r, cut, n, play))
+                break;
             for (uint32_t i = cut; i < n; i++)
                 freed += r->frame[i].size;
             cut = n;
@@ -1091,17 +1114,21 @@ static const os64_media_track_range_t *range_holding(const os64_media_track_t *t
 }
 
 // The range a cursor goes on into from range `r`'s end: the earliest that
-// begins after `r` does and no later than the join past its end, the
+// begins after `r` does and no later than the join past the cursor's
+// frontier (the furthest end it has read across, `r`'s included), the
 // condition `buffered` joins two ranges by (each begins at a random access
 // point).
-static const os64_media_track_range_t *range_after(const os64_media_track_t *t, const os64_media_track_range_t *r)
+static const os64_media_track_range_t *range_after(const os64_media_track_t *t, const os64_media_track_range_t *r,
+                                                   int64_t frontier)
 {
     const os64_media_track_range_t *best = 0;
+    if (r->end > frontier)
+        frontier = r->end;
     for (uint32_t i = 0; i < t->range_count; i++) {
         const os64_media_track_range_t *n = &t->range[i];
         if (n == r || n->count == 0 || n->start <= r->start)
             continue;
-        if (n->start > sat_add(r->end, join_of(t)))
+        if (n->start > sat_add(frontier, join_of(t)))
             continue;
         if (best == 0 || n->start < best->start)
             best = n;
@@ -1200,6 +1227,7 @@ int os64_media_track_seek(const os64_media_track_t *t, int64_t time, os64_media_
     cursor->index = u;
     cursor->edits = t->edits;
     cursor->next_serial = r->frame[u].serial;   // the frame the cursor reads next
+    cursor->frontier = r->end;
     return OS64_MEDIA_TRACK_FRAME;
 }
 
@@ -1260,14 +1288,19 @@ int os64_media_track_next(const os64_media_track_t *t, os64_media_track_cursor_t
         cursor->range_id = r->id;
         cursor->index = index;
         cursor->edits = t->edits;
+        cursor->frontier = r->end;      // a range removed since may have set the old one
     }
     if (cursor->index >= r->count) {
         // At the range's end: on into the range the join joins to it, if
         // there is one yet (whatever comes next is the next frame).
-        const os64_media_track_range_t *n = range_after(t, r);
+        const os64_media_track_range_t *n = range_after(t, r, cursor->frontier);
         cursor->next_serial = 0;
         if (n == 0)
             return OS64_MEDIA_TRACK_WAIT;
+        if (r->end > cursor->frontier)
+            cursor->frontier = r->end;
+        if (n->end > cursor->frontier)
+            cursor->frontier = n->end;
         r = n;
         cursor->range_id = n->id;
         cursor->index = 0;

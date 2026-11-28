@@ -265,9 +265,11 @@ for entry, allowed in (('os64_media_picture_release', set()),
           '(libmedia/media.c § THREADS)')
 # WHO TAKES libmedia's LOCK (libmedia/media.c § THREADS): s_lock is held
 # across an open's reads of its source, a page's across the network, so it
-# is taken by the open and the close alone, and nothing a player's audio,
-# picture or main thread calls may reach either: a release, next, decode,
-# a seek, the scaler's calls.
+# is taken by the opens (a byte source's and a fed media's) and the close,
+# and by a fed media's decoder reopened at a change of configuration, which
+# os64_media_next alone may reach (on the decoding thread). Nothing a
+# player's audio, picture or main thread calls may reach any of them: a
+# release, decode, a seek, the scaler's calls.
 lock_users = set()
 routine = None
 for line in media_disasm.splitlines():
@@ -277,8 +279,9 @@ for line in media_disasm.splitlines():
         continue
     if routine and re.search(r'<s_lock(?:\+0x[0-9a-f]+)?>', line):
         lock_users.add(routine)
-check(lock_users == {'os64_media_open_for', 'os64_media_close'},
-      f's_lock is taken by {sorted(lock_users)}, not exactly os64_media_open_for and os64_media_close '
+LOCK_TAKERS = {'os64_media_open_for', 'media_open_fed', 'os64_media_close', 'fed_reopen'}
+check(lock_users == LOCK_TAKERS,
+      f's_lock is taken by {sorted(lock_users)}, not exactly {sorted(LOCK_TAKERS)} '
       '(libmedia/media.c § THREADS)')
 
 
@@ -297,6 +300,10 @@ for entry in ('os64_media_picture_release', 'os64_media_next', 'os64_media_decod
               'os64_media_scaler_convert', 'os64_media_scaler_create', 'os64_media_scaler_destroy'):
     if entry in media_calls:
         reach = media_reached(entry) & lock_users
+        if entry == 'os64_media_next':
+            reach -= {'fed_reopen'}             # the decoding thread's, at a change of configuration
+        if entry == 'os64_media_decode':
+            reach -= {'fed_reopen'}             # it refuses a fed media, so the path is never taken
         check(not reach, f'{entry} reaches {sorted(reach)}, which takes s_lock: a lock held across a source\'s '
               'reads (libmedia/media.c § THREADS)')
 
