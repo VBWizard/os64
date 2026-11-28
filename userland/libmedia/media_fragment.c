@@ -221,7 +221,9 @@ static os64_media_fragment_rule_t parse_avc(box_t entry, os64_media_fragment_ent
     int found = find_box(r, BOX_AVCC, &avcc);
     if (found <= 0)
         return OS64_MEDIA_FRAGMENT_MALFORMED;
-    if (avcc.body.left < 4 || avcc.body.p[0] != 1)
+    // version, profile, compatibility, level, NAL length size, SPS count,
+    // PPS count: seven bytes before any parameter set.
+    if (avcc.body.left < 7 || avcc.body.p[0] != 1)
         return OS64_MEDIA_FRAGMENT_MALFORMED;
     if (avcc.body.left > UINT32_MAX)
         return OS64_MEDIA_FRAGMENT_MALFORMED;
@@ -264,16 +266,24 @@ static os64_media_fragment_rule_t parse_mp4a(box_t entry, os64_media_fragment_en
     rd_skip(&config, 12);               // stream type, buffer size, bit rates
     if (config.bad)
         return OS64_MEDIA_FRAGMENT_MALFORMED;
-    // MPEG-4 audio, and MPEG-2 AAC's three profiles: what the AAC decoder takes.
+    // MPEG-4 Audio, or MPEG-2 AAC's three profiles; which coding it is the
+    // AudioSpecificConfig's object type says, below.
     if (object_type != 0x40 && object_type != 0x66 && object_type != 0x67 && object_type != 0x68)
         return OS64_MEDIA_FRAGMENT_UNSUPPORTED_CODEC;
     if (!rd_descriptor(&config, 5, &specific) || specific.left < 2 || specific.left > UINT32_MAX)
         return config.bad ? OS64_MEDIA_FRAGMENT_MALFORMED : OS64_MEDIA_FRAGMENT_UNSUPPORTED_CODEC;
+    uint8_t aot = specific.p[0] >> 3;
+    if (aot == 31)                      // the escape: 32 plus the next six bits
+        aot = (uint8_t)(32 + (((specific.p[0] & 7u) << 3) | (specific.p[1] >> 5)));
+    // AAC: Main, LC, LTP, and LC with SBR (HE-AAC) or SBR and PS (HE-AAC v2).
+    // Object type 0x40 also names MP3, ALS, CELP and the rest of MPEG-4
+    // Audio, which are not AAC and would reach an AAC decoder as if they were.
+    if (aot != 1 && aot != 2 && aot != 4 && aot != 5 && aot != 29)
+        return OS64_MEDIA_FRAGMENT_UNSUPPORTED_CODEC;
     e->config = specific.p;
     e->config_size = (uint32_t)specific.left;
     e->profile = object_type;
-    uint8_t aot = specific.p[0] >> 3;
-    e->level = aot == 31 ? (uint8_t)(32 + (((specific.p[0] & 7u) << 3) | (specific.p[1] >> 5))) : aot;
+    e->level = aot;
     return OS64_MEDIA_FRAGMENT_OK;
 }
 
@@ -771,8 +781,23 @@ static int fail(os64_media_fragment_t *p, os64_media_fragment_rule_t rule)
     return -1;
 }
 
+// The moof's samples must all have been handed out before another moof or
+// moov: what is left lay outside every mdat that followed it.
+static bool samples_pending(const os64_media_fragment_t *p)
+{
+    return p->sample_next < p->sample_count;
+}
+
+// Whether a sample lies (starts) in the current mdat: a zero-size frame at
+// its very end is the mdat's too, since its bytes, all none of them, are in.
+static bool in_this_mdat(const os64_media_fragment_t *p, const os64_media_fragment_sample_t *s)
+{
+    return s->start < p->mdat_end || (s->start == p->mdat_end && s->size == 0);
+}
+
 // Hand out every sample of the moof whose bytes are now all in this mdat.
-static void deliver(os64_media_fragment_t *p)
+// A sink that resets the parser (or destroys it) ends the hand-out there.
+static void deliver(os64_media_fragment_t *p, uint32_t resets)
 {
     uint64_t have = p->mdat_start + p->slab->filled;
     while (p->sample_next < p->sample_count) {
@@ -781,7 +806,7 @@ static void deliver(os64_media_fragment_t *p)
         // here starts before it; one that runs past its end never completes,
         // and the mdat's end says so.
         const os64_media_fragment_sample_t *s = &p->sample[p->sample_next];
-        if (s->start >= p->mdat_end)
+        if (!in_this_mdat(p, s))
             return;                     // a later mdat's
         if (s->start > have || s->size > have - s->start)
             return;                     // not all in yet (a gap may lie before it)
@@ -806,20 +831,36 @@ static void deliver(os64_media_fragment_t *p)
             };
             if (p->sink.frame)
                 p->sink.frame(p->sink.context, &frame);
+            if (p->resets != resets)
+                return;
         }
         p->sample_next++;
     }
 }
 
-// The moof's samples must all have been handed out before another moof or
-// moov: what is left lay outside every mdat that followed it.
-static bool samples_pending(const os64_media_fragment_t *p)
+// The slab has grown, or has just begun: hand out what is whole, and when
+// the mdat is whole too, end it. -1 on an error.
+static int mdat_progress(os64_media_fragment_t *p, uint32_t resets)
 {
-    return p->sample_next < p->sample_count;
+    os64_media_fragment_slab_t *slab = p->slab;
+    deliver(p, resets);
+    if (p->resets != resets)
+        return 0;                       // the slab was the reset's to let go of
+    if (slab->filled == slab->size) {
+        // The mdat is whole: a frame that began in it and is still not out
+        // runs past its end.
+        if (samples_pending(p) && in_this_mdat(p, &p->sample[p->sample_next]))
+            return fail(p, OS64_MEDIA_FRAGMENT_SAMPLE_OUTSIDE_MDAT);
+        p->slab = 0;
+        os64_media_fragment_slab_drop(slab);
+        p->state = WAIT_HEADER;
+        p->header_have = 0;
+    }
+    return 0;
 }
 
 // A whole header is in: decide what the box is.
-static int begin_box(os64_media_fragment_t *p)
+static int begin_box(os64_media_fragment_t *p, uint32_t resets)
 {
     const uint8_t *h = p->header;
     uint64_t size = (uint64_t)h[0] << 24 | (uint64_t)h[1] << 16 | (uint64_t)h[2] << 8 | h[3];
@@ -837,8 +878,9 @@ static int begin_box(os64_media_fragment_t *p)
         p->mdat_start = p->position;
         p->mdat_end = p->position + payload;
         // A slab only for an mdat that holds the next frame: one that holds
-        // none (before any moof, or a spare after its frames) is read past.
-        if (!samples_pending(p) || payload == 0) {
+        // none (before any moof, or a spare after its frames) is read past,
+        // whatever its size.
+        if (!samples_pending(p)) {
             p->skip_left = payload;
             p->state = IN_SKIP;
             return 0;
@@ -846,13 +888,13 @@ static int begin_box(os64_media_fragment_t *p)
         const os64_media_fragment_sample_t *next = &p->sample[p->sample_next];
         if (next->start < p->mdat_start)
             return fail(p, OS64_MEDIA_FRAGMENT_SAMPLE_OUTSIDE_MDAT);
-        if (next->start >= p->mdat_end) {
+        if (!in_this_mdat(p, next)) {
             p->skip_left = payload;
             p->state = IN_SKIP;
             return 0;
         }
         uint64_t cap = p->memory.max_mdat ? p->memory.max_mdat : OS64_MEDIA_FRAGMENT_DEFAULT_MAX_MDAT;
-        if (payload > cap)
+        if (payload > cap || payload > SIZE_MAX - sizeof(os64_media_fragment_slab_t))
             return fail(p, OS64_MEDIA_FRAGMENT_MDAT_TOO_LARGE);
         os64_media_fragment_slab_t *slab = mem_alloc(p, sizeof(*slab) + payload);
         if (slab == 0)
@@ -865,7 +907,7 @@ static int begin_box(os64_media_fragment_t *p)
         slab->context = p->memory.context;
         p->slab = slab;
         p->state = IN_MDAT;
-        return 0;
+        return mdat_progress(p, resets);    // zero-size frames at its start are out already
     }
     if (type == BOX_MOOV || type == BOX_MOOF) {
         if (samples_pending(p))
@@ -928,7 +970,10 @@ int os64_media_fragment_append(os64_media_fragment_t *p, const uint8_t *bytes, s
 {
     if (p->error != OS64_MEDIA_FRAGMENT_OK)
         return -1;
-    while (length > 0) {
+    // A sink that resets or destroys the parser ends this append: the rest
+    // of its bytes were the input buffer the reset discards (MSE § 5.5.2).
+    uint32_t resets = p->resets;
+    while (length > 0 && p->resets == resets) {
         size_t take;
         switch (p->state) {
         case WAIT_HEADER: {
@@ -947,7 +992,7 @@ int os64_media_fragment_append(os64_media_fragment_t *p, const uint8_t *bytes, s
             }
             if (p->header_have >= 8 && p->header_have == p->header_size) {
                 p->header_have = 0;
-                if (begin_box(p) < 0)
+                if (begin_box(p, resets) < 0)
                     return -1;
                 if (p->state == IN_BOX && p->box_have == p->box_size && end_box(p) < 0)
                     return -1;
@@ -984,17 +1029,8 @@ int os64_media_fragment_append(os64_media_fragment_t *p, const uint8_t *bytes, s
             p->position += take;
             bytes += take;
             length -= take;
-            deliver(p);
-            if (slab->filled == slab->size) {
-                // The mdat is whole: a frame that began in it and is still not
-                // out runs past its end.
-                if (samples_pending(p) && p->sample[p->sample_next].start < p->mdat_end)
-                    return fail(p, OS64_MEDIA_FRAGMENT_SAMPLE_OUTSIDE_MDAT);
-                p->slab = 0;
-                os64_media_fragment_slab_drop(slab);
-                p->state = WAIT_HEADER;
-                p->header_have = 0;
-            }
+            if (mdat_progress(p, resets) < 0)
+                return -1;
             break;
         }
         }
@@ -1052,6 +1088,7 @@ void os64_media_fragment_init(os64_media_fragment_t *p, const os64_media_fragmen
 
 void os64_media_fragment_reset(os64_media_fragment_t *p)
 {
+    p->resets++;
     if (p->slab != 0) {
         os64_media_fragment_slab_t *slab = p->slab;
         p->slab = 0;

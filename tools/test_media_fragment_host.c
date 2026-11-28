@@ -109,6 +109,7 @@ typedef struct {
     int entries;                    // sample entries (default 1)
     const char *fourcc;             // default: avc1 / mp4a / tx3g
     uint8_t oti;                    // mp4a's object type (default 0x40)
+    uint16_t asc;                   // the AudioSpecificConfig's two bytes (default 0x1190: AAC LC)
     int elst;                       // 0 none, 1 one edit, 2 an empty edit then one, 3 one edit in a v1 elst,
                                     // 4 one edit then another (only the first counts)
     int64_t media_time;
@@ -116,6 +117,7 @@ typedef struct {
     uint32_t trex_entry, trex_dur, trex_size, trex_flags;
     const char *table_with_entries; // stts, stsc, stco, co64 or stsz given one entry
     int no_avcc, no_dsi;
+    int short_avcc;                 // an avcC of six bytes, one short of its fixed fields
 } dtrack_t;
 
 typedef struct {
@@ -222,7 +224,7 @@ static int64_t model_edit(const model_t *m, const dtrack_t *t)
     return t->elst ? t->media_time - shift : 0;
 }
 
-static void write_avc1(buf_t *b, const char *fourcc, int no_avcc)
+static void write_avc1(buf_t *b, const char *fourcc, int no_avcc, int short_avcc)
 {
     size_t e = box(b, fourcc);
     zeros(b, 6); u16(b, 1);                     // reserved, data reference index
@@ -230,7 +232,11 @@ static void write_avc1(buf_t *b, const char *fourcc, int no_avcc)
     u16(b, 640); u16(b, 360);
     u32(b, 0x00480000); u32(b, 0x00480000); u32(b, 0); u16(b, 1);
     zeros(b, 32); u16(b, 0x18); u16(b, 0xFFFF);
-    if (!no_avcc) {
+    if (short_avcc) {
+        size_t c = box(b, "avcC");
+        u8(b, 1); u8(b, 0x4D); u8(b, 0); u8(b, 0x1F); u8(b, 0xFF); u8(b, 0xE1);
+        close_box(b, c);
+    } else if (!no_avcc) {
         size_t c = box(b, "avcC");
         u8(b, 1); u8(b, 0x4D); u8(b, 0); u8(b, 0x1F); u8(b, 0xFF);
         u8(b, 0xE1); u16(b, 4); u32(b, 0x674D001F);
@@ -240,7 +246,7 @@ static void write_avc1(buf_t *b, const char *fourcc, int no_avcc)
     close_box(b, e);
 }
 
-static void write_mp4a(buf_t *b, uint8_t oti, int no_dsi)
+static void write_mp4a(buf_t *b, uint8_t oti, uint16_t asc, int no_dsi)
 {
     size_t e = box(b, "mp4a");
     zeros(b, 6); u16(b, 1);
@@ -252,7 +258,7 @@ static void write_mp4a(buf_t *b, uint8_t oti, int no_dsi)
     u16(b, 1); u8(b, 0);
     u8(b, 4); u8(b, 13 + dsi);                  // DecoderConfigDescriptor
     u8(b, oti); u8(b, 0x15); u24(b, 0); u32(b, 128000); u32(b, 128000);
-    if (!no_dsi) { u8(b, 5); u8(b, 2); u8(b, 0x11); u8(b, 0x90); }
+    if (!no_dsi) { u8(b, 5); u8(b, 2); u16(b, asc); }
     u8(b, 6); u8(b, 1); u8(b, 2);               // SLConfigDescriptor
     close_box(b, s);
     close_box(b, e);
@@ -311,9 +317,9 @@ static void write_init(model_t *m, const dinit_t *d)
                 zeros(b, 8);
                 close_box(b, x);
             } else if (t->kind == K_VIDEO) {
-                write_avc1(b, t->fourcc ? t->fourcc : "avc1", t->no_avcc);
+                write_avc1(b, t->fourcc ? t->fourcc : "avc1", t->no_avcc, t->short_avcc);
             } else if (t->kind == K_AUDIO) {
-                write_mp4a(b, t->oti ? t->oti : 0x40, t->no_dsi);
+                write_mp4a(b, t->oti ? t->oti : 0x40, t->asc ? t->asc : 0x1190, t->no_dsi);
             } else {
                 size_t x = box(b, "tx3g");
                 zeros(b, 8);
@@ -650,7 +656,19 @@ typedef struct {
     os64_media_fragment_slab_t **held;
     int nheld, capheld;
     os64_media_fragment_t *p;
+    int reenter_at;                 // after this many events the sink re-enters the parser (0 = never)
+    bool reenter_destroys;          // ... by destroying it, not resetting it
 } sink_ctx_t;
+
+static void maybe_reenter(sink_ctx_t *c)
+{
+    if (c->reenter_at == 0 || c->got.n != c->reenter_at)
+        return;
+    if (c->reenter_destroys)
+        os64_media_fragment_destroy(c->p);
+    else
+        os64_media_fragment_reset(c->p);
+}
 
 static void on_init(void *context, const os64_media_fragment_init_t *init)
 {
@@ -669,6 +687,7 @@ static void on_init(void *context, const os64_media_fragment_init_t *init)
     c->config_size = init->track[0].entry[0].config_size < 64 ? init->track[0].entry[0].config_size : 64;
     memcpy(c->config_copy, c->config, c->config_size);
     ev_add(&c->got, &e);
+    maybe_reenter(c);
 }
 
 static void on_frame(void *context, const os64_media_fragment_frame_t *f)
@@ -693,6 +712,7 @@ static void on_frame(void *context, const os64_media_fragment_frame_t *f)
         os64_media_fragment_slab_hold(f->slab);
         c->held[c->nheld++] = f->slab;
     }
+    maybe_reenter(c);
 }
 
 static const os64_media_fragment_memory_t kMemory = { t_alloc, t_release, 0, 0, 0 };
@@ -772,13 +792,13 @@ static bool same_event(const event_t *a, const event_t *b)
 
 // The stream in `m` must give exactly `m->want`, under every cut, with the
 // memory all given back at the end whether or not frames were kept.
-static void expect_stream(const char *name, model_t *m)
+static void expect_stream_with(const char *name, model_t *m, os64_media_fragment_memory_t mem)
 {
     for (int cut = 0; cut < CUT_COUNT; cut++)
         for (int hold = 0; hold < 2; hold++) {
             sink_ctx_t c = { .hold = hold };
             long live0 = s_live;
-            os64_media_fragment_rule_t rule = feed(&m->out, cut, &c, kMemory);
+            os64_media_fragment_rule_t rule = feed(&m->out, cut, &c, mem);
             check(rule == OS64_MEDIA_FRAGMENT_OK, "%s, %s: failed with \"%s\"", name, kCut[cut],
                   os64_media_fragment_rule_name(rule));
             check(c.got.n == m->want.n, "%s, %s: %d events, want %d", name, kCut[cut], c.got.n, m->want.n);
@@ -804,6 +824,8 @@ static void expect_stream(const char *name, model_t *m)
             free(c.held);
         }
 }
+
+static void expect_stream(const char *name, model_t *m) { expect_stream_with(name, m, kMemory); }
 
 static os64_media_fragment_rule_t expect_rule(const char *name, model_t *m, os64_media_fragment_rule_t want,
                                               os64_media_fragment_memory_t mem)
@@ -965,6 +987,102 @@ static void streams(void)
         expect_stream("switch and seek", &m);
         model_free(&m);
     }
+
+    // Zero-size frames: in the middle of an mdat, at its very end, at its
+    // very start, and an mdat holding nothing but them (four truns of two:
+    // samples 1, 3, 4, 6 and 7 have no bytes), with a segment after so a
+    // frame left pending would fail it.
+    // The stream also ends at that segment's last mdat, so its frames must
+    // go out when the mdat ends, not when a later byte arrives.
+    for (int mdats = 2; mdats <= 4; mdats += 2)
+        for (int follow = 0; follow < 2; follow++) {
+            dinit_t d = av_init();
+            write_init(&m, &d);
+            dseg_t s = { .n = 1, .mdats = mdats };
+            s.f[0] = full_traf(1, 0, 8, 512);
+            s.f[0].truns = 4;
+            s.f[0].s[1].size = s.f[0].s[3].size = s.f[0].s[4].size = s.f[0].s[6].size = s.f[0].s[7].size = 0;
+            write_segment(&m, &s);
+            if (follow) {
+                s = (dseg_t){ .n = 1 };
+                s.f[0] = full_traf(1, 8 * 512, 4, 512);
+                write_segment(&m, &s);
+            }
+            char name[64];
+            snprintf(name, sizeof(name), "%s%s", mdats == 2 ? "zero-size frames" : "an mdat of zero-size frames",
+                     follow ? ", a segment after" : "");
+            expect_stream(name, &m);
+            model_free(&m);
+        }
+
+    // trex's sample entry, with tfhd naming none.
+    {
+        dinit_t d = { .n = 1, .movie_timescale = 1000 };
+        d.t[0] = video(3);
+        d.t[0].entries = 2; d.t[0].trex_entry = 2;
+        write_init(&m, &d);
+        dseg_t s = { .n = 1 };
+        s.f[0] = full_traf(3, 0, 4, 512);
+        write_segment(&m, &s);
+        expect_stream("trex's entry", &m);
+        model_free(&m);
+    }
+
+    // AAC under MPEG-2's object type indication, and HE-AAC (object type 5).
+    {
+        dinit_t d = av_init();
+        d.t[1].oti = 0x67;
+        write_init(&m, &d);
+        d.t[1].oti = 0; d.t[1].asc = 0x2B90;
+        write_init(&m, &d);
+        dseg_t s = { .n = 1 };
+        s.f[0] = full_traf(2, 0, 4, 1024);
+        write_segment(&m, &s);
+        expect_stream("MPEG-2 AAC, then HE-AAC", &m);
+        model_free(&m);
+    }
+
+    // A v0 trun's composition offsets are unsigned (ISO 14496-12 § 8.8.8):
+    // the writer's negative ones read as large positive ones.
+    {
+        dinit_t d = av_init();
+        write_init(&m, &d);
+        dseg_t s = { .n = 1 };
+        s.f[0] = full_traf(1, 0, 6, 512);
+        s.f[0].trun_version = 0;
+        write_segment(&m, &s);
+        expect_stream("a v0 trun's offsets", &m);
+        model_free(&m);
+    }
+
+    // First-sample flags beside per-sample flags: the sample's own win, as
+    // FFmpeg reads them (the format says a trun should carry one or the other).
+    {
+        dinit_t d = av_init();
+        write_init(&m, &d);
+        dseg_t s = { .n = 1 };
+        s.f[0] = full_traf(1, 0, 6, 512);
+        s.f[0].first_flags_set = 1; s.f[0].first_flags = 0x01010000;
+        write_segment(&m, &s);
+        expect_stream("first-sample and per-sample flags", &m);
+        model_free(&m);
+    }
+
+    // An mdat over max_mdat that holds none of the moof's frames is read past.
+    {
+        dinit_t d = av_init();
+        write_init(&m, &d);
+        size_t big = box(&m.out, "mdat");
+        zeros(&m.out, 1000);
+        close_box(&m.out, big);
+        dseg_t s = { .n = 1 };
+        s.f[0] = full_traf(1, 0, 3, 512);
+        write_segment(&m, &s);
+        os64_media_fragment_memory_t small = kMemory;
+        small.max_mdat = 600;
+        expect_stream_with("an mdat over the cap holding no frame", &m, small);
+        model_free(&m);
+    }
 }
 
 // ── One case per rule ──────────────────────────────────────────────────────
@@ -998,6 +1116,18 @@ static void rules(void)
 
     FRESH(); d.t[1] = video(2); write_init(&m, &d);
     expect_rule("two picture tracks", &m, OS64_MEDIA_FRAGMENT_TOO_MANY_TRACKS, mem);
+
+    FRESH();
+    d.n = 1 + OS64_MEDIA_FRAGMENT_MAX_IGNORED + 1;
+    for (int i = 1; i < d.n; i++) d.t[i] = (dtrack_t){ .id = 10 + (uint32_t)i, .kind = K_TEXT, .timescale = 1000 };
+    write_init(&m, &d);
+    expect_rule("more tracks of other kinds than the parser reads past", &m, OS64_MEDIA_FRAGMENT_TOO_MANY_TRACKS, mem);
+
+    FRESH(); d.t[0].short_avcc = 1; write_init(&m, &d);
+    expect_rule("an avcC shorter than its fixed fields", &m, OS64_MEDIA_FRAGMENT_MALFORMED, mem);
+
+    FRESH(); d.t[1].asc = 0xF840; write_init(&m, &d);      // object type 31 + 2 = 34: MP3 in MP4
+    expect_rule("MPEG-4 Audio that is not AAC", &m, OS64_MEDIA_FRAGMENT_UNSUPPORTED_CODEC, mem);
 
     FRESH(); d.t[1].id = 1; write_init(&m, &d);
     expect_rule("two tracks with one id", &m, OS64_MEDIA_FRAGMENT_DUPLICATE_TRACK, mem);
@@ -1229,6 +1359,34 @@ static void holds_and_reset(void)
     check(s_live == live0, "holds and reset: %ld blocks not given back", s_live - live0);
     free(c.got.e);
     free(c.held);
+
+    // A sink that resets or destroys the parser from a frame (the third) or
+    // from the init: the append ends there and nothing is touched after; a
+    // reset parser takes the segment again whole (its init kept).
+    for (int destroys = 0; destroys < 2; destroys++)
+        for (int at = 1; at <= 3; at += 2)
+            for (int hold = 0; hold < 2; hold++) {
+                sink_ctx_t r = { .hold = hold, .reenter_at = at, .reenter_destroys = destroys };
+                long live1 = s_live;
+                os64_media_fragment_init(&p, &kMemory, &(os64_media_fragment_sink_t){ on_init, on_frame, &r });
+                r.p = &p;
+                check(os64_media_fragment_append(&p, m.out.d, m.out.n) == OS64_MEDIA_FRAGMENT_MORE,
+                      "a sink %s the parser at event %d: the append ends quietly", destroys ? "destroying" : "resetting", at);
+                check(r.got.n == at, "a sink %s the parser at event %d: %d events, want %d",
+                      destroys ? "destroying" : "resetting", at, r.got.n, at);
+                if (!destroys) {
+                    r.reenter_at = 0;
+                    check(os64_media_fragment_append(&p, m.out.d + init_end, m.out.n - init_end) == OS64_MEDIA_FRAGMENT_MORE
+                          && r.got.n == at + 10, "after a sink's reset at event %d the segment parses whole (%d events)",
+                          at, r.got.n);
+                }
+                os64_media_fragment_destroy(&p);
+                release_held(&r);
+                check(s_live == live1, "a sink %s the parser at event %d: %ld blocks not given back",
+                      destroys ? "destroying" : "resetting", at, s_live - live1);
+                free(r.got.e);
+                free(r.held);
+            }
     model_free(&m);
 }
 

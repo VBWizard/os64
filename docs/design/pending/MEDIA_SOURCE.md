@@ -109,25 +109,37 @@ A track of another kind (text, metadata) is read for its id and its
 trafs for their length; its frames are not handed out.
 
 **Rules it enforces** (the byte stream format's; each has a host case and
-a mutant): a partial box waits; a box whose size is zero or smaller than
-its header is an error (a top-level size of zero means "to the end of the
-file", which a byte stream has not got); a media segment before any init
+a mutant): a partial box waits; a top-level box whose size is zero or
+smaller than its header is an error (there a size of zero means "to the
+end of the file", which a byte stream has not got; inside a box it means
+to the end of the container, as ISO defines); a media segment before any init
 segment is an error; an init segment has `mvex` and no samples of its own
 (`stts`, `stsc`, `stco`, `co64`, `stsz` all empty); a later init segment
-keeps the number of tracks of each kind; at most one track of each kind
+keeps the number of picture and sound tracks (MSE counts text tracks too,
+which v1 does not hand out); at most one track of each kind
 (v1), with ids unique across every track; sample entries v1 decodes
-(`avc1`, `avc3`; `mp4a` with MPEG-4 or MPEG-2 AAC), so an encrypted entry
-is refused; every `traf` has a `tfdt`, names no base data offset, and its
+(`avc1`, `avc3`; `mp4a` carrying AAC Main, LC, LTP, HE-AAC or HE-AAC v2,
+by the AudioSpecificConfig's object type, since MPEG-4 Audio's object type
+indication also covers MP3, ALS and the rest), so an encrypted entry is
+refused; every `traf` has a `tfdt`, names no base data offset, and its
 first `trun` has a data offset (movie fragment relative addressing); a
 sample description index names an entry; a fragment marked
 duration-is-empty names no frames; a `moof` has a `traf`; every byte a
-`trun` names lies inside one `mdat` after its `moof` (checked when that
-`mdat` ends or the next `moof` or `moov` begins); a time that does not fit
+`trun` names lies inside one `mdat` after its `moof` (checked as soon as
+it can be: a frame placed before its `moof` when the `moof` is read, one
+before its `mdat` when that `mdat` begins, one running past its `mdat`
+when the `mdat` ends, one in no `mdat` when the next `moof` or `moov`
+begins; a zero-size frame at an `mdat`'s very end is inside it); a time that does not fit
 in 63 bits is an error. Lengths and counts are read through a bounded
 reader that answers zero and marks itself bad rather than read past a box,
 so no field is used before it is checked against the box it sits in. The
-held boxes and mdats have caps (4 MB and 128 MB to begin with, set by the
-caller), and a moof may name at most 65,536 frames.
+held boxes and the mdats holding frames have caps (4 MB and 128 MB to
+begin with, set by the caller), and a moof may name at most 65,536 frames.
+
+**The sink may reset or destroy the parser** from inside a callback (a
+track buffer that fails mid-append runs the append error algorithm, which
+resets the parser): the append in progress ends there, the rest of its
+bytes discarded as reset parser state discards the input buffer.
 
 A base data offset is refused as the format requires. ffmpeg's plain
 fragmented output (`frag_keyframe+empty_moov` without
@@ -149,12 +161,13 @@ addressing is unambiguous and ISO defines it; refusing it is one line.
 
 **Memory.** Appended bytes are copied once, and nothing is moved as boxes
 are consumed:
-- a `moov` or `moof` into the parser's box buffer, reused (sized to the
-  largest seen); an accepted `moov`'s buffer becomes the init segment's by
+- a `moov` or `moof` into the parser's box buffer, reused (grown only when
+  a box is larger than it); an accepted `moov`'s buffer becomes the init segment's by
   exchanging the two buffers, so its configurations stay good until the
   next init segment, without a copy;
-- a box the parser does not read is counted past and never held;
-- a media segment's `mdat` is read in place into a SLAB its frames point
+- a box the parser does not read, and an `mdat` holding none of the
+  `moof`'s frames, is counted past and never held;
+- an `mdat` holding frames is read in place into a SLAB its frames point
   into, one allocation an `mdat`, none a frame (a `moof` whose trafs' data
   lies out of order borrows one scratch array to sort, once a segment).
 
@@ -164,7 +177,8 @@ buffer takes a hold for each frame it keeps and lets go when the frame is
 evicted, and the last drop frees the slab. This is "handed over when the
 mdat completes" made safe against a reset mid-`mdat`: a frame already
 handed out keeps its slab, and a slab no frame was kept from is freed as
-soon as its `mdat` ends. The holds are not atomic; the fed media's one
+soon as its `mdat` ends (one whose `mdat` ends in an error, at the reset
+or destroy that follows). The holds are not atomic; the fed media's one
 lock covers them.
 
 ## 4. The track buffer (pure)

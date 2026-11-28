@@ -6,7 +6,9 @@
 // input in hand is written to the crash file first (ASan's error hook, and
 // SIGABRT for UBSan's abort). Each input is fed in random pieces, and the
 // sink checks what the header promises: a frame lies inside its slab, wholly
-// filled, and every block is given back once its frames are dropped.
+// filled, and every block is given back once its frames are dropped. Now and
+// then the sink resets the parser from inside a callback, as the header lets
+// it.
 //
 //   fuzz_media_fragment <seconds> <crash file> <seed files...>
 //   (tools/fuzz_media_fragment_host.sh builds it, makes the seeds, runs it)
@@ -72,7 +74,10 @@ typedef struct {
     os64_media_fragment_slab_t *held[4096];
     int n;
     unsigned frames, inits;
+    os64_media_fragment_t *p;
 } sink_t;
+
+static uint64_t rnd(void);
 
 static void fail(const char *why)
 {
@@ -116,6 +121,8 @@ static void on_frame(void *c, const os64_media_fragment_frame_t *f)
         os64_media_fragment_slab_hold(f->slab);
         s->held[s->n++] = f->slab;
     }
+    if (rnd() % 512 == 0)
+        os64_media_fragment_reset(s->p);
 }
 
 static uint64_t s_rng = 0x2545F4914F6CDD1Dull;
@@ -133,6 +140,7 @@ static int run(const uint8_t *data, size_t size, bool small_caps)
     os64_media_fragment_t p;
     long live0 = s_live;
     os64_media_fragment_init(&p, &mem, &cb);
+    sink.p = &p;
     int rule = 0;
     for (size_t at = 0; at < size;) {
         size_t n = 1 + rnd() % (rnd() & 1 ? 16 : 4096);

@@ -11,8 +11,14 @@
 // calls its sink, in arrival order, with each init segment and with each
 // coded frame the moment the frame's last byte is in. An append answers
 // OS64_MEDIA_FRAGMENT_MORE (every byte taken; a box not yet whole waits) or
-// an error naming the rule broken (os64_media_fragment_rule_t), which stays
-// until os64_media_fragment_reset.
+// -1, with os64_media_fragment_error naming the rule broken
+// (os64_media_fragment_rule_t); the error stays until os64_media_fragment_reset.
+//
+// THE SINK may hold and drop slabs, and may reset or destroy the parser:
+// that ends the append it was called from, the rest of the append's bytes
+// discarded as the spec's reset parser state discards the input buffer
+// (MSE § 5.5.2), and the frame or init in hand stays good. It may not
+// append.
 //
 // PURE, AND NOT LOCKED: no os64 headers, no clock, no I/O; it allocates only
 // through the caller's memory functions, and calls nothing but those and its
@@ -25,13 +31,14 @@
 // that lies is an error, never a read past what was given.
 //
 // MEMORY. Appended bytes are copied once:
-//  - a moov or moof into the parser's box buffer, reused (its size is the
-//    largest such box seen, at most `max_box`); an accepted moov's buffer
+//  - a moov or moof into the parser's box buffer, reused (grown only when
+//    a box is larger than it, up to `max_box`); an accepted moov's buffer
 //    BECOMES the init segment, by exchanging the two buffers, so the
 //    configurations an init hands out point into it until the next init;
-//  - an mdat's payload into a SLAB, one allocation an mdat (at most
-//    `max_mdat`), which its frames point into;
-//  - a box the parser does not read is counted past and never held.
+//  - an mdat that holds the moof's frames into a SLAB, one allocation an
+//    mdat (at most `max_mdat`), which its frames point into;
+//  - a box the parser does not read, and an mdat holding none of the
+//    moof's frames, is counted past and never held.
 // Nothing is moved as boxes are consumed, and nothing is allocated a frame
 // (the moof's sample table is reused, at most OS64_MEDIA_FRAGMENT_MAX_SAMPLES).
 //
@@ -42,7 +49,8 @@
 // (os64_media_fragment_slab_drop); the last drop frees the slab through the
 // memory functions it was made with. So a frame handed out stays good after
 // a reset cuts its mdat short, and a slab no frame was kept from is freed
-// as soon as its mdat ends. Holds are not atomic: one lock of the caller's
+// as soon as its mdat ends (or, when the mdat ends in an error, at the reset
+// or destroy that follows). Holds are not atomic: one lock of the caller's
 // covers every hold and drop on a slab.
 //
 // TIMES are in the track's timescale, decode time and presentation time
@@ -54,14 +62,19 @@
 // Extensions and its ISO BMFF byte stream format; the host test has a case
 // for each and the mutants break each):
 //  - a partial box waits for the rest (MSE § 5.5.1);
-//  - a box whose size is smaller than its header, or zero (to the end of a
-//    file, which a byte stream has not got), is BOX_SIZE;
-//  - a held box over `max_box` is BOX_TOO_LARGE, an mdat over `max_mdat`
-//    MDAT_TOO_LARGE; a moof naming more than OS64_MEDIA_FRAGMENT_MAX_SAMPLES
-//    frames is TOO_MANY_SAMPLES;
-//  - a box that runs past its parent, a field that runs past its box, or a
-//    box the format requires that is missing (a trak's mdia, stbl or stsd;
-//    a sample entry's avcC or esds; a moof's traf, format § 4) is MALFORMED;
+//  - a top-level box whose size is smaller than its header, or zero (to
+//    the end of a file, which a byte stream has not got), is BOX_SIZE;
+//    inside a box, a size of zero runs to the end of its container (ISO
+//    14496-12 § 4.2) and one smaller than its header is MALFORMED;
+//  - a held box over `max_box` is BOX_TOO_LARGE, an mdat holding the
+//    moof's frames over `max_mdat` MDAT_TOO_LARGE; a moof naming more than
+//    OS64_MEDIA_FRAGMENT_MAX_SAMPLES frames is TOO_MANY_SAMPLES;
+//  - a box that runs past its parent, a field that runs past its box, a
+//    field with a value the format forbids (an stsd of no entries, an avcC
+//    not of version 1 or shorter than its fixed fields, an edit's media
+//    time below -1), or a box the format requires that is missing (a trak's
+//    mdia, stbl or stsd; a sample entry's avcC or esds; a moof's traf,
+//    format § 4) is MALFORMED;
 //  - a media segment (a moof) before any init segment is
 //    MEDIA_BEFORE_INIT (MSE § 5.5.1 step 6.1);
 //  - an init segment without mvex is NO_MVEX, one with samples of its own
@@ -70,11 +83,13 @@
 //    more than one track of a kind (not in v1), or more than
 //    OS64_MEDIA_FRAGMENT_MAX_IGNORED of other kinds, is TOO_MANY_TRACKS; two
 //    tracks with one id is DUPLICATE_TRACK (format § 2); a later init
-//    segment with a different number of tracks of a kind is
-//    TRACK_COUNT_CHANGED (MSE § 5.5.7);
+//    segment with a different number of picture or sound tracks is
+//    TRACK_COUNT_CHANGED (MSE § 5.5.7, which counts text tracks too; v1
+//    hands none out, so their number changes nothing downstream);
 //  - a sample entry v1 does not decode (anything but avc1 or avc3 for a
-//    picture, mp4a with MPEG-4 or MPEG-2 AAC for a sound; encrypted entries
-//    among them), or an mp4a without its AudioSpecificConfig, is
+//    picture; for a sound anything but mp4a carrying AAC: Main, LC, LTP,
+//    HE-AAC or HE-AAC v2, under MPEG-4 Audio or MPEG-2 AAC; encrypted
+//    entries among them), or an mp4a without its AudioSpecificConfig, is
 //    UNSUPPORTED_CODEC; more than
 //    OS64_MEDIA_FRAGMENT_MAX_ENTRIES in one stsd is TOO_MANY_ENTRIES; a
 //    timescale of zero is BAD_TIMESCALE;
@@ -85,7 +100,8 @@
 //    a sample description index naming no entry is BAD_ENTRY_INDEX; a
 //    fragment marked duration-is-empty that names frames is
 //    EMPTY_FRAGMENT_HAS_SAMPLES;
-//  - a frame whose bytes are not all inside one mdat after its moof is
+//  - a frame whose bytes are not all inside one mdat after its moof (a
+//    zero-size frame at an mdat's very end is inside it) is
 //    SAMPLE_OUTSIDE_MDAT (format § 4: the mdat holds every byte a trun
 //    names), found as soon as it can be: a frame placed before its moof at
 //    once, one before the mdat it should be in when that mdat begins, one
@@ -188,7 +204,7 @@ typedef struct {
     uint16_t channels;          // a sound's
     uint32_t sample_rate;
     uint8_t profile;            // avcC's AVCProfileIndication; esds's objectTypeIndication
-    uint8_t level;              // avcC's AVCLevelIndication; the AAC audio object type
+    uint8_t level;              // avcC's AVCLevelIndication; the AAC audio object type (1, 2, 4, 5 or 29)
 } os64_media_fragment_entry_t;
 
 typedef struct {
@@ -242,6 +258,7 @@ typedef struct {
     os64_media_fragment_memory_t memory;
     os64_media_fragment_sink_t sink;
     os64_media_fragment_rule_t error;
+    uint32_t resets;            // counts resets, so an append sees a sink's
     int state;
     uint64_t position;          // stream bytes taken so far
     // The box being read.
