@@ -154,10 +154,13 @@ static void fed_parse(void *opaque, void *session, void *buffer, os64_dom_fed_re
         char kinds[8];
         double x, y;
         if (sscanf(word, "init:%7[av]:%lf", kinds, &x) == 2 || sscanf(word, "init:%7[av]:nan", kinds) == 1) {
-            out->inits++;
-            out->audio = strchr(kinds, 'a') != NULL;
-            out->video = strchr(kinds, 'v') != NULL;
-            out->init_duration = strstr(word, ":nan") != NULL ? NAN : x;
+            /* The first init's tracks and duration are reported (the seam's
+             * rule: the first decides the duration). */
+            if (out->inits++ == 0) {
+                out->audio = strchr(kinds, 'a') != NULL;
+                out->video = strchr(kinds, 'v') != NULL;
+                out->init_duration = strstr(word, ":nan") != NULL ? NAN : x;
+            }
         } else if (sscanf(word, "frames:%lf:%lf", &x, &y) == 2) {
             double start = x + b->offset, end = y + b->offset;
             if (b->mode == OS64_DOM_FED_SEQUENCE) {
@@ -673,6 +676,16 @@ static void dom_mse_end_cases(void)
           "mse: the next <source> is opened");
     mse_script(&f, "assert(ms.readyState==='closed'&&v.error===null,'detached, no error: '+heard());",
                "mse: no error while a child remains");
+    fixture_free(&f);
+
+    /* Two initialization segments in one append: the first decides the
+     * duration, as it would appended apart. */
+    mse_fixture(&f);
+    if (!fixture_ready(&f)) return;
+    mse_with_buffer(&f, "mse: two inits");
+    mse_script(&f, "heard();sb.appendBuffer(B('init:v:10 init:v:20'));", "mse: two inits in one append");
+    media_turn(&f, "mse: two inits turn");
+    mse_script(&f, "assert(ms.duration===10,'the first init decides: '+ms.duration);", "mse: the first init's duration");
     fixture_free(&f);
 
     /* An initialization segment and broken bytes in one append: the init
