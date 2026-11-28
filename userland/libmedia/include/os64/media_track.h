@@ -221,10 +221,12 @@ os64_media_track_rule_t os64_media_buffer_frame(os64_media_buffer_t *b, const os
 // the group start becomes the group end; every track's last decode time,
 // last duration and highest end are unset, and it needs a random access point.
 void os64_media_buffer_reset_parser(os64_media_buffer_t *b);
+// An assignment to mode (MSE § 3.1): "sequence" starts the next coded frame
+// group at the group end, even when the mode is unchanged.
 void os64_media_buffer_set_mode(os64_media_buffer_t *b, int mode);
 // An assignment to timestampOffset (MSE § 3.1): in sequence mode the next
-// coded frame group starts at it, even when the value is unchanged (the
-// window and a mode's value are plain fields: their setters do nothing more).
+// coded frame group starts at it, even when the value is unchanged. The
+// append window is plain fields, set directly.
 void os64_media_buffer_set_offset(os64_media_buffer_t *b, int64_t offset);
 // Range removal (MSE § 3.5.9): every track's frames presented in [start, end), and what depended on them.
 void os64_media_buffer_remove(os64_media_buffer_t *b, int64_t start, int64_t end);
