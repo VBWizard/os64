@@ -1088,8 +1088,9 @@ static void plane_strip_cases(void)
     }
     check(overlaid, "planes, strip: the mark and the band inside the edit's overlays");
     {
-        /* The picture's corner, under neither: the mark's square alone is
-         * noted over the picture, not the whole clip. */
+        /* The picture's corner, under neither the strip nor the mark: no
+         * overlay there, and the hole see-through (overlays follow what
+         * the layer covers). */
         int32_t qx = v->clip.x + 10, qy = v->clip.y + 10;
         bool in = false;
         for (uint32_t o = 0; o < edits[0].noverlays && !in; o++)
@@ -1101,29 +1102,68 @@ static void plane_strip_cases(void)
     planes_commit();
     planes_release();
 
-    /* The strip hidden by its rules and the mark gone: the next paint's
-     * overlays meet neither the band nor the box's middle. */
+    /* Then as the window's loop goes, each step judging only what it
+     * changed. The mark gone marks the whole box (strips_turn), so its
+     * tiles clear and no overlay is left where it was; the strip shown
+     * keeps the band's. */
     os64_gui_rect_t band = w->bounds;
-    pl->strip.state = YONDER_STRIP_HIDDEN;
+    /* The mark's square above the first tile the band reaches: a tile
+     * the band covers in part keeps its ink for the band. */
+    int32_t band_tiles = v->clip.y + ((band.y - v->clip.y) / 16) * 16;
+    os64_gui_rect_t middle = {v->clip.x + v->clip.w / 2 - 28, v->clip.y + v->clip.h / 2 - 28, 56, 0};
+    middle.h = band_tiles - middle.y;
+    os64_gui_rect_t dd[OS64_UI_DAMAGE_MAX];
+    g.ui.damage_count = 0;
+    g.ui.any_dirty = false;
     pl->strip.mark = YONDER_MARK_NONE;
+    mark_part((os64_gui_rect_t){40, 40, 320, 180});     /* the box, in the page's coordinates */
+    planes_prepare();
+    uint32_t nd = plane_damage_now(dd);
+    (void)plane_render();
+    w->cls->paint(w, &plane_screen, &g.ui.theme);
+    planes_judge(dd, 0, nd);
+    planes_hole(dd, nd);
+    all = d;
+    n = planes_edits(edits, &all, true, edit_clips, &nedit_clips);
+    bool mid = false, kept = false;
+    for (uint32_t i = 0; i < v->noverlays; i++) {
+        os64_gui_rect_t m;
+        mid |= os64_rect_intersect(v->overlays[i], middle, &m);
+        kept |= os64_rect_intersect(v->overlays[i], band, &m);
+    }
+    check(v->place && middle.h > 0 && !mid && kept,
+          "planes, strip: the mark gone leaves no overlay where it was, the band's stay");
+    planes_commit();
+    planes_release();
+    /* The strip hidden by its rules marks only its own rectangle: the
+     * band's whole tiles clear, and a tile it covers only in part may stay
+     * inked (a part paint can ink a tile, never clear it: VIDEO_PLANE.md
+     * § 5), its pixels see-through. */
+    g.ui.damage_count = 0;
+    g.ui.any_dirty = false;
+    pl->strip.state = YONDER_STRIP_HIDDEN;
     players_place();
     check(w->hidden, "planes, strip: hidden by its rules");
     planes_prepare();
-    d = plane_render();
-    planes_judge(&d, 0, 1);
-    planes_hole(&d, 1);
+    nd = plane_damage_now(dd);
+    (void)plane_render();
+    planes_judge(dd, 0, nd);
+    planes_hole(dd, nd);
     all = d;
     n = planes_edits(edits, &all, true, edit_clips, &nedit_clips);
+    int32_t whole_from = v->clip.y + ((band.y - v->clip.y + 15) / 16) * 16;
+    os64_gui_rect_t whole = {band.x, whole_from, band.w, band.y + band.h - whole_from};
     bool met = false;
-    for (uint32_t e = 0; e < n; e++)
-        for (uint32_t o = 0; o < edits[e].noverlays; o++) {
-            os64_gui_rect_t m;
-            met |= os64_rect_intersect(edits[e].overlay[o], band, &m) ||
-                   os64_rect_intersect(edits[e].overlay[o],
-                                       (os64_gui_rect_t){v->clip.x + v->clip.w / 2 - 28, v->clip.y + v->clip.h / 2 - 28, 56, 56},
-                                       &m);
-        }
-    check(v->place && !met, "planes, strip: a hidden strip and a gone mark leave no overlay");
+    for (uint32_t i = 0; i < v->noverlays; i++) {
+        os64_gui_rect_t m;
+        met |= os64_rect_intersect(v->overlays[i], whole, &m);
+    }
+    bool clear = true;
+    for (int32_t y = band.y; y < band.y + band.h; y++)
+        for (int32_t x = band.x; x < band.x + band.w; x++)
+            clear &= plane_screen.surf.pixels[(size_t)y * 800 + x] == 0;
+    check(v->place && whole.h > 0 && !met && clear,
+          "planes, strip: hidden, the band's whole tiles leave no overlay and the band is see-through");
     planes_commit();
     planes_release();
     plane_drop();
