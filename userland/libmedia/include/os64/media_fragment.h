@@ -226,6 +226,12 @@ typedef struct {
 // copy of the moov and are good until the next init segment or destroy.
 typedef struct {
     uint32_t generation;        // 1 for the first init segment, rising with each
+    // The presentation's duration, in the movie's timescale: mvex's mehd
+    // fragment duration when it gives one (a mehd of 0 gives none), else
+    // mvhd's. 0 is UNKNOWN, which MSE takes as +Infinity, as Chromium does:
+    // what neither box gives, or all ones (ISO's "unknown") in either.
+    uint64_t duration;
+    uint32_t movie_timescale;
     uint32_t track_count;
     os64_media_fragment_track_t track[OS64_MEDIA_FRAGMENT_MAX_TRACKS];
 } os64_media_fragment_init_t;
@@ -295,6 +301,11 @@ void os64_media_fragment_init(os64_media_fragment_t *p, const os64_media_fragmen
 // OS64_MEDIA_FRAGMENT_MORE, or -1 with os64_media_fragment_error saying which rule.
 int os64_media_fragment_append(os64_media_fragment_t *p, const uint8_t *bytes, size_t length);
 os64_media_fragment_rule_t os64_media_fragment_error(const os64_media_fragment_t *p);
+// The spec's "parsing media segment" flag (MSE § 3.5.1): true from a moof's
+// header until its last frame is handed out (bytes of an mdat after that
+// carry nothing); false before, after, after a reset and in an error. A
+// page may not change `timestampOffset` or `mode` while it is true.
+bool os64_media_fragment_parsing_media(const os64_media_fragment_t *p);
 const char *os64_media_fragment_rule_name(os64_media_fragment_rule_t rule);
 // The spec's reset parser state (MSE § 5.5.2): a partial box and an
 // unfinished mdat are dropped, the error is cleared, and the init segment
