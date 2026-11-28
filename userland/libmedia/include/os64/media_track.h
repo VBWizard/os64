@@ -95,6 +95,7 @@ typedef enum {
     OS64_MEDIA_TRACK_TIMESCALE,         // a timescale finer than a nanosecond
     OS64_MEDIA_TRACK_TIME_OVERFLOW,     // a time that does not fit in int64 nanoseconds
     OS64_MEDIA_TRACK_UNKNOWN_TRACK,     // a frame or init for a track the buffer has not got
+    OS64_MEDIA_TRACK_UNKNOWN_GENERATION,// a frame of an init segment the buffer has not got
     OS64_MEDIA_TRACK_QUOTA,             // QuotaExceededError
     OS64_MEDIA_TRACK_RULE_COUNT
 } os64_media_track_rule_t;

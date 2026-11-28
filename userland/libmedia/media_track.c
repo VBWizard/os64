@@ -77,6 +77,26 @@ double os64_media_ns_to_seconds(int64_t ns)
     return (double)ns / 1e9;
 }
 
+// Sums and differences of times saturate: a page's times are any double it
+// likes and a frame's may sit anywhere in int64, so a join or a distance
+// between two of them must not wrap. (A kept frame's own end was checked
+// as it entered: pts + duration never needs this.)
+static int64_t sat_add(int64_t a, int64_t b)
+{
+    int64_t r;
+    if (__builtin_add_overflow(a, b, &r))
+        return b > 0 ? INT64_MAX : INT64_MIN;
+    return r;
+}
+
+static int64_t sat_sub(int64_t a, int64_t b)
+{
+    int64_t r;
+    if (__builtin_sub_overflow(a, b, &r))
+        return b < 0 ? INT64_MAX : INT64_MIN;
+    return r;
+}
+
 // ── Memory ─────────────────────────────────────────────────────────────────
 
 static void *mem_alloc(const os64_media_track_t *t, size_t bytes)
@@ -342,7 +362,7 @@ static void cut_presented(os64_media_track_t *t, int64_t lo, int64_t hi)
 // counts as continuous.
 static int64_t join_of(const os64_media_track_t *t)
 {
-    return 2 * t->interbuffer;
+    return sat_add(t->interbuffer, t->interbuffer);
 }
 
 // Where a coded frame group's first frame goes: the range it continues
@@ -357,7 +377,8 @@ static os64_media_track_range_t *range_for_group(os64_media_track_t *t, int64_t 
     if (at > 0) {
         os64_media_track_range_t *p = &t->range[at - 1];
         const os64_media_track_frame_t *last = &p->frame[p->count - 1];
-        if (last->dts <= dts && dts <= last->dts + last->duration + join_of(t) && pts <= p->end + join_of(t)) {
+        if (last->dts <= dts && dts <= sat_add(last->dts + last->duration, join_of(t)) &&
+            pts <= sat_add(p->end, join_of(t))) {
             *index = at - 1;
             return p;
         }
@@ -524,6 +545,8 @@ os64_media_track_rule_t os64_media_buffer_frame(os64_media_buffer_t *b, const os
     os64_media_track_t *t = track_by_id(b, f->track_id);
     if (t == 0)
         return OS64_MEDIA_TRACK_UNKNOWN_TRACK;
+    if (gen_find(t, f->generation, 0) == 0)
+        return OS64_MEDIA_TRACK_UNKNOWN_GENERATION;   // its configuration is not here to decode it
     int64_t pts0, dts0, end0, end_ticks, duration;
     if (f->timescale == 0 || f->timescale > OS64_MEDIA_MAX_TIMESCALE)
         return OS64_MEDIA_TRACK_TIMESCALE;
@@ -541,7 +564,8 @@ os64_media_track_rule_t os64_media_buffer_frame(os64_media_buffer_t *b, const os
     for (;;) {
         // CFP 1.3: sequence mode, a group's first frame lands on the group start.
         if (b->mode == OS64_MEDIA_SEQUENCE && b->group_start != OS64_MEDIA_NO_TIME) {
-            b->offset = b->group_start - pts0;
+            if (__builtin_sub_overflow(b->group_start, pts0, &b->offset))
+                return OS64_MEDIA_TRACK_TIME_OVERFLOW;  // before anything changed but the offset
             b->group_end = b->group_start;
             for (uint32_t k = 0; k < b->track_count; k++)
                 b->track[k].need_rap = true;
@@ -554,7 +578,7 @@ os64_media_track_rule_t os64_media_buffer_frame(os64_media_buffer_t *b, const os
         // CFP 1.6: a decode time that steps back, or forward by more than
         // twice the last duration, starts a new coded frame group.
         if (t->last_dts != OS64_MEDIA_NO_TIME &&
-            (dts < t->last_dts || dts - t->last_dts > 2 * t->last_duration)) {
+            (dts < t->last_dts || sat_sub(dts, t->last_dts) > sat_add(t->last_duration, t->last_duration))) {
             if (b->mode == OS64_MEDIA_SEGMENTS)
                 b->group_end = pts;
             else
@@ -611,8 +635,8 @@ os64_media_track_rule_t os64_media_buffer_frame(os64_media_buffer_t *b, const os
                 const os64_media_track_frame_t *o = &r->frame[i];
                 if ((o->flags & OS64_MEDIA_FRAME_PRELOAD) || pts < o->pts || pts >= o->pts + o->duration)
                     continue;
-                if (t->kind == OS64_MEDIA_FRAGMENT_AUDIO || pts < o->pts + ONE_MICROSECOND)
-                    cut_presented(t, o->pts, o->pts + 1);
+                if (t->kind == OS64_MEDIA_FRAGMENT_AUDIO || pts < sat_add(o->pts, ONE_MICROSECOND))
+                    cut_presented(t, o->pts, sat_add(o->pts, 1));
                 break;
             }
             break;
@@ -656,8 +680,8 @@ os64_media_track_rule_t os64_media_buffer_frame(os64_media_buffer_t *b, const os
     // The preload is the preroll of the frame it ends at: one that ends
     // anywhere else (a frame dropped long ago, before other appends) is
     // nobody's (Chromium's rule for its preroll buffer).
-    if (t->have_preload && (t->preload.pts + t->preload.duration < pts - ONE_MICROSECOND ||
-                            t->preload.pts + t->preload.duration > pts + ONE_MICROSECOND))
+    if (t->have_preload && (t->preload.pts + t->preload.duration < sat_sub(pts, ONE_MICROSECOND) ||
+                            t->preload.pts + t->preload.duration > sat_add(pts, ONE_MICROSECOND)))
         preload_clear(t);
     if (t->have_preload) {
         t->preload.serial = ++t->next_serial;
@@ -679,7 +703,7 @@ os64_media_track_rule_t os64_media_buffer_frame(os64_media_buffer_t *b, const os
             range_delete(t, ri);
         return OS64_MEDIA_TRACK_NO_MEMORY;
     }
-    int64_t step = t->last_dts == OS64_MEDIA_NO_TIME ? 0 : dts - t->last_dts;
+    int64_t step = t->last_dts == OS64_MEDIA_NO_TIME ? 0 : sat_sub(dts, t->last_dts);
     if (duration > t->interbuffer)
         t->interbuffer = duration;
     if (step > t->interbuffer)
@@ -833,7 +857,7 @@ static bool next_union(const os64_media_track_t *t, int64_t from, os64_media_tim
         grew = false;
         for (uint32_t i = 0; i < t->range_count; i++) {
             const os64_media_track_range_t *r = &t->range[i];
-            if (r->start < r->end && r->start <= out->end + join_of(t) && r->end > out->end) {
+            if (r->start < r->end && r->start <= sat_add(out->end, join_of(t)) && r->end > out->end) {
                 out->end = r->end;
                 grew = true;
             }
@@ -897,7 +921,7 @@ static const os64_media_track_range_t *range_holding(const os64_media_track_t *t
                 *index = i;
             return r;
         }
-        if (r->start > time && r->start - time <= join_of(t) && (next == 0 || r->start < next->start)) {
+        if (r->start > time && sat_sub(r->start, time) <= join_of(t) && (next == 0 || r->start < next->start)) {
             next = r;
             if (index)
                 *index = i;
@@ -907,7 +931,7 @@ static const os64_media_track_range_t *range_holding(const os64_media_track_t *t
         return 0;
     // Only a gap `buffered` joins: some range must end within the join before it.
     for (uint32_t i = 0; i < t->range_count; i++)
-        if (t->range[i].end <= time && time - t->range[i].end <= join_of(t) && t->range[i].start < t->range[i].end)
+        if (t->range[i].end <= time && sat_sub(time, t->range[i].end) <= join_of(t) && t->range[i].start < t->range[i].end)
             return next;
     return 0;
 }
@@ -922,7 +946,7 @@ static const os64_media_track_range_t *range_after(const os64_media_track_t *t, 
         const os64_media_track_range_t *n = &t->range[i];
         if (n == r || n->count == 0 || n->start <= r->start)
             continue;
-        if (n->start < r->end - join_of(t) || n->start > r->end + join_of(t))
+        if (n->start < sat_sub(r->end, join_of(t)) || n->start > sat_add(r->end, join_of(t)))
             continue;
         if (best == 0 || n->start < best->start)
             best = n;
@@ -1131,6 +1155,7 @@ const char *os64_media_track_rule_name(os64_media_track_rule_t rule)
     case OS64_MEDIA_TRACK_TIMESCALE: return "a timescale finer than a nanosecond";
     case OS64_MEDIA_TRACK_TIME_OVERFLOW: return "a time past int64 nanoseconds";
     case OS64_MEDIA_TRACK_UNKNOWN_TRACK: return "a track the buffer has not got";
+    case OS64_MEDIA_TRACK_UNKNOWN_GENERATION: return "an init segment the buffer has not got";
     case OS64_MEDIA_TRACK_QUOTA: return "the quota is exceeded";
     default: return "?";
     }

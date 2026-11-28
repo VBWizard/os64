@@ -1175,6 +1175,10 @@ static void scripted(void)
         os64_media_fragment_frame_t ff = { .track_id = 7, .kind = 1, .generation = 1, .timescale = 90000,
                                            .duration = 3000, .rap = true, .slab = slab, .size = 10 };
         check(os64_media_buffer_frame(&b, &ff) == OS64_MEDIA_TRACK_UNKNOWN_TRACK, "a frame for track 7 is refused");
+        ff.track_id = 1;
+        ff.generation = 9;
+        check(os64_media_buffer_frame(&b, &ff) == OS64_MEDIA_TRACK_UNKNOWN_GENERATION,
+              "a frame of an init segment the buffer has not got is refused");
         slab_end(slab);
         os64_media_buffer_destroy(&b);
     }
