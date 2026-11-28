@@ -330,8 +330,14 @@ static os64_media_fragment_rule_t parse_edits(box_t elst, uint32_t movie_scale, 
     if (empty != 0) {
         if (movie_scale == 0)
             return OS64_MEDIA_FRAGMENT_BAD_TIMESCALE;
-        unsigned __int128 scaled = (unsigned __int128)empty * track_scale / movie_scale;
-        if (scaled > (unsigned __int128)INT64_MAX)
+        // empty * track / movie, exactly and in 64 bits (os64 has no 128-bit
+        // division): with q and r empty's quotient and remainder by movie,
+        // it is q * track + r * track / movie, and r * track fits because
+        // both are below 2^32.
+        uint64_t q = empty / movie_scale, r = empty % movie_scale, whole;
+        uint64_t scaled;
+        if (__builtin_mul_overflow(q, (uint64_t)track_scale, &whole) ||
+            __builtin_add_overflow(whole, r * track_scale / movie_scale, &scaled) || scaled > (uint64_t)INT64_MAX)
             return OS64_MEDIA_FRAGMENT_TIME_OVERFLOW;
         shift = (int64_t)scaled;
     }
