@@ -20,7 +20,8 @@ and asks (`events`); F2 cluster ownership (`realms`); and the loop's
 every-turn checks, their lists and the image check's quiet key (`turn`,
 against the --canvas probe, test_dom_turn_checks.inc); and the Fullscreen
 API's rules (`fullscreen`, against the --fullscreen probe,
-test_dom_fullscreen.inc).
+test_dom_fullscreen.inc); and Media Source Extensions' rules (`mse`, against
+the --mse probe, test_dom_mse.inc, MSE_DOM.md).
 """
 import argparse
 import os
@@ -38,6 +39,7 @@ parser.add_argument('--events',action='store_true',help='run D7a event, timer an
 parser.add_argument('--realms',action='store_true',help='run F2 cluster ownership mutants')
 parser.add_argument('--turn',action='store_true',help="run the every-turn checks' list and quiet-key mutants")
 parser.add_argument('--fullscreen',action='store_true',help="run the Fullscreen API's mutants")
+parser.add_argument('--mse',action='store_true',help="run Media Source Extensions' mutants")
 parser.add_argument('--only',default='',help='run only the mutants whose names hold this text, from every set')
 parser.add_argument('--probe',default='',help='select an existing host probe, e.g. --probe=--clone')
 args=parser.parse_args()
@@ -49,7 +51,7 @@ args.logs.mkdir(parents=True,exist_ok=True)
 SUITE='bash tools/test_dom_host.sh --core'
 SUITE_TIMEOUT=2400
 PROBE_SECONDS='45'
-PROBES={'base':'--mutants','reclaim':'--reclaim','events':'--events','realms':'--realms','turn':'--canvas','fullscreen':'--fullscreen'}
+PROBES={'base':'--mutants','reclaim':'--reclaim','events':'--events','realms':'--realms','turn':'--canvas','fullscreen':'--fullscreen','mse':'--mse'}
 
 # Each mutation breaks a separately specified visible rule; it does not supply
 # replacement expectations derived from the library's implementation.
@@ -324,6 +326,79 @@ mutants = [
     ('fs-no-provider-allowed', 'fullscreen', 'fullscreen', '    if (f == NULL || !f->has_provider)\n        refusal', '    if (f == NULL)\n        refusal'),
     ('fs-drain-keeps-the-bit', 'fullscreen', 'fullscreen', '    if (f->element != NULL)\n        set_bit(f->element, false);', '    (void)0;'),
     ('fs-record-never-freed', 'fullscreen', 'fullscreen', '    d_free(dom, dom->fullscreen);\n    dom->fullscreen = NULL;', '    dom->fullscreen = NULL;'),
+    # Media Source Extensions (mse.c, and its share of media.c and blob_url.c):
+    # each breaks one row of MSE_DOM.md's tables.
+    ('mse-type-codecs-required', 'mse', 'mse', '    if (codecs == NULL) return false;', '    if (codecs == NULL) return true;'),
+    ('mse-type-level-unbounded', 'mse', 'mse', 'return level > 0 && level <= 0x33 ? 1 : 0;', 'return level > 0 ? 1 : 0;'),
+    ('mse-type-any-profile', 'mse', 'mse', '        if (profile != 0x42 && profile != 0x4D && profile != 0x64) return 0;', '        (void)profile;'),
+    ('mse-type-he-aac-yes', 'mse', 'mse', '    if (same_nocase(c, n, "mp4a.40.2")) return 2;', '    if (n >= 8 && same_nocase(c, 8, "mp4a.40.")) return 2;'),
+    ('mse-type-audio-takes-video', 'mse', 'mse', '    return video || pictures == 0;', '    return true;'),
+    ('mse-type-two-of-a-kind', 'mse', 'mse', '    if (pictures > 1 || sounds > 1 || pictures + sounds == 0) return false;', '    if (pictures + sounds == 0) return false;'),
+    ('mse-type-yes-without-host', 'mse', 'mse', '        bool yes = host(dom)->open != NULL && ', '        bool yes = '),
+    ('mse-add-unbounded', 'mse', 'mse', '    else if (s->count >= MSE_BUFFERS_MAX)', '    else if (s->count >= 4)'),
+    ('mse-add-unannounced', 'mse', 'mse', '                s->count++;\n                list_event(dom, s->list, "addsourcebuffer");', '                s->count++;'),
+    ('mse-never-active', 'mse', 'mse', '                s->active[i] = true;\n                list_event(dom, s->active_list, "addsourcebuffer");', '                list_event(dom, s->active_list, "addsourcebuffer");'),
+    ('mse-metadata-one-buffer', 'mse', 'mse', '        if (b == NULL || !b->first_init) return false;\n    }\n    return true;', '        if (b != NULL && b->first_init) return true;\n    }\n    return false;'),
+    ('mse-metadata-next-turn', 'mse', 'mse', '            if (d_mse_probed(dom, s->self)) d_media_fed_metadata(dom, s->media);', '            (void)0;'),
+    ('mse-init-no-duration-zero', 'mse', 'mse', 'isnan(r->init_duration) ? INFINITY : r->init_duration', 'isnan(r->init_duration) ? 0 : r->init_duration'),
+    ('mse-group-end-ignored', 'mse', 'mse', '(isnan(s->duration) || r->group_end > s->duration)', '(isnan(s->duration))'),
+    ('mse-duration-no-floor', 'mse', 'mse', '    if (value < top) value = top;', '    (void)top;'),
+    ('mse-duration-below-frames', 'mse', 'mse', 'value < b->highest_pts) {', 'value < b->highest_pts - 1000) {'),
+    ('mse-append-while-updating', 'mse', 'mse', '    if (b->updating) return d_error(ctx, "InvalidStateError", "The SourceBuffer is updating");\n    if (d_media_fed_has_error', '    if (d_media_fed_has_error'),
+    ('mse-append-after-element-error', 'mse', 'mse', '    if (d_media_fed_has_error(s->media)) return', '    if (false) return'),
+    ('mse-append-stays-ended', 'mse', 'mse', '    reopen(dom, s);\n    bool room', '    bool room'),
+    ('mse-append-over-quota', 'mse', 'mse', 'host(dom)->evict(host(dom)->opaque, s->session, b->handle, length);', '(host(dom)->evict(host(dom)->opaque, s->session, b->handle, length) || true);'),
+    ('mse-append-no-updatestart', 'mse', 'mse', '    buffer_event(dom, b, "updatestart");\n    b->pending = d_media_queue_work(dom, b->self, append_run', '    b->pending = d_media_queue_work(dom, b->self, append_run'),
+    ('mse-updateend-before-update', 'mse', 'mse', '    buffer_event(dom, b, "update");\n    buffer_event(dom, b, "updateend");\n}\n\nstatic void work_left', '    buffer_event(dom, b, "updateend");\n    buffer_event(dom, b, "update");\n}\n\nstatic void work_left'),
+    ('mse-append-error-order', 'mse', 'mse', '    buffer_event(dom, b, "error");\n    buffer_event(dom, b, "updateend");\n    end_of_stream', '    buffer_event(dom, b, "updateend");\n    buffer_event(dom, b, "error");\n    end_of_stream'),
+    ('mse-append-error-no-end', 'mse', 'mse', '    end_of_stream(dom, s, END_DECODE);\n}\n\nstatic uint32_t index_of', '    (void)0;\n}\n\nstatic uint32_t index_of'),
+    ('mse-abort-runs-queued', 'mse', 'mse', '        work_cancel(dom, b);\n        b->updating = false;\n        buffer_event(dom, b, "abort");', '        b->updating = false;\n        buffer_event(dom, b, "abort");'),
+    ('mse-abort-keeps-window', 'mse', 'mse', '    b->window_start = 0;\n    b->window_end = INFINITY;\n    d_provider_leave(dom);', '    d_provider_leave(dom);'),
+    ('mse-abort-during-removal', 'mse', 'mse', '    if (b->removing) return d_error(ctx, "InvalidStateError", "A removal is running");', '    (void)0;'),
+    ('mse-remove-empty-range', 'mse', 'mse', '    if (isnan(end) || end <= start)', '    if (isnan(end))'),
+    ('mse-remove-past-duration', 'mse', 'mse', '    if (start < 0 || start > s->duration)', '    if (start < 0)'),
+    ('mse-rsb-silent', 'mse', 'mse', '        b->removing = false;\n        buffer_event(dom, b, "abort");\n        buffer_event(dom, b, "updateend");\n    }\n    if (s->active[i])', '        b->removing = false;\n    }\n    if (s->active[i])'),
+    ('mse-rsb-active-unannounced', 'mse', 'mse', '    if (s->active[i]) list_event(dom, s->active_list, "removesourcebuffer");', '    (void)0;'),
+    ('mse-detach-removal-aborts', 'mse', 'mse', '        if (!removal) {', '        if (!removal || true) {'),
+    ('mse-detach-append-silent', 'mse', 'mse', '        if (!removal) {', '        if (!removal && false) {'),
+    ('mse-detach-no-sourceclose', 'mse', 'mse', '    source_event(dom, s, "sourceclose");', '    (void)0;'),
+    ('mse-detach-host-kept', 'mse', 'mse', '    if (s->session != NULL && host(dom)->close != NULL) host(dom)->close(host(dom)->opaque, s->session);', '    (void)0;'),
+    ('mse-attach-twice', 'mse', 'mse', '    if (s == NULL || s->ready != MS_CLOSED || host(dom)->open == NULL) return false;', '    if (s == NULL || host(dom)->open == NULL) return false;'),
+    ('mse-offset-not-moved', 'mse', 'mse', '    if (isfinite(r->timestamp_offset)) b->offset = r->timestamp_offset;', '    (void)0;'),
+    ('mse-offset-mid-segment', 'mse', 'mse', '        if (b->parsing_media) return d_error(ctx, "InvalidStateError", "A media segment is being parsed");\n        b->offset = v;', '        b->offset = v;'),
+    ('mse-pending-taken-as-done', 'mse', 'mse', '    if (r->status == OS64_DOM_FED_PENDING) {\n        struct DMseState *m = dom->mse;', '    if (false) {\n        struct DMseState *m = dom->mse;'),
+    ('mse-end-keeps-duration', 'mse', 'mse', '        (void)duration_change(dom, NULL, s, highest_end_of(dom, s));', '        (void)0;'),
+    ('mse-end-host-unheard', 'mse', 'mse', '        if (s->session != NULL && host(dom)->end != NULL) host(dom)->end(host(dom)->opaque, s->session);', '        (void)0;'),
+    ('mse-decode-in-play-open', 'mse', 'mse', '    s->ready = MS_ENDED;\n    source_event(dom, s, "sourceended");\n}', '    (void)0;\n}'),
+    ('mse-ended-buffered-own-end', 'mse', 'mse', '            if (s->active[i] && counts[i] > 0) each[i][counts[i] - 1].end = highest;', '            (void)0;'),
+    ('mse-buffered-union', 'mse', 'mse', '        n = intersect(now, n, each[i], counts[i], next, D_RANGES_MAX);', '        n = counts[i];\n        (void)intersect;\n        os64_memcpy(next, each[i], sizeof(next[0]) * n);'),
+    ('mse-seekable-infinite-whole', 'mse', 'mse', '    if (s->duration != INFINITY) {', '    if (true) {'),
+    ('mse-seekable-live-ignored', 'mse', 'mse', '    if (s->live) {', '    if (false) {'),
+    ('mse-sb-buffered-new-object', 'mse', 'mse', '    if (!JS_IsUndefined(b->buffered) && n == b->cached_count &&', '    if (false && n == b->cached_count &&'),
+    ('mse-url-never-revoked', 'mse', 'blob_url', '    if (os64_strlen(url) == length) d_mse_url_revoke(dom, url);', '    (void)0;'),
+    ('mse-event-target-unheld', 'mse', 'media', '    t->object = JS_DupValueRT(dom->engine, object);\n    t->plain = target;', '    t->object = JS_UNDEFINED;\n    (void)object;\n    t->plain = target;'),
+    # (Not run: a work task left unheld (d_media_queue_work's dup). Its SourceBuffer
+    # is held by its MediaSource's list until a removal or detach, and both cancel
+    # the task and queue abort and updateend behind it, which hold the buffer past
+    # the cancelled task's turn: no case can make the work task the last holder.)
+    ('mse-cancelled-work-runs', 'mse', 'media', '= t->cancelled ? NULL : t->run;', '= t->run;'),
+    ('mse-fed-goes-dormant', 'mse', 'media', 'JS_IsUndefined(m->fed) && m->paused', 'm->paused'),
+    ('mse-mode-assignment-unsaid', 'mse', 'mse', 'push_settings(dom, b, b->mode == OS64_DOM_FED_SEQUENCE ? OS64_DOM_FED_GROUP_AT_END : OS64_DOM_FED_GROUP_KEEP);', 'push_settings(dom, b, OS64_DOM_FED_GROUP_KEEP);'),
+    ('mse-early-detach-before-error', 'mse', 'media', '        queue(dom, m, "error", SETTLE_NOT_SUPPORTED);\n        session_close(dom, m);\n        return;\n    }', '        session_close(dom, m);\n        queue(dom, m, "error", SETTLE_NOT_SUPPORTED);\n        return;\n    }'),
+    ('mse-early-children-error', 'mse', 'media', '        if (m->from_children) {\n            source_failed(dom, m, why);\n            return;\n        }', '        (void)source_failed;'),
+    ('mse-fed-seek-unclamped', 'mse', 'media', '        if (t > range.end) t = range.end;\n    } else if', '        (void)0;\n    } else if'),
+    ('mse-error-before-init', 'mse', 'mse', '    take_result(b, r);\n    if (r->inits > 0) {', '    if (r->status == OS64_DOM_FED_ERROR) {\n        append_error(dom, s, b);\n        return;\n    }\n    take_result(b, r);\n    if (r->inits > 0) {'),
+    ('mse-view-seekable-from-session', 'mse', 'media', '        f.seekable = fed_seekable_count != 0;', '        (void)fed_seekable_count;'),
+    ('mse-list-reader-binding', 'mse', 'mse', '    DSourceBufferList *l = list_of(obj);\n    DMediaSource *s = l != NULL ? source_of(l->dom, l->source) : NULL;\n    uint32_t index;', '    DSourceBufferList *l = list_of(obj);\n    DMediaSource *s = l != NULL ? source_of(d_binding(ctx), l->source) : NULL;\n    uint32_t index;'),
+    ('mse-quality-total-shown', 'mse', 'media', '    *shown = f.frames_shown + f.frames_dropped;', '    *shown = f.frames_shown;'),
+    ('mse-switch-ignored', 'mse', 'media', '    if (dom->options.media_source && d_mse_install(dom, ctx, global) < 0) return -1;', '    if (d_mse_install(dom, ctx, global) < 0) return -1;'),
+    ('mse-quality-without-switch', 'mse', 'video', '    if (dom->options.media_source &&\n        (d_method_named', '    if (true &&\n        (d_method_named'),
+    ('mse-early-failure-attached', 'mse', 'media', '        queue(dom, m, "error", SETTLE_NOT_SUPPORTED);\n        session_close(dom, m);\n        return;\n    }', '        queue(dom, m, "error", SETTLE_NOT_SUPPORTED);\n        return;\n    }'),
+    ('mse-shrink-keeps-position', 'mse', 'media', '    if (m->ready >= R_METADATA && (m->seeking ? m->seek_to : m->position) > duration) seek(dom, m, duration);', '    (void)0;'),
+    ('mse-fed-seek-asks-session', 'mse', 'media', '    if (!JS_IsUndefined(m->fed)) {\n        os64_dom_fed_range_t range;\n        if (d_mse_seekable(dom, m->fed, &range) == 0) return;\n        if (t < range.start) t = range.start;\n        if (t > range.end) t = range.end;\n    } else if (m->session != NULL && dom->media_provider.facts != NULL) {', '    if (m->session != NULL && dom->media_provider.facts != NULL) {'),
+    ('mse-ranges-never-ended', 'mse', 'mse', 'b->handle, s->ready == MS_ENDED, out, cap, &top);', 'b->handle, false, out, cap, &top);'),
+    ('mse-offset-assignment-unsaid', 'mse', 'mse', '        push_settings(dom, b, OS64_DOM_FED_GROUP_AT_OFFSET);', '        push_settings(dom, b, OS64_DOM_FED_GROUP_KEEP);'),
+    ('mse-parent-before-conversion', 'mse', 'mse', '        double v;\n        if (JS_ToFloat64(ctx, &v, value) < 0) return JS_EXCEPTION;\n        if (!isfinite(v)) return JS_ThrowTypeError(ctx, "The offset is not finite");\n        if ((s = parent_of(dom, b)) == NULL) return removed_error(ctx);', '        double v;\n        s = parent_of(dom, b);\n        if (JS_ToFloat64(ctx, &v, value) < 0) return JS_EXCEPTION;\n        if (!isfinite(v)) return JS_ThrowTypeError(ctx, "The offset is not finite");\n        if (s == NULL) return removed_error(ctx);'),
 ]
 
 # Runtime output is bounded independently of compiler object sizes. Never read
@@ -335,7 +410,7 @@ def child_limits():
 if args.only:
     mutants=[m for m in mutants if args.only in m[0]]
 else:
-    chosen='realms' if args.realms else 'reclaim' if args.reclaim else 'events' if args.events else 'turn' if args.turn else 'fullscreen' if args.fullscreen else 'base'
+    chosen='realms' if args.realms else 'reclaim' if args.reclaim else 'events' if args.events else 'turn' if args.turn else 'fullscreen' if args.fullscreen else 'mse' if args.mse else 'base'
     mutants=[m for m in mutants if m[1]==chosen]
 
 def mode_of(m): return args.probe or PROBES[m[1]]
@@ -358,7 +433,7 @@ if args.objects is None:
 
 # The probes the chosen mutants run, each run once unmutated first (the sets
 # whose probe the host suite's own run does not cover).
-for mode in sorted({mode_of(m) for m in mutants if m[1] in ('realms','turn','fullscreen') or args.probe}):
+for mode in sorted({mode_of(m) for m in mutants if m[1] in ('realms','turn','fullscreen','mse') or args.probe}):
     with (args.logs/f'baseline{mode}.log').open('w') as log:
         result=subprocess.run(['timeout',PROBE_SECONDS,str(args.objects/'sanitized-core-probe'),mode],stdout=log,stderr=log,preexec_fn=child_limits)
     if result.returncode: raise SystemExit(f'host baseline {mode} failed; no mutants run')

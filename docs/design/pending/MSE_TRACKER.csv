@@ -1,11 +1,13 @@
 id,task,depends_on,status,done_in,notes
-MS.1,"The two pure cores: the fragment parser and the track buffer, with models, mutants and a fuzzer",,review,,"MEDIA_SOURCE.md sections 3 and 4. Two PRs: MS.1.1 and MS.1.2, stacked"
+MS.1,"The two pure cores: the fragment parser and the track buffer, with models, mutants and a fuzzer",,done,#768 #769,"MEDIA_SOURCE.md sections 3 and 4. Two PRs: MS.1.1 and MS.1.2, stacked"
 MS.1.1,"The fragment parser: os64/media_fragment.h, its model, mutants, fuzzer and decode check",,done,#768,"Section 3. Bit-exact decode against the host ffmpeg across a switch and an out-of-order append"
-MS.1.2,"The track buffer: the spec's coded frame processing, its model and mutants",MS.1.1,doing,,"Section 4. Bit-exact decode through it; the cursor reads a switch ahead without a resync"
+MS.1.2,"The track buffer: the spec's coded frame processing, its model and mutants",MS.1.1,done,#769,"Section 4. Bit-exact decode through it; the cursor reads a switch ahead without a resync"
 
 MS.2,"libmedia's fed media, /tests/msetest, gplay --fed, and a P5 run",MS.1,todo,,"Section 5 and 6. 1080p60 fed in pieces with a quality switch, a seek and eviction, before any browser code"
 
-MS.3,"libdom's MediaSource and SourceBuffer, yonder's provider, test pages",MS.2,todo,,"Section 7. State machine tables in a design state before code"
+MS.3,"libdom's MediaSource and SourceBuffer, yonder's provider, test pages",MS.2,code,,"Section 7. State machine tables in a design state before code (approved by Fable 2026-11-27, eight decisions)"
+MS.3.1,"libdom's API, the state machines, the object URL registry, isTypeSupported, the fake fed provider, the host cases and mutants",,done,#770,"Against the DOM host's fake (tools/test_dom_mse.inc); dom/media.h's fed provider is the contract with MS.2's session side, changed only through Fable"
+MS.3.2,"yonder's provider over libmedia's fed media, and the test pages",MS.2 MS.3.1,todo,,"Waits for MS.2's entry points. Sets libdom's media_source switch, from a yonder.conf switch (mse = on|off) with a command-line form as planes has, so the P5 compares the fed path against the plain file on one page (Fable 2026-11-27)"
 
 MS.4,"Real players: honest isTypeSupported, playback quality, replies that stream as they arrive",MS.3,todo,,"The first P5 run on a real page"
 

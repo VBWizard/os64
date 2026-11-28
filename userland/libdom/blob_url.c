@@ -12,7 +12,8 @@
  * reference, each holder another, and the last release frees the block on
  * whichever thread makes it. The lock guards the map and the totals, so
  * that a worker's thread can name and take entries beside the window's
- * (WORKERS.md § 9). */
+ * (WORKERS.md § 9). A MediaSource's URL is not the store's: createObjectURL
+ * hands it to mse.c's registry, and revokeObjectURL strikes it there too. */
 
 #include "internal.h"
 #include "os64/lock.h"
@@ -245,8 +246,13 @@ static JSValue create_url(os64_dom_t *dom, JSContext *ctx, int argc, JSValueCons
     const uint8_t *bytes;
     size_t length;
     const char *type;
+    /* A MediaSource is named in MSE's own registry (mse.c): the page's
+     * object, which only its media elements resolve, never the host's
+     * store of bytes. */
+    if (argc >= 1 && d_mse_is(dom, argv[0])) return d_mse_url_create(dom, ctx, argv[0]);
     if (argc < 1 || !d_blob_get(argv[0], &bytes, &length, &type))
-        return JS_ThrowTypeError(ctx, "Failed to execute 'createObjectURL' on 'URL': parameter 1 is not a Blob");
+        return JS_ThrowTypeError(ctx,
+                                 "Failed to execute 'createObjectURL' on 'URL': parameter 1 is not a Blob or MediaSource");
     if (dom->options.blobs == NULL)
         return JS_ThrowTypeError(ctx, "This page cannot name a Blob");
     char origin[WAY_ORIGIN_TEXT_MAX], uuid[37];
@@ -288,6 +294,7 @@ static JSValue revoke_url(os64_dom_t *dom, JSContext *ctx, int argc, JSValueCons
         }
         os64_lock_release(&s->lock);
     }
+    if (os64_strlen(url) == length) d_mse_url_revoke(dom, url);
     JS_FreeCString(ctx, url);
     os64_dom_blob_release(gone);
     return JS_UNDEFINED;

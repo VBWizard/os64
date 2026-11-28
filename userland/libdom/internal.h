@@ -524,6 +524,7 @@ struct os64_dom {
     /* Records the loop's every-turn checks visited (os64_dom_checks_visited). */
     uint64_t checks_visited;
     os64_dom_media_provider_t media_provider;
+    os64_dom_fed_provider_t fed_provider;
     JSClassID canvas_class, gradient_class, metrics_class, path2d_class;
     os64_dom_text_provider_t canvas_text;
     os64_dom_geometry_provider_t geometry;
@@ -937,6 +938,9 @@ struct os64_dom {
     /* The media elements' records, their queued tasks and the host
      * (media.c); NULL until the media row's install. */
     struct DMediaElements *media_elements;
+    /* Media Source Extensions' state (mse.c): its classes and the object
+     * URLs that name a MediaSource; NULL until the media row's install. */
+    struct DMseState *mse;
     /* The Fullscreen API's state (fullscreen.c), made by its row; NULL with
      * the Modern Web off. */
     struct DFullscreen *fullscreen;
@@ -1573,13 +1577,16 @@ int d_image_data_view(os64_dom_t *, JSContext *, JSValueConst, canvas_rgba8_t *)
  * the HTMLIFrameElement interface over D_PROTO_IFRAME, and its members. */
 int d_frames_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* The media row (media.c): HTMLMediaElement, HTMLAudioElement, MediaError,
- * TimeRanges, Audio, and the media events' handlers, then HTMLVideoElement
- * (d_video_install). Its departure step closes the host's sessions and
- * forgets queued tasks; drain lets go of the engine values the records
- * hold; free frees the records. */
+ * TimeRanges, Audio, and the media events' handlers, then, with the
+ * media_source switch, Media Source Extensions (d_mse_install), then
+ * HTMLVideoElement (d_video_install). Its departure step closes the host's
+ * sessions (detaching any MediaSource) and forgets queued tasks; drain lets
+ * go of the engine values the records and MSE's registry hold; free frees
+ * the records. */
 int d_media_elements_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
-/* HTMLVideoElement (video.c), a media element that plays sound and no
- * picture (AUDIO_YONDER.md § Y.4), over the HTMLMediaElement on window. */
+/* HTMLVideoElement (video.c), over the HTMLMediaElement on window, and
+ * with the media_source switch its getVideoPlaybackQuality and
+ * VideoPlaybackQuality. */
 int d_video_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 void d_media_elements_cancel(os64_dom_t *dom);
 void d_media_elements_drain(os64_dom_t *dom);
@@ -1601,6 +1608,65 @@ void d_media_session_facts(os64_dom_t *dom, bool *playing, bool *paused_after_pl
 /* A video element's picture size as shown (videoWidth, videoHeight): 0
  * before HAVE_METADATA, with no picture, or with no record yet. */
 void d_media_video_size(os64_dom_t *dom, const os64_html_node_t *node, uint32_t *width, uint32_t *height);
+/* A video element's playback quality counters (getVideoPlaybackQuality):
+ * pictures shown and dropped since its load, 0 with no session. */
+void d_media_quality(os64_dom_t *dom, const os64_html_node_t *node, uint64_t *shown, uint64_t *dropped);
+/* MEDIA SOURCE EXTENSIONS (mse.c) and the media element's side of them
+ * (media.c). Every MSE event and every append's or removal's work is a
+ * task on the media elements' one queue (DMediaTask), so they run in the
+ * order queued among the element's own: the task holds `object` (a
+ * MediaSource, SourceBuffer or SourceBufferList) until it has run or been
+ * cancelled, whatever script dropped. A work task's `left` hears it leave
+ * the queue, run, cancelled or dropped. */
+typedef struct DMediaTask DMediaTask;
+DMediaTask *d_media_queue_plain(os64_dom_t *dom, JSValueConst object, DValue *target, const char *type);
+DMediaTask *d_media_queue_work(os64_dom_t *dom, JSValueConst object, void (*run)(os64_dom_t *dom, void *work),
+                               void (*left)(void *work, DMediaTask *task), void *work);
+void d_media_task_cancel(DMediaTask *task);
+/* The element `media` (a DMediaElement, opaque to mse.c) of an attached
+ * MediaSource: its duration set and durationchange queued (and a position
+ * past it sought back); the end of stream's error steps (a decode error,
+ * else a network one), which at HAVE_NOTHING detach the MediaSource (so a
+ * caller holds it across the call) and may select the next <source>
+ * before returning; HAVE_METADATA
+ * reached (every SourceBuffer's first initialization segment); readyState
+ * back to HAVE_METADATA when above HAVE_CURRENT_DATA (a SourceBuffer's
+ * first initialization segment arriving while playing); the coded frame removal's drop when the
+ * position is inside [start, end); whether it has a MediaError (prepare
+ * append's "recent element error"). */
+void d_media_fed_duration(os64_dom_t *dom, void *media, double duration);
+void d_media_fed_failed(os64_dom_t *dom, void *media, bool decode);
+void d_media_fed_metadata(os64_dom_t *dom, void *media);
+void d_media_fed_reinit(os64_dom_t *dom, void *media);
+void d_media_fed_removed(os64_dom_t *dom, void *media, double start, double end);
+bool d_media_fed_has_error(const void *media);
+/* mse.c's side: the row (from the media row's install); the drain and
+ * the free with the media row's; whether `value` is a MediaSource; the
+ * MediaSource a `blob:` URL names (borrowed, JS_UNDEFINED for none), and
+ * the URL made and revoked (blob_url.c's createObjectURL and
+ * revokeObjectURL); the attach (true with the fed session in *session) and
+ * the detach; whether every SourceBuffer has had its first initialization
+ * segment (HAVE_METADATA); the element's buffered and seekable over its
+ * MediaSource (ranges in `out`, their count); a decode error the element's
+ * session reported, ending the source. */
+int d_mse_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+void d_mse_drain(os64_dom_t *dom);
+void d_mse_free(os64_dom_t *dom);
+bool d_mse_is(os64_dom_t *dom, JSValueConst value);
+JSValue d_mse_lookup(os64_dom_t *dom, const char *url);
+JSValue d_mse_url_create(os64_dom_t *dom, JSContext *ctx, JSValueConst source);
+void d_mse_url_revoke(os64_dom_t *dom, const char *url);
+bool d_mse_attach(os64_dom_t *dom, JSValueConst source, void *media, const os64_html_node_t *node, void **session);
+void d_mse_detach(os64_dom_t *dom, JSValueConst source);
+bool d_mse_probed(os64_dom_t *dom, JSValueConst source);
+uint32_t d_mse_buffered(os64_dom_t *dom, JSValueConst source, os64_dom_fed_range_t *out, uint32_t cap);
+uint32_t d_mse_seekable(os64_dom_t *dom, JSValueConst source, os64_dom_fed_range_t *out);
+void d_mse_decode_error(os64_dom_t *dom, JSValueConst source);
+bool d_mse_turn(os64_dom_t *dom);
+/* A TimeRanges (media.c) holding `count` normalized ranges, at most
+ * D_RANGES_MAX of which a member ever composes. */
+#define D_RANGES_MAX 64
+JSValue d_media_ranges(os64_dom_t *dom, JSContext *ctx, const os64_dom_fed_range_t *ranges, uint32_t count);
 void d_media_session_default(os64_dom_t *dom, JSContext *ctx, bool play);
 /* The MediaSession row (modern.c), after the one that makes
  * Navigator.prototype, which navigator.mediaSession joins. */
