@@ -759,9 +759,8 @@ static void evict(os64_media_track_t *t, uint64_t need, int64_t play)
         if (is_play || left)
             break;                      // at the play position, or enough freed inside this range
     }
-    if (play_range == 0)
-        return;
-    // Then far ahead: the latest ranges' backs, unit by unit, down to the
+    // Then far ahead (with no play position nothing is protected-end bound:
+    // protect_end is the end of time, and this takes nothing): the latest ranges' backs, unit by unit, down to the
     // range holding the play position.
     for (uint32_t ri = t->range_count; ri-- > 0 && start_bytes - t->bytes < need;) {
         os64_media_track_range_t *r = &t->range[ri];

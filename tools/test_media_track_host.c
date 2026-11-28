@@ -695,7 +695,9 @@ static void pair_init_segment(pair_t *p, uint32_t video_ts, uint32_t audio_ts)
 {
     p->gen++;
     os64_media_fragment_init_t init = { .generation = p->gen, .track_count = (uint32_t)p->m.nt };
-    static const uint8_t config[] = { 1, 0x4D, 0, 0x1F, 0xFF, 0xE1, 0, 4, 0x67, 0x4D, 0, 0x1F };
+    // The parser's copy of the configuration is gone at its next init
+    // segment: this one is overwritten as soon as the call returns.
+    uint8_t config[] = { 1, 0x4D, 0, 0x1F, 0xFF, 0xE1, 0, 4, 0x67, 0x4D, 0, 0x1F };
     for (int k = 0; k < p->m.nt; k++) {
         os64_media_fragment_track_t *t = &init.track[k];
         t->id = p->m.t[k].id;
@@ -710,6 +712,7 @@ static void pair_init_segment(pair_t *p, uint32_t video_ts, uint32_t audio_ts)
         p->m.t[k].newest_gen = p->gen;
     }
     os64_media_track_rule_t r = os64_media_buffer_init_segment(&p->b, &init);
+    memset(config, 0xEE, sizeof(config));
     check(r == OS64_MEDIA_TRACK_OK, "%s: init segment: %s", s_case, os64_media_track_rule_name(r));
 }
 
@@ -1067,6 +1070,28 @@ static void scripted(void)
     m_evict(&p.m.t[0], m_bytes(&p.m.t[0]) + 25000 - p.m.t[0].quota, OS64_MEDIA_NO_TIME);
     END();
 
+    // Refused: a timescale finer than a nanosecond; a frame for a track the buffer has not got.
+    {
+        os64_media_buffer_t b;
+        os64_media_buffer_init(&b, &kMemory);
+        os64_media_fragment_init_t init = { .generation = 1, .track_count = 1 };
+        static const uint8_t cfg[] = { 1, 2, 3, 4, 5, 6, 7 };
+        init.track[0] = (os64_media_fragment_track_t){ .id = 1, .kind = OS64_MEDIA_FRAGMENT_VIDEO,
+                                                       .timescale = 2000000000u, .entry_count = 1 };
+        init.track[0].entry[0].config = cfg;
+        init.track[0].entry[0].config_size = 7;
+        check(os64_media_buffer_init_segment(&b, &init) == OS64_MEDIA_TRACK_TIMESCALE,
+              "an init with a timescale finer than a nanosecond is refused");
+        init.track[0].timescale = 90000;
+        check(os64_media_buffer_init_segment(&b, &init) == OS64_MEDIA_TRACK_OK, "the same at 90000 is taken");
+        os64_media_fragment_slab_t *slab = slab_new(10);
+        os64_media_fragment_frame_t ff = { .track_id = 7, .kind = 1, .generation = 1, .timescale = 90000,
+                                           .duration = 3000, .rap = true, .slab = slab, .size = 10 };
+        check(os64_media_buffer_frame(&b, &ff) == OS64_MEDIA_TRACK_UNKNOWN_TRACK, "a frame for track 7 is refused");
+        slab_end(slab);
+        os64_media_buffer_destroy(&b);
+    }
+
     check(s_live == live0, "scripted cases: %ld blocks not given back", s_live - live0);
 }
 
@@ -1145,6 +1170,50 @@ static void cursor_cases(void)
     os64_media_track_frame_done(&fr);
     // Seek again; reads.
     check(os64_media_track_seek(t, MS(100), &c) == OS64_MEDIA_TRACK_WAIT, "a seek into nothing waits");
+    END();
+
+    // A seek into a gap the join closes lands, and the cursor reads across
+    // it. One frame is missing between two segments, the first with
+    // B-frames (its decode times two frames early), so they are two ranges
+    // (the decode gap is past the join) that `buffered` joins (the gap on
+    // the screen is within it).
+    START("cursor: a gap the join closes", 1, 90000, 0);
+    n = make_group(f, 0, 0, 31, 3000, 10, 2, 100);
+    n = 30;                                                  // the 31st frame's slot is the gap
+    for (int i = 0, k = 0; i < 31; i++) if (f[i].pts != 30 * 3000) f[k++] = f[i];
+    pair_frames(&p, 0, f, n);
+    os64_media_buffer_reset_parser(&p.b);
+    m_unset(&p.m.t[0]);
+    n = make_group(f, 0, 31 * 3000, 30, 3000, 10, 0, 100);
+    pair_frames(&p, 0, f, n);
+    t = &p.b.track[0];
+    {
+        os64_media_time_range_t r[4];
+        check(t->range_count == 2, "two ranges (%u)", t->range_count);
+        check(os64_media_track_ranges(t, r, 4) == 1, "a one-frame gap is joined in buffered");
+        check(os64_media_track_seek(t, 30 * 3000 * 1000000ll / 90 + 1000, &c) == OS64_MEDIA_TRACK_FRAME,
+              "a seek into the joined gap lands");
+        int got = 0;
+        while (os64_media_track_next(t, &c, &fr) == OS64_MEDIA_TRACK_FRAME) { got++; os64_media_track_frame_done(&fr); }
+        check(got == 30, "and reads the segment after it (%d)", got);
+        os64_media_track_seek(t, 0, &c);
+        got = 0;
+        while (os64_media_track_next(t, &c, &fr) == OS64_MEDIA_TRACK_FRAME) { got++; os64_media_track_frame_done(&fr); }
+        check(got == 60, "a cursor from the start reads across the gap (%d)", got);
+    }
+    END();
+
+    // The frame after the cursor's last cut, its last kept: RESYNC.
+    START("cursor: the frame after it cut", 1, 90000, 0);
+    n = make_group(f, 0, 0, 30, 3000, 10, 2, 100);           // decode: I0 P3 B1 B2 P6 ...
+    pair_frames(&p, 0, f, n);
+    t = &p.b.track[0];
+    os64_media_track_seek(t, 0, &c);
+    for (int i = 0; i < 2; i++) { os64_media_track_next(t, &c, &fr); os64_media_track_frame_done(&fr); }   // I0, P3
+    // B1 (presented at frame 1) goes, and from it to the next unit; P3 stays.
+    os64_media_buffer_remove(&p.b, 3000 * 1000000ll / 90, 3000 * 1000000ll / 90 + 1);
+    m_cut(&p.m.t[0], 3000 * 1000000ll / 90, 3000 * 1000000ll / 90 + 1);
+    check(os64_media_track_next(t, &c, &fr) == OS64_MEDIA_TRACK_RESYNC, "the frame after the cursor's last gone: RESYNC");
     END();
 
     // A generation held by a decoder outlives its frames.
