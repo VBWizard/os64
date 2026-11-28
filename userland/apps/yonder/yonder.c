@@ -13460,15 +13460,33 @@ static const PosterSlot *poster_showing(const Video *v, const os64_html_node_t *
     return poster->flag || !picture ? poster : NULL;
 }
 
+// A slot whose video is not laid out on page `p` (removed, or display:
+// none) goes, and true; a box laid out again makes a new one (its picture
+// found again in the table, not fetched).
+static bool poster_slot_gone(Page *p, PosterSlot *slot)
+{
+    if (slot->node == NULL || (p->tree != NULL && flow_box_for(p->tree, slot->node) != NULL))
+        return false;
+    os64_html_release(page_doc(p), slot->node);
+    os64_free(slot->raw);
+    os64_free(slot->url);
+    *slot = (PosterSlot){.pic = -1, .shown = -1};
+    return true;
+}
+
 // After a layout is published: each laid-out video's poster read as it
 // stands, on the view or not (paint meets only what is on the view). A
 // video with a poster gets its slot, so a poster below the fold is asked
 // for and gives its box its size before anyone scrolls to it; a slot whose
 // poster was taken away is cleared, so its box lays out at its own size.
+// Slots of videos the layout no longer holds go first, so a page that
+// replaced its videos finds room for the new ones.
 static void posters_register(void)
 {
     const os64_html_document_t *doc = page_doc(&g.page);
     const os64_html_node_t *top = doc != NULL && g.page.tree != NULL ? doc->document : NULL;
+    for (int32_t i = 0; top != NULL && i < POSTERS_MAX; i++)
+        (void)poster_slot_gone(&g.page, &g.page.posters[i]);
     for (const os64_html_node_t *x = top; x != NULL; x = os64_html_shadow_including_next(top, x))
         if (is_video_node(x) && os64_html_attr(x, "poster") != NULL && flow_box_for(g.page.tree, x) != NULL)
             (void)poster_seen(&g.page, x);
@@ -13505,16 +13523,8 @@ static void posters_turn(void)
         PosterSlot *slot = &p->posters[i];
         if (slot->node == NULL)
             continue;
-        if (p->tree == NULL || flow_box_for(p->tree, slot->node) == NULL) {
-            // Not laid out (removed, or display: none): the slot goes, and a
-            // box laid out again makes a new one (its picture is found again
-            // in the table, not fetched).
-            os64_html_release(page_doc(p), slot->node);
-            os64_free(slot->raw);
-            os64_free(slot->url);
-            *slot = (PosterSlot){.pic = -1, .shown = -1};
+        if (poster_slot_gone(p, slot))
             continue;
-        }
         if (slot->url != NULL && !slot->asked) {
             slot->asked = true;
             slot->pic = picture_for(p, slot->url);
