@@ -1074,8 +1074,9 @@ void os64_media_counts(const os64_media_t *m, os64_media_counts_t *out)
 //   stood, its decoder flushed, or at the first data after that, however
 //   far, since what was removed under a decoder fallen behind will not come
 //   back.
-// - A kind ENDS when its cursor has nothing to read after endOfStream, or
-//   its buffer is gone; an append or removal reopens the fed media, and a
+// - A kind ENDS when its cursor has nothing to read after endOfStream (or,
+//   not yet placed, nothing at or after where it is to be), or its buffer
+//   is gone; an append or removal reopens the fed media, and a
 //   seek reads an ended kind again.
 
 #define FED_LEAD_NS 500000000           // a dry kind holds the other this far ahead of it
@@ -1145,6 +1146,10 @@ static int fed_pull_locked(os64_media_t *m, int k)
             for (uint32_t i = 0; i < n && i < 8 && at == OS64_MEDIA_NO_TIME; i++)
                 if (r[i].start > f->seek_ns && (f->forward || r[i].start - f->seek_ns <= 2 * t->interbuffer))
                     at = r[i].start;
+            if (at == OS64_MEDIA_NO_TIME && media_fed_ended(m->fed)) {
+                f->done = true;         // nothing there or after, and nothing more is coming
+                return 0;
+            }
             if (at == OS64_MEDIA_NO_TIME || os64_media_track_seek(t, at, &f->cursor) != OS64_MEDIA_TRACK_FRAME)
                 return 0;               // not buffered there yet
         }

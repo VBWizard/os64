@@ -33,6 +33,7 @@
 //     which comes out next, and goes on to the end.
 //  8  A REMOVAL PAST WHERE A DECODER FALLEN BEHIND IS READING: its cursors
 //     resync on to the first data after the cut, and it plays to the end.
+//  9  A SEEK PAST EVERYTHING after the end was said ends, never waits.
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -581,6 +582,34 @@ static void remove_under_decoder(void)
     os64_media_fed_close(fed);
 }
 
+// Case 9: a seek past everything after the end was said ends at once,
+// both kinds, rather than waiting for data that will never come.
+static void seek_past_the_end(void)
+{
+    os64_media_fed_t *fed;
+    os64_media_fed_create(&fed);
+    media_fed_hold(fed, NULL);
+    os64_media_fed_buffer_t *v = os64_media_fed_add(fed, "video/mp4; codecs=\"avc1.640020\"");
+    os64_media_fed_buffer_t *a = os64_media_fed_add(fed, "audio/mp4; codecs=\"mp4a.40.2\"");
+    append(fed, v, &s_720, s_720.init[0], s_720.init[1]);
+    append(fed, a, &s_a44, s_a44.init[0], s_a44.init[1]);
+    for (int i = 0; i < 2; i++) {
+        append_frag(fed, v, &s_720, i);
+        append_frag(fed, a, &s_a44, i);
+    }
+    os64_media_fed_end(fed);
+    os64_media_t *m = open_fed(fed);
+    if (m == NULL) return;
+    CHECK(os64_media_seek(m, 8 * 48000) == 0, "seek past the end");
+    static pulled_t got;
+    pull(m, &got, NULL, NULL);
+    CHECK(got.waits == 0, "past the end: it ended rather than waiting (%d waits, %d pictures)", got.waits,
+          got.pictures);
+    os64_media_close(m);
+    media_fed_release(fed);
+    os64_media_fed_close(fed);
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 3) { printf("usage: test_media_fed_host <pages> <crcs>\n"); return 2; }
@@ -599,6 +628,7 @@ int main(int argc, char **argv)
     switch_over_buffered();
     resync_mid_group();
     remove_under_decoder();
+    seek_past_the_end();
     printf("media fed: %u checks, %u failed\n", s_checks, s_failed);
     return s_failed != 0;
 }
