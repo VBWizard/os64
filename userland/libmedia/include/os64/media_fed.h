@@ -18,6 +18,12 @@
 // longer, and never waits on the player's threads. A parse holds the lock
 // for one 64 KiB piece of input at a time.
 //
+// READINESS (HTML's readyState) is the player's: os64_media_player_facts'
+// `current`, `future` and `enough` (os64/media_player.h), which libmedia
+// computes for a fed media from both kinds' ranges intersected at the
+// position, and from the end once endOfStream has been called. A host
+// copies them and derives nothing of its own.
+//
 // LIFETIME: the fed media has two holders, its creator and the player made
 // over it. The creator lets go with os64_media_fed_close; the player lets
 // go after its decoders have let go of every coded frame. Whichever is last
