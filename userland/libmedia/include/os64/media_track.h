@@ -24,10 +24,13 @@
 // TIMES ARE NANOSECONDS, int64, everywhere in the buffer: the SourceBuffer's
 // offset, window, group start and end, and every frame's times. A frame
 // enters in its track's ticks and is converted ONCE, to the nearest
-// nanosecond, from its own exact tick values (os64_media_ticks_to_ns); no
-// time in the buffer is ever a sum of rounded values, so nothing drifts:
-// in sequence mode a group's first frame lands exactly on the group start,
-// and a frame is never more than half a nanosecond from its ticks. Not
+// nanosecond, from its own exact tick values (os64_media_ticks_to_ns), its
+// duration taken as its converted end less its converted start so that
+// frames meet exactly; a frame is never more than half a nanosecond from
+// its ticks. In sequence mode a group's first frame lands exactly on the
+// group start, which is the last group's end rounded once: the starts
+// drift from the exact sum of durations by half a nanosecond a group at
+// most (an hour of two-second segments: under a microsecond). Not
 // ticks inside a track: a quality switch may change a track's timescale
 // (a 15360 rendition beside a 90000 one), so a track has no single tick;
 // and a nanosecond is finer than any timescale the buffer takes (up to
@@ -56,7 +59,9 @@
 // functions see every slab made and freed, the caller can count the slab
 // bytes really held beside the frame bytes the buffer counts.
 //
-// THE PLAYER'S CURSOR reads a track in decode order. Overlaps, removes and
+// THE PLAYER'S CURSOR reads a track in decode order, from a range's end on
+// into the range the join joins to it (media_track.c's opening comment
+// says why ranges never merge). Overlaps, removes and
 // evictions move frames under it; the cursor carries the serial of the
 // frame it returned last and of the frame that followed it, and after any
 // such change it is re-found by them. RESYNC ONLY WHEN IT MUST: if either
@@ -119,8 +124,8 @@ typedef struct {
 } os64_media_track_frame_t;
 
 // A run of frames in decode order that starts at a random access point,
-// made of whole coded frame groups (media_track.c says why ranges never
-// merge and where the join is applied instead).
+// made of coded frame groups or what a cut left of them (media_track.c
+// says why ranges never merge and where the join is applied instead).
 typedef struct {
     os64_media_track_frame_t *frame;
     uint32_t count, capacity;

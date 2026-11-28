@@ -969,8 +969,8 @@ static void scripted(void)
     END();
 
     // Sequence mode: two appends of the same media play end to end, and a
-    // thousand groups of sound land on the group start each time (the
-    // drift: half a nanosecond a group at most, against the exact sum).
+    // thousand one-frame groups of sound, each landing on the group start
+    // (the drift against the exact sum: half a nanosecond a group at most).
     START("sequence mode", 2, 90000, 48000);
     os64_media_buffer_set_mode(&p.b, OS64_MEDIA_SEQUENCE); p.m.mode = OS64_MEDIA_SEQUENCE; p.m.gs = p.m.ge;
     for (int rep = 0; rep < 2; rep++) {
@@ -1002,14 +1002,16 @@ static void scripted(void)
         p.m.mode = OS64_MEDIA_SEQUENCE;
         p.m.gs = p.m.ge;
         int64_t worst = 0;
+        // One frame a group: 1024/48000 s is 21,333,333.3 ns, so every
+        // group end is rounded (three frames would be exactly 64 ms).
         for (int g = 0; g < 1000; g++) {
-            n = make_group(f, 1, 0, 3, 1024, 1, 0, 1);
+            n = make_group(f, 1, 0, 1, 1024, 1, 0, 1);
             pair_frames(&p, 0, f, n);
-            // the exact start of group g: g * 3 * 1024 / 48000 s
-            int64_t exact_num = (int64_t)g * 3 * 1024 * 1000000000ll;   // ns * 48000
+            // the exact start of group g: g * 1024 / 48000 s
+            int64_t exact_num = (int64_t)g * 1024 * 1000000000ll;   // ns * 48000
             os64_media_track_t *t = &p.b.track[0];
             const os64_media_track_range_t *r = &t->range[t->range_count - 1];
-            int64_t got = r->frame[r->count - 3].pts;
+            int64_t got = r->frame[r->count - 1].pts;
             int64_t err = got * 48000 - exact_num;
             if (err < 0) err = -err;
             if (err > worst) worst = err;

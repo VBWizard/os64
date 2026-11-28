@@ -2,11 +2,11 @@
 // processing over them (os64/media_track.h; MEDIA_SOURCE.md § 4).
 //
 // A track keeps RANGES: each a run of frames in decode order that starts at
-// a random access point, made of whole coded frame groups. A group goes on
-// the end of the range whose decode it continues within the JOIN (twice the
-// longest frame duration or decode step the track has seen: Chromium's
-// fudge room), or starts a range; removing frames from inside a range
-// splits it. Ranges never merge: a merge while a group is still arriving
+// a random access point, made of coded frame groups (or what a cut left of
+// them). A group goes on the end of the range it continues, in decode time
+// and on the screen, within the JOIN (twice the longest frame duration or
+// decode step the track has seen: Chromium's fudge room), or starts a
+// range; removing frames from inside a range splits it. Ranges never merge: a merge while a group is still arriving
 // would let the group's later frames interleave in decode time with the
 // next range's (a rendition without B-frames ending where one with them
 // begins), and a cut of one chain would then run on through the other.
@@ -154,7 +154,11 @@ static uint32_t unit_of(const os64_media_track_range_t *r, uint32_t i)
     return i;
 }
 
-// A range's presentation extent, its preload frames left out.
+// A range's presentation extent: its earliest presentation to its latest
+// end, its preload frames left out. A hole a cut leaves inside (frames
+// decoded before the cut but presented after it) counts as held, as
+// Chromium counts it: the range decodes through it and the picture before
+// the hole stays up, so `buffered` says what plays.
 static void range_extent(os64_media_track_range_t *r)
 {
     r->start = OS64_MEDIA_TIME_MAX;
@@ -247,8 +251,9 @@ static void range_resort(os64_media_track_t *t, uint32_t ri)
 // Frames [a, b) of range `ri` go (b a unit boundary or the end). What is
 // before them stays the range; what is after them becomes a range of its
 // own, unless there is no memory for one: then it goes too, which a cut
-// may always do (it is eviction ahead of time). Answers whether the range
-// still exists at `ri`.
+// may always do (it is eviction ahead of time). Answers true when the range
+// is still at `ri`; false when it went, or a cut from its front may have
+// moved it on (look it up again).
 static bool range_cut(os64_media_track_t *t, uint32_t ri, uint32_t a, uint32_t b)
 {
     if (a >= b)
@@ -333,8 +338,8 @@ static void cut_presented(os64_media_track_t *t, int64_t lo, int64_t hi)
     }
 }
 
-// The join: how far past a range's decode end the next frame may start
-// and still belong to it.
+// The join: the widest gap, in decode time or on the screen, that still
+// counts as continuous.
 static int64_t join_of(const os64_media_track_t *t)
 {
     return 2 * t->interbuffer;
@@ -943,9 +948,10 @@ static int64_t unit_pts(const os64_media_track_range_t *r, uint32_t u)
 }
 
 // The unit to decode from for `time`: the last whose random access point
-// is presented at or before it. Random access points are presented in
-// decode order, so a binary search over the range finds it, each probe
-// walking back to its unit (a GOP at most).
+// is presented at or before it. A range's random access points are
+// presented in decode order (its groups each continue the one before on
+// the screen), so a binary search finds it, each probe walking back to its
+// unit (a GOP at most).
 static uint32_t unit_for(const os64_media_track_range_t *r, int64_t time)
 {
     uint32_t lo = 0, hi = r->count;     // the answer is in [lo, hi)
