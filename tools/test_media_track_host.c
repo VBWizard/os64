@@ -1377,10 +1377,22 @@ static void oplog(const char *fmt, ...)
 static uint64_t rnd(void) { s_rng ^= s_rng << 13; s_rng ^= s_rng >> 7; s_rng ^= s_rng << 17; return s_rng; }
 static unsigned long s_ops;
 
+static void dump_track(const os64_media_track_t *t)
+{
+    for (uint32_t ri = 0; ri < t->range_count; ri++)
+        for (uint32_t i = 0; i < t->range[ri].count; i++) {
+            const os64_media_track_frame_t *f = &t->range[ri].frame[i];
+            printf("    r%u #%u serial %llu dts %lld pts %lld dur %lld f%u\n", ri, i, (unsigned long long)f->serial,
+                   (long long)f->dts, (long long)f->pts, (long long)f->duration, f->flags);
+        }
+}
+
 static void random_script(void)
 {
     static tf_t f[4096];
     pair_t p;
+    uint64_t script_seed = s_rng;
+    bool dumping = getenv("TRACK_SEED") != 0;
     int tracks = 1 + (int)(rnd() % 2);
     pair_init(&p, tracks, 90000, 48000);
     s_case = "random";
@@ -1390,6 +1402,10 @@ static void random_script(void)
     os64_media_track_frame_t last = { 0 };
     int64_t vpos = 0, apos = 0;                     // where the next in-order segment begins (ticks)
     for (int op = 0; op < 120; op++, s_ops++) {
+        if (dumping) {
+            printf("--- before op %d\n", op);
+            dump_track(&p.b.track[0]);
+        }
         switch (rnd() % 12) {
         case 0: case 1: case 2: case 3: case 4: {   // append a segment to a track
             int track = tracks == 2 ? (int)(rnd() % 2) : 0;
@@ -1517,6 +1533,7 @@ static void random_script(void)
         }
         compare(&p.b, &p.m);
         if (s_failed) {
+            printf("the script's seed: TRACK_SEED=%llu\n", (unsigned long long)script_seed);
             printf("the operations, the last failing:\n%s", s_log);
             break;
         }
@@ -1529,6 +1546,12 @@ static void random_script(void)
 int main(int argc, char **argv)
 {
     double seconds = argc > 1 ? atof(argv[1]) : 2;
+    if (getenv("TRACK_SEED")) {                     // replay one random script, dumping as it goes
+        s_rng = strtoull(getenv("TRACK_SEED"), 0, 10);
+        random_script();
+        printf("media track: %lu checks, %lu failed\n", s_checks, s_failed);
+        return s_failed != 0;
+    }
     scripted();
     cursor_cases();
     out_of_memory();

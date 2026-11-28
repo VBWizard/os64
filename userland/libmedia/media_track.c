@@ -256,16 +256,17 @@ static void range_delete(os64_media_track_t *t, uint32_t index)
     t->range_count--;
 }
 
-// Range `ri` moved to its place in the order of first decode times (a cut
-// from its front, or a split's tail, can belong further on).
-static void range_resort(os64_media_track_t *t, uint32_t ri)
+// The ranges put back in the order of their first decode times (a cut from
+// a range's front, or a split's tail, can belong further on). Ranges are
+// few; an insertion sort.
+static void ranges_sort(os64_media_track_t *t)
 {
-    while (ri + 1 < t->range_count && t->range[ri + 1].frame[0].dts < t->range[ri].frame[0].dts) {
-        os64_media_track_range_t x = t->range[ri];
-        t->range[ri] = t->range[ri + 1];
-        t->range[ri + 1] = x;
-        ri++;
-    }
+    for (uint32_t i = 1; i < t->range_count; i++)
+        for (uint32_t j = i; j > 0 && t->range[j].frame[0].dts < t->range[j - 1].frame[0].dts; j--) {
+            os64_media_track_range_t x = t->range[j];
+            t->range[j] = t->range[j - 1];
+            t->range[j - 1] = x;
+        }
 }
 
 // Frames [a, b) of range `ri` go (b a unit boundary or the end). What is
@@ -292,7 +293,7 @@ static bool range_cut(os64_media_track_t *t, uint32_t ri, uint32_t a, uint32_t b
             // A coded frame group still arriving goes on where its last frame went.
             if (t->append_range == r->id && tail->frame[tail->count - 1].serial == t->last_kept)
                 t->append_range = tail->id;
-            range_resort(t, ri + 1);
+            ranges_sort(t);
         } else {
             if (tail != 0)
                 range_delete(t, ri + 1);
@@ -315,47 +316,116 @@ static bool range_cut(os64_media_track_t *t, uint32_t ri, uint32_t a, uint32_t b
     }
     range_extent(r);
     if (a == 0) {
-        range_resort(t, ri);
+        ranges_sort(t);
         return false;                   // it may have moved on: the caller looks it up again
     }
     return true;
 }
 
+// A kept frame marked for the cut below (a bit of `flags` the cut alone
+// uses, clear outside it).
+#define FRAME_CUT 0x80000000u
+
 // Remove from every range the frames presented in [lo, hi) and every frame
-// that depends on them (CFP 1.14-1.15, range removal): one span in decode
-// order a range, from the first selected (with a preload frame before it)
-// to the next unit after the last selected. Presentation order chooses;
-// decode order cuts.
+// that depends on them (CFP 1.14-1.15, range removal): presentation order
+// chooses, decode order cuts. A selected frame goes with the preload frame
+// before it, and with every frame after it in decode order up to the next
+// unit boundary; an unselected unit start between two selected frames STAYS
+// (a group's last P frame can be presented after the next group's first
+// frame, so selections need not be one span). What is left of a range is
+// split where something was removed: each kept stretch after a removed one
+// begins at a unit boundary, and is a range of its own.
 static void cut_presented(os64_media_track_t *t, int64_t lo, int64_t hi)
 {
     if (lo >= hi)
         return;
-    for (uint32_t ri = 0; ri < t->range_count;) {
+    bool changed = false;
+    uint32_t count = t->range_count;
+    for (uint32_t ri = 0; ri < count; ri++) {
         os64_media_track_range_t *r = &t->range[ri];
         bool front_preload = r->count && (r->frame[0].flags & OS64_MEDIA_FRAME_PRELOAD) && r->frame[0].pts < hi;
-        if (r->end <= lo || (r->start >= hi && !front_preload)) {
-            ri++;
+        if (r->end <= lo || (r->start >= hi && !front_preload))
             continue;
-        }
-        uint32_t first = UINT32_MAX, last = 0;
-        for (uint32_t i = 0; i < r->count; i++)
-            if (r->frame[i].pts >= lo && r->frame[i].pts < hi) {
-                if (first == UINT32_MAX)
-                    first = i;
-                last = i;
+        // Mark: the selected, a preload before each, and what follows each
+        // up to the next unit boundary.
+        uint32_t marked = 0;
+        bool removing = false;
+        for (uint32_t i = 0; i < r->count; i++) {
+            os64_media_track_frame_t *f = &r->frame[i];
+            bool selected = f->pts >= lo && f->pts < hi;
+            if (selected) {
+                if (i > 0 && (r->frame[i - 1].flags & OS64_MEDIA_FRAME_PRELOAD) && !(r->frame[i - 1].flags & FRAME_CUT)) {
+                    r->frame[i - 1].flags |= FRAME_CUT;
+                    marked++;
+                }
+                removing = true;
+            } else if (is_unit_start(r, i)) {
+                removing = false;
             }
-        if (first == UINT32_MAX) {
-            ri++;
+            if (removing) {
+                f->flags |= FRAME_CUT;
+                marked++;
+            }
+        }
+        if (marked == 0)
+            continue;
+        changed = true;
+        // Compact the first kept stretch into place; each later stretch
+        // (after a removed one) moves to a range of its own, or, with no
+        // memory for one, goes too (a cut may always take more).
+        uint64_t id = r->id;
+        uint32_t n = r->count, w = 0;
+        os64_media_track_frame_t *src = r->frame;
+        os64_media_track_range_t *dest = r;
+        bool in_first = true, seen_cut = false;
+        for (uint32_t i = 0; i < n; i++) {
+            os64_media_track_frame_t f = src[i];
+            if (f.flags & FRAME_CUT) {
+                f.flags &= ~FRAME_CUT;
+                frame_forget(t, &f);
+                if (w > 0 || !in_first)
+                    seen_cut = true;
+                continue;
+            }
+            if (seen_cut) {                     // a stretch after a removed one: a new range
+                seen_cut = false;
+                in_first = false;
+                dest = range_insert(t, t->range_count);
+                r = range_by_id(t, id, 0);      // the array may have moved
+                src = r->frame;
+                if (dest != 0 && !range_reserve(t, dest, 16)) {
+                    range_delete(t, t->range_count - 1);
+                    r = range_by_id(t, id, 0);
+                    src = r->frame;
+                    dest = 0;
+                }
+            }
+            if (in_first) {
+                r->frame[w++] = f;
+            } else if (dest != 0 && range_reserve(t, dest, dest->count + 1)) {
+                dest->frame[dest->count++] = f;
+                if (t->append_range == id && f.serial == t->last_kept)
+                    t->append_range = dest->id;
+            } else {
+                frame_forget(t, &f);            // no memory for its range: it goes
+            }
+        }
+        r = range_by_id(t, id, 0);
+        r->count = w;
+        t->edits++;
+    }
+    if (!changed)
+        return;
+    // Extents, empty ranges gone, order restored.
+    for (uint32_t ri = 0; ri < t->range_count;) {
+        if (t->range[ri].count == 0) {
+            range_delete(t, ri);
             continue;
         }
-        if (first > 0 && (r->frame[first - 1].flags & OS64_MEDIA_FRAME_PRELOAD))
-            first--;
-        // Nothing selected is left in this range afterwards (the cut runs
-        // past the last), so the scan moves on; a split's tail is looked at
-        // next, and has nothing selected either.
-        if (range_cut(t, ri, first, next_unit(r, last)))
-            ri++;
+        range_extent(&t->range[ri]);
+        ri++;
     }
+    ranges_sort(t);
 }
 
 // The join: the widest gap, in decode time or on the screen, that still
