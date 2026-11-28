@@ -3447,6 +3447,99 @@ static void input_validation(void) {
           "validation: without scripts the model refuses, and says the control's sentence");
     probe_drop();
 }
+/* A button the face draws is as wide as the caption its widget shows
+ * (button_size): os64_ui_button_width's answer in the controls' face, in
+ * CSS pixels, rounded up; a caption longer than libflow's old ten ems is
+ * whole, a short one is narrow. A submit with no value shows "Submit"; an
+ * empty value shows yonder's default caption ("Button" for type=button).
+ * It is as tall as the face's row and three pixels a side, and its size
+ * has no ratio (f_shapeless): a CSS width or max-width wins and leaves the
+ * height, as it does for a dropdown. An image input is a picture: with
+ * none arrived it keeps libflow's guess, never a caption's size. Each
+ * widget is placed over its box, so the caption the paint centres has the
+ * room it was measured for. */
+static os64_font_set_t *interface_test_set(uint32_t px);
+static int32_t button_css(const char *caption) {
+    int32_t dw=0;
+    if (os64_ui_button_width(&g.ui,OS64_UI_FONT_APP,caption,strlen(caption),&dw)!=OS64_FONT_OK) return -1;
+    int64_t zoom=s_env.zoom>0?s_env.zoom:1000;
+    return (int32_t)(((int64_t)dw*1000+zoom-1)/zoom);
+}
+static void input_button_width(void) {
+    probe_page("<p><button id=long>Full screen, then remove</button> <button id=short>Go</button> "
+        "<input id=empty type=button value=''> <input id=submit type=submit> "
+        "<button id=sized style='width:300px'>Full screen, then remove</button>"
+        "<button id=narrow style='max-width:40px'>Full screen, then remove</button>"
+        "<input id=pic type=image alt=go>"
+        "<select id=plain><option>A</select><select id=wide style='width:300px'><option>A</select></p>",true);
+    script_turn();
+    const char *ids[]={"long","short","empty","submit","sized","narrow","pic","plain","wide"};
+    const flow_box_t *b[9];
+    bool all=true,faced=true;
+    for (int i=0;i<9;i++) {
+        b[i]=flow_box_for(g.page.tree,probe_id(ids[i]));
+        all=all&&b[i]!=NULL;
+        faced=faced&&(i>=6||(b[i]!=NULL&&b[i]->replaced));
+    }
+    check(all&&faced,"button width: each button is a box the face fills");
+    if (!all) { probe_drop(); return; }
+    int32_t ten_ems=(int32_t)b[0]->style->font_size*10/FLOW_UNITS_PER_PX;
+    int32_t lw=button_css("Full screen, then remove"),sw=button_css("Go");
+    check(lw>0 && b[0]->rect.w==lw && lw>ten_ems,
+          "button width: a long caption's box is the caption's width, past the old ten ems");
+    check(sw>0 && b[1]->rect.w==sw && sw<ten_ems,
+          "button width: a short caption's box is narrower than the old ten ems");
+    check(b[2]->rect.w==button_css("Button") && b[3]->rect.w==button_css("Submit"),
+          "button width: an empty value and a submit with none are as wide as the captions shown");
+    int32_t bh=os64_ui_font_row_height(&g.ui,OS64_UI_FONT_APP)+2*BUTTON_FRAME_Y;
+    check(b[0]->rect.h==bh && b[1]->rect.h==bh && b[2]->rect.h==bh && b[3]->rect.h==bh,
+          "button width: buttons are as tall as the face's row and their frame");
+    check(b[4]->rect.w==300 && b[4]->rect.h==bh && b[5]->rect.w==40 && b[5]->rect.h==bh,
+          "button width: a CSS width wins, max-width clamps, and neither moves the height");
+    check(b[6]->rect.w==ten_ems && b[6]->rect.w!=button_css("Submit"),
+          "button width: an image input with no picture keeps libflow's guess, not a caption's size");
+    check(b[8]->rect.w==300 && b[8]->rect.h==b[7]->rect.h,
+          "button width: a dropdown given a width keeps its own height");
+    FormWidget *fw=probe_field("long");
+    check(fw!=NULL && fw->kind==FW_BUTTON && os64_streq(fw->text,"Full screen, then remove") &&
+          fw->w->bounds.w==lw && fw->w->bounds.h==bh,
+          "button width: the widget is placed over its box, its whole caption with room");
+    probe_drop();
+    /* Under a larger controls face the caption's box grows with it, and a
+     * width the page gives is the box whatever the caption needs: one wider
+     * than the caption centres it with room, one narrower clips it, and
+     * neither moves the height. The P5's fonts.conf (web.size 26, Sans Mono
+     * Bold) draws the controls at 21 px and this caption at 328 px; the
+     * host's test face is narrower, so 30 px stands in for it. 300 px, which
+     * the test page once took for "wider than the caption", is narrower. */
+    probe_page("<p><button id=fit>Full screen, then remove</button>"
+        "<button id=wide style='width:600px'>Full screen, then remove</button>"
+        "<button id=cut style='width:120px'>Full screen, then remove</button></p>",true);
+    script_turn();
+    os64_font_set_t *large=interface_test_set(30);
+    check(os64_ui_font_app(&g.ui,large,OS64_FONT_ROLE_UI)==OS64_FONT_OK,"button width: the controls lent a 30 px face");
+    check(page_lay_out(&g.page,800,600,g.zoom,&g.page),"button width: laid out again in it");
+    forms_place();
+    const flow_box_t *fit=flow_box_for(g.page.tree,probe_id("fit")),*wide=flow_box_for(g.page.tree,probe_id("wide")),
+                     *cut=flow_box_for(g.page.tree,probe_id("cut"));
+    int32_t big=button_css("Full screen, then remove");
+    int32_t big_h=os64_ui_font_row_height(&g.ui,OS64_UI_FONT_APP)+2*BUTTON_FRAME_Y;
+    check(fit!=NULL && wide!=NULL && cut!=NULL && big>lw && big>300 && big_h>bh,
+          "button width: at 30 px the caption is wider than at 13, and wider than 300 px");
+    if (fit!=NULL && wide!=NULL && cut!=NULL) {
+        check(fit->rect.w==big && fit->rect.h==big_h,
+              "button width: at 30 px the box is the larger caption's width and row");
+        check(wide->rect.w==600 && wide->rect.h==big_h && cut->rect.w==120 && cut->rect.h==big_h,
+              "button width: at 30 px a width given wider or narrower than the caption is the box, the height the row's");
+    }
+    FormWidget *clipped=probe_field("cut");
+    check(clipped!=NULL && clipped->w->bounds.w==120 && clipped->w->bounds.h==big_h,
+          "button width: a caption wider than the width given is clipped to the box, not spread past it");
+    (void)os64_ui_font_app(&g.ui,NULL,OS64_FONT_ROLE_UI);
+    os64_font_set_release(large);
+    probe_drop();
+}
+
 /* A one-line select is a dropdown (DROPDOWN.md); a select with a size is a
  * listbox. A click opens the list with the options' labels and the
  * disabled one refused; a pick of another option sets the model and fires
@@ -3567,6 +3660,7 @@ static void input_cases(void) {
     input_ui_events();
     input_script_buttons();
     input_validation();
+    input_button_width();
     input_select_dropdown();
 }
 
