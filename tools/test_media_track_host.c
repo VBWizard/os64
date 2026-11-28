@@ -656,6 +656,13 @@ static void compare(os64_media_buffer_t *b, model_t *m)
             }
         check(os64_media_buffer_highest_end(b) == want, "%s: highest end %lld, the model %lld", s_case,
               (long long)os64_media_buffer_highest_end(b), (long long)want);
+        int64_t want_pts = OS64_MEDIA_NO_TIME;
+        for (int k = 0; k < m->nt; k++)
+            for (int i = 0; i < m->t[k].n; i++)
+                if (!(m->t[k].f[i].flags & OS64_MEDIA_FRAME_PRELOAD) && m->t[k].f[i].pts > want_pts)
+                    want_pts = m->t[k].f[i].pts;
+        check(os64_media_buffer_highest_pts(b) == want_pts, "%s: highest pts %lld, the model %lld", s_case,
+              (long long)os64_media_buffer_highest_pts(b), (long long)want_pts);
         check(b->group_end == m->ge && b->offset == m->offset, "%s: group end or offset differs from the model", s_case);
     }
     // The SourceBuffer's intersection, of the tracks' reported ranges; and,

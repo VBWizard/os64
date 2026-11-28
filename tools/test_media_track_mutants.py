@@ -84,6 +84,7 @@ mutants = [
     ('the-quota-is-never-exceeded', F, '        if (t->bytes + share > t->quota)\n            fits = false;', '        (void)0;'),
     ('each-track-takes-the-whole-append', F, '        uint64_t share = total_quota == 0 ? incoming', '        uint64_t share = 1 ? incoming'),
     ('a-preload-with-a-frame-decoded-between-is-kept', F, '                            t->preload.dts > dts || decoded_between(t, t->preload.dts, dts)))', '                            t->preload.dts > dts || (decoded_between(t, t->preload.dts, dts) && 0)))'),
+    ('the-highest-pts-is-the-first', F, '                if (!(f->flags & OS64_MEDIA_FRAME_PRELOAD) && f->pts > pts)\n                    pts = f->pts;', '                if (!(f->flags & OS64_MEDIA_FRAME_PRELOAD) && pts == OS64_MEDIA_NO_TIME)\n                    pts = f->pts;'),
     # Reading.
     ('a-joined-gap-is-not-held', F, '    if (before != OS64_MEDIA_NO_TIME && sat_sub(next->start, before) <= join_of(t))\n        return next;\n    return 0;', '    return 0;'),
     ('a-gap-is-measured-from-the-time', F, 'if (before != OS64_MEDIA_NO_TIME && sat_sub(next->start, before) <= join_of(t))', 'if (before != OS64_MEDIA_NO_TIME && sat_sub(next->start, time) <= join_of(t))'),

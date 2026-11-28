@@ -235,6 +235,10 @@ os64_media_track_t *os64_media_buffer_track(os64_media_buffer_t *b, int kind);
 // it (sequence mode moves it) and the group end are the buffer's own fields,
 // `offset` and `group_end`, read as they stand.
 int64_t os64_media_buffer_highest_end(const os64_media_buffer_t *b);
+// The latest presentation START of a frame any track holds (ns;
+// OS64_MEDIA_NO_TIME when none): a page may not set the duration below it
+// (MSE § 2.4.1, duration). A scan of every frame.
+int64_t os64_media_buffer_highest_pts(const os64_media_buffer_t *b);
 
 // A track, for a player. Each copies a value out and allocates nothing.
 uint32_t os64_media_track_ranges(const os64_media_track_t *t, os64_media_time_range_t *out, uint32_t cap);

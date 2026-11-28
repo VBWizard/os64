@@ -544,6 +544,19 @@ int64_t os64_media_buffer_highest_end(const os64_media_buffer_t *b)
     return end;
 }
 
+int64_t os64_media_buffer_highest_pts(const os64_media_buffer_t *b)
+{
+    int64_t pts = OS64_MEDIA_NO_TIME;
+    for (uint32_t k = 0; k < b->track_count; k++)
+        for (uint32_t ri = 0; ri < b->track[k].range_count; ri++)
+            for (uint32_t i = 0; i < b->track[k].range[ri].count; i++) {
+                const os64_media_track_frame_t *f = &b->track[k].range[ri].frame[i];
+                if (!(f->flags & OS64_MEDIA_FRAME_PRELOAD) && f->pts > pts)
+                    pts = f->pts;
+            }
+    return pts;
+}
+
 os64_media_track_t *os64_media_buffer_track(os64_media_buffer_t *b, int kind)
 {
     for (uint32_t k = 0; k < b->track_count; k++)
