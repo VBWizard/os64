@@ -3280,10 +3280,11 @@ static struct {
     // last laid out (pictures_settle); cleared by any layout, whether or not
     // it fit.
     bool pictures_moved;
-    // A still raster arrived (shown, or past the memory kept) since the
-    // walk that finds how big each picture is drawn last ran (css_pictures):
+    // A still raster arrived (shown, or past the memory kept), or a poster
+    // took a picture the table already held (posters_turn), since the walk
+    // that finds how big each picture is drawn last ran (css_pictures):
     // one that moves nothing is otherwise never judged, since only a layout
-    // runs that walk. pictures_settle runs it once for every arrival since.
+    // runs that walk. pictures_settle runs it once for all of them since.
     bool pictures_judge_owed;
     // The window's clock, for moving pictures and a slow page's owed
     // layout; NULL, and nothing moves and a layout waits for an event.
@@ -13494,7 +13495,8 @@ static bool box_on_view(const os64_html_node_t *node, os64_gui_rect_t *out)
 // moved (libdom's, which a play or a seek clears), each mark the box, so
 // the picture takes over from the poster at the next paint. A poster that
 // arrives or goes before the video's size is known lays the page out
-// once, unless the page fixed the box's size.
+// once, unless the page fixed the box's size; one that shows owes the
+// walk that sizes the pictures (pictures_judge_owed).
 static void posters_turn(void)
 {
     Page *p = &g.page;
@@ -13532,6 +13534,12 @@ static void posters_turn(void)
                 layout_revision(&s_layout_resources.pictures);
                 g.pictures_moved = true;
             }
+            // A picture the table already held (another use's, perhaps a
+            // thumbnail) is now drawn at the poster's size too: the walk
+            // that finds each picture's size runs again, as an arrival's
+            // does, though a box of fixed size lays nothing out.
+            if (shown != slot->shown && shown >= 0)
+                g.pictures_judge_owed = true;
             slot->shown = shown;
             slot->flag = flag;
             os64_gui_rect_t part;
