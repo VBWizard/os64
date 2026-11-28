@@ -87,6 +87,7 @@ mutants = [
     ('a-preload-is-kept-without-room-for-its-frame', F, 'if (!range_reserve(t, r, r->count + (t->have_preload ? 2u : 1u))) {', 'if (!range_reserve(t, r, r->count + 1u)) {'),
     ('eviction-takes-a-unit-presented-ahead', F, '            if (pr && !unit_behind(r, cut, n, play))', '            if (pr && !unit_behind(r, cut, n, play) && 0)'),
     ('the-hop-measures-from-the-range-end', F, '    if (r->end > frontier)\n        frontier = r->end;\n    for', '    frontier = r->end;\n    for'),
+    ('ranges-from-starts-the-walk-at-the-time', F, '    for (int64_t at = OS64_MEDIA_NO_TIME; next_union(t, at, &r); at = r.end) {\n        if (from != OS64_MEDIA_NO_TIME && r.end <= from)', '    for (int64_t at = from; next_union(t, at, &r); at = r.end) {\n        if (from != OS64_MEDIA_NO_TIME && r.end <= from)'),
     ('a-group-presented-earlier-joins', F, ' &&\n            pts >= unit_pts(p, unit_of(p, p->count - 1))) {', ') {'),
     ('the-highest-pts-is-the-first', F, '                if (!(f->flags & OS64_MEDIA_FRAME_PRELOAD) && f->pts > pts)\n                    pts = f->pts;', '                if (!(f->flags & OS64_MEDIA_FRAME_PRELOAD) && pts == OS64_MEDIA_NO_TIME)\n                    pts = f->pts;'),
     # Reading.

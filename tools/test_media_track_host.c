@@ -558,6 +558,23 @@ static void compare(os64_media_buffer_t *b, model_t *m)
         os64_media_time_range_t a[256], lo[256];
         uint32_t na = os64_media_track_ranges(t, a, 256);
         int nlo = m_ranges(mt, lo, 256);
+        // The same from a time on: from the start, all of them; from inside
+        // the middle one, those after it, the first cut at the time.
+        {
+            os64_media_time_range_t f[256];
+            uint32_t nf = os64_media_track_ranges_from(t, OS64_MEDIA_NO_TIME, f, 256);
+            bool same = nf == na;
+            for (uint32_t i = 0; same && i < nf && i < 256; i++) same = f[i].start == a[i].start && f[i].end == a[i].end;
+            check(same, "%s: track %d ranges_from the start differ from the ranges", s_case, k);
+            if (na > 0 && na <= 256) {
+                uint32_t mid = na / 2;
+                int64_t at = a[mid].start + (a[mid].end - a[mid].start) / 2;
+                nf = os64_media_track_ranges_from(t, at, f, 256);
+                same = nf == na - mid && nf > 0 && f[0].start == at && f[0].end == a[mid].end;
+                for (uint32_t i = 1; same && i < nf; i++) same = f[i].start == a[mid + i].start && f[i].end == a[mid + i].end;
+                check(same, "%s: track %d ranges_from inside range %u differ", s_case, k, mid);
+            }
+        }
         bool ok = (int)na == nlo;
         for (int i = 0; ok && i < nlo && i < 256; i++) ok = a[i].start == lo[i].start && a[i].end == lo[i].end;
         if (!check(ok, "%s: track %d ranges differ (%u reported, the model %d)", s_case, k, na, nlo)) {

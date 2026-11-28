@@ -260,6 +260,10 @@ int64_t os64_media_buffer_highest_pts(const os64_media_buffer_t *b);
 
 // A track, for a player. Each copies a value out and allocates nothing.
 uint32_t os64_media_track_ranges(const os64_media_track_t *t, os64_media_time_range_t *out, uint32_t cap);
+// The same from `from` on: the first starts no earlier than it (a range
+// holding it is cut there), with how many there are from it.
+uint32_t os64_media_track_ranges_from(const os64_media_track_t *t, int64_t from, os64_media_time_range_t *out,
+                                      uint32_t cap);
 // Whether `time` is buffered, and where its range ends.
 bool os64_media_track_ahead(const os64_media_track_t *t, int64_t time, int64_t *range_end);
 // The random access point to start a decode for `time`: FRAME (and *rap) or WAIT (not buffered).

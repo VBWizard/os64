@@ -1034,6 +1034,25 @@ uint32_t os64_media_track_ranges(const os64_media_track_t *t, os64_media_time_ra
     return n;
 }
 
+uint32_t os64_media_track_ranges_from(const os64_media_track_t *t, int64_t from, os64_media_time_range_t *out,
+                                      uint32_t cap)
+{
+    // The unions from the start, as `buffered` joins them, so a time in a
+    // gap the join closes is in the union around it.
+    uint32_t n = 0;
+    os64_media_time_range_t r;
+    for (int64_t at = OS64_MEDIA_NO_TIME; next_union(t, at, &r); at = r.end) {
+        if (from != OS64_MEDIA_NO_TIME && r.end <= from)
+            continue;
+        if (from != OS64_MEDIA_NO_TIME && r.start < from)
+            r.start = from;
+        if (n < cap)
+            out[n] = r;
+        n++;
+    }
+    return n;
+}
+
 // next_union, with the track's last interval reaching `extend_to` when that
 // is later (OS64_MEDIA_NO_TIME: no extension).
 static bool next_union_to(const os64_media_track_t *t, int64_t from, os64_media_time_range_t *out, int64_t extend_to)
