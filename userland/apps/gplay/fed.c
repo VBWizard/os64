@@ -185,13 +185,19 @@ static int64_t feeder(void *arg)
             g->switches++;
             g->ended = false;           // the append reopened an ended source: the end is said again
         }
-        if (ev && at > 1.0) {
+        // Removed: whole fragments more than a second behind, up to the start
+        // of the fragment holding that second, a keyframe. A removal takes
+        // the frames depending on what it removes up to the next keyframe,
+        // so a cut inside a fragment would take part of the fragment after
+        // it, which the feeder would never append again.
+        double cut = g->pic[0].start[fragment_at(&g->pic[0], at - 1.0)];
+        if (ev && at > 1.0 && cut > 0) {
             os64_media_fed_result_t res;
-            os64_media_fed_remove(g->fed, g->v, 0, at - 1.0, &res);
-            os64_media_fed_remove(g->fed, g->a, 0, at - 1.0, &res);
+            os64_media_fed_remove(g->fed, g->v, 0, cut, &res);
+            os64_media_fed_remove(g->fed, g->a, 0, cut, &res);
             for (int i = 0; i < FRAGMENTS; i++) {
-                if (i < g->pic[0].count && g->pic[0].start[i] + g->pic[0].duration[i] <= at - 1.0) g->appended_v[i] = false;
-                if (i < g->sound.count && g->sound.start[i] + g->sound.duration[i] <= at - 1.0) g->appended_a[i] = false;
+                if (i < g->pic[0].count && g->pic[0].start[i] + g->pic[0].duration[i] <= cut) g->appended_v[i] = false;
+                if (i < g->sound.count && g->sound.start[i] + g->sound.duration[i] <= cut) g->appended_a[i] = false;
             }
             g->removes++;
             g->ended = false;           // a removal reopens an ended source: the end is said again

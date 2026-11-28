@@ -1290,6 +1290,14 @@ static int fed_read_packet(os64_media_t *m)
 {
     int r = 0;
     media_fed_lock(m->fed);
+    // The sound's join, the widest gap its placement fills with silence,
+    // from the track as its frames arrive (a media opened on its
+    // initialization segments alone has seen no frame yet).
+    os64_media_track_t *st = m->codec != NULL ? media_fed_track(m->fed, OS64_MEDIA_FRAGMENT_AUDIO, NULL) : NULL;
+    if (st != NULL && 2 * st->interbuffer != m->join_ns) {
+        m->join_ns = 2 * st->interbuffer;
+        m->place.bound = os64_media_fed_sound_samples(m->join_ns, m->rate);   // the placement's own field
+    }
     for (int k = 0; k < 2 && r == 0; k++) {
         fed_kind_t *f = &m->fk[k];
         if (fed_in_use(m, k) && !f->done && !f->pending && !f->resync && !f->reopen)
@@ -1480,6 +1488,7 @@ int media_open_fed(os64_media_fed_t *fed, uint32_t want, os64_media_t **out, os6
     m->frame = av_frame_alloc();
     m->pframe = av_frame_alloc();
     bool have[2] = { false, false };
+    int64_t picture_frame_ns = 0;       // a picture's duration, when frames are already held
     int result = OS64_MEDIA_NO_MEMORY;
     for (int k = 0; k < 2; k++) {
         m->fk[k].track_kind = k == KIND_SOUND ? OS64_MEDIA_FRAGMENT_AUDIO : OS64_MEDIA_FRAGMENT_VIDEO;
@@ -1508,6 +1517,7 @@ int media_open_fed(os64_media_fed_t *fed, uint32_t want, os64_media_t **out, os6
         f->generation = f->frame.generation;
         f->entry_index = f->frame.entry;
         if (k == KIND_SOUND) m->join_ns = 2 * t->interbuffer;
+        if (k == KIND_PICTURE && t->interbuffer > 0) picture_frame_ns = t->interbuffer;
         have[k] = true;
     }
     double duration = media_fed_duration(fed);
@@ -1539,6 +1549,13 @@ int media_open_fed(os64_media_fed_t *fed, uint32_t want, os64_media_t **out, os6
         os64_strcopy(info->picture_codec, sizeof(info->picture_codec), "h264");
         info->width = info->coded_width = e->width;
         info->height = info->coded_height = e->height;
+        // Its rate, as a file states one, from the picture track's frame
+        // duration (the pace's period); none yet, the player takes the
+        // first picture's.
+        if (picture_frame_ns > 0 && picture_frame_ns < UINT32_MAX) {
+            info->rate_num = 1000000000u;
+            info->rate_den = (uint32_t)picture_frame_ns;
+        }
     }
     m->position = 0;
     *out = m;
