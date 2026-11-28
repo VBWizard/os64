@@ -273,7 +273,7 @@ static void fed_end(void *opaque, void *session)
 
 static const os64_dom_fed_provider_t fed_provider = {
     NULL, fed_open, fed_close, fed_add, fed_remove_buffer, fed_evict, fed_take, fed_parse, fed_poll, fed_reset,
-    fed_remove, fed_set, fed_ranges, fed_duration, fed_end,
+    fed_remove, fed_set, fed_ranges, fed_duration, fed_end, NULL,
 };
 
 /* A MediaSource's object URL names it with a random UUID. */
